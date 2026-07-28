@@ -629,6 +629,22 @@ export default function StockTable({
       setSubmitting(false);
     }
   };
+  const checkoutStockOptions = useMemo(() => {
+    const lower = checkoutSearch.toLowerCase();
+    return items
+      .filter(item => item.quantity > 0)
+      .filter(item =>
+        !lower ||
+        item.sku.toLowerCase().includes(lower) ||
+        item.brand.toLowerCase().includes(lower) ||
+        item.model.toLowerCase().includes(lower) ||
+        item.size.toLowerCase().includes(lower)
+      )
+      .sort((a, b) => a.sku.localeCompare(b.sku))
+      .slice(0, 60);
+  }, [items, checkoutSearch]);
+
+  const checkoutSelectedItemRef = items.find(i => i.id === checkoutSelectedItemId) || null;
 
   return (
     <div className="space-y-5 animate-fadeIn">
@@ -1794,70 +1810,128 @@ export default function StockTable({
             )}
 
             <form onSubmit={handleSaveCheckout} className="mt-4 space-y-4 text-sm text-left">
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                <div className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-8">
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Selecionar Pneu / Peça</label>
-                    <select
-                      value={checkoutSelectedItemId}
-                      onChange={(e) => {
-                        setCheckoutSelectedItemId(e.target.value);
-                        setErrorMsg("");
-                      }}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-gold-500/20 focus:border-gold-500 bg-white text-slate-900 font-semibold cursor-pointer"
-                    >
-                      <option value="" disabled>Escolha um item...</option>
-                      {items.map(item => (
-                        <option key={item.id} value={item.id}>
-                          [{item.sku}] {item.brand} {item.model} {item.size} (Estoque: {item.quantity})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="col-span-3">
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Qtd</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={checkoutQuantityStr}
-                      onChange={(e) => setCheckoutQuantityStr(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold font-mono outline-none focus:ring-2 focus:ring-gold-500/20 focus:border-gold-500 bg-white text-slate-900"
-                    />
-                  </div>
-                  <div className="col-span-1 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={handleAddCheckoutItem}
-                      className="h-9 w-9 bg-blue-600 hover:bg-blue-700 text-white rounded-xl flex items-center justify-center transition-colors shadow-sm"
-                      title="Adicionar Item"
-                    >
-                      <Plus size={16} className="stroke-[3px]" />
-                    </button>
-                  </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+                    Selecionar Pneu / Peça
+                  </label>
+                  {checkoutSelectedItemRef ? (
+                    <div className="flex flex-col gap-3 p-3 rounded-xl border border-gold-300/40 bg-gold-50/30">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-xs">
+                          <span className="font-mono font-extrabold text-gold-700">{checkoutSelectedItemRef.sku}</span>{" "}
+                          <span className="font-bold text-slate-800">{checkoutSelectedItemRef.brand} {checkoutSelectedItemRef.model}</span>{" "}
+                          <span className="text-slate-400 font-mono">({checkoutSelectedItemRef.size})</span>
+                          <div className="text-[10px] text-slate-500 font-semibold mt-0.5">Saldo disponível: {checkoutSelectedItemRef.quantity} un</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCheckoutSelectedItemId("")}
+                          className="text-[10px] font-black text-red-600 hover:underline cursor-pointer shrink-0 mt-0.5"
+                        >
+                          Alterar
+                        </button>
+                      </div>
+                      
+                      <div className="flex items-end gap-3 mt-2">
+                        <div className="w-1/3">
+                          <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+                            Qtd *
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={checkoutSelectedItemRef.quantity}
+                            value={checkoutQuantityStr}
+                            onChange={e => setCheckoutQuantityStr(e.target.value)}
+                            placeholder={`Máx. ${checkoutSelectedItemRef.quantity}`}
+                            className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleAddCheckoutItem}
+                          className="flex-1 py-2 bg-emerald-600 text-white rounded-xl text-xs font-extrabold hover:bg-emerald-700 transition-colors shadow-sm flex justify-center items-center gap-1 cursor-pointer"
+                        >
+                          <Plus size={14} /> Confirmar Item na Lista
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                          <Search size={14} />
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Pesquise por SKU, marca ou modelo..."
+                          value={checkoutSearch}
+                          onChange={e => setCheckoutSearch(e.target.value)}
+                          className="w-full pl-8 pr-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
+                        />
+                      </div>
+                      <div className="max-h-44 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white">
+                        {checkoutStockOptions.length === 0 ? (
+                          <div className="p-3 text-xs text-slate-400 font-semibold text-center">Nenhum item com saldo disponível encontrado.</div>
+                        ) : (
+                          checkoutStockOptions.map(item => (
+                            <button
+                              type="button"
+                              key={item.id}
+                              onClick={() => {
+                                setCheckoutSelectedItemId(item.id);
+                                setCheckoutQuantityStr("1");
+                              }}
+                              className="w-full text-left p-2.5 hover:bg-gold-50/40 transition-colors cursor-pointer flex items-center justify-between gap-2"
+                            >
+                              <span className="text-xs min-w-0 truncate">
+                                <span className="font-mono font-extrabold text-gold-700">{item.sku}</span>{" "}
+                                <span className="font-bold text-slate-800">{item.brand} {item.model}</span>{" "}
+                                <span className="text-slate-400 font-mono">({item.size})</span>
+                              </span>
+                              <span className="text-[10px] font-mono font-bold text-slate-500 shrink-0">{item.quantity} un</span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {checkoutItems.length > 0 && (
-                  <div className="mt-3 space-y-2 max-h-32 overflow-y-auto pr-1">
-                    {checkoutItems.map((cItem) => (
-                      <div key={cItem.id} className="flex items-center justify-between bg-white p-2 border border-slate-200 rounded-lg text-xs">
-                        <div className="flex-1 font-semibold text-slate-700 truncate pr-2">
-                          <span className="text-slate-400 mr-1">[{cItem.itemRef.sku}]</span>
-                          {cItem.itemRef.brand} {cItem.itemRef.model} {cItem.itemRef.size}
+                <div className="space-y-2 border border-slate-200 rounded-xl p-3 bg-slate-50">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
+                    Lista de Itens para Baixa ({checkoutItems.length})
+                  </label>
+                  
+                  {checkoutItems.length === 0 ? (
+                    <div className="text-center py-6 border-2 border-dashed border-slate-200 rounded-lg bg-white">
+                      <p className="text-xs text-slate-500 font-bold">Nenhum item adicionado ainda.</p>
+                      <p className="text-[10px] text-slate-400 mt-1">Pesquise um produto acima e clique em "Confirmar Item na Lista".</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2 max-h-48 overflow-y-auto pr-1">
+                      {checkoutItems.map(cItem => (
+                        <div key={cItem.id} className="flex justify-between items-center p-2.5 bg-white border border-slate-200 rounded-lg shadow-sm">
+                          <div className="flex flex-col min-w-0 pr-2">
+                            <span className="font-mono text-xs font-extrabold text-gold-700 truncate">{cItem.itemRef.sku}</span>
+                            <span className="text-xs font-bold text-slate-800 truncate">{cItem.itemRef.brand} {cItem.itemRef.model} <span className="font-mono text-slate-400">({cItem.itemRef.size})</span></span>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{cItem.quantity} un</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCheckoutItem(cItem.id)}
+                              className="text-red-500 hover:text-red-700 p-1 cursor-pointer hover:bg-red-50 rounded"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{cItem.quantity} un</span>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCheckoutItem(cItem.id)}
-                            className="text-red-500 hover:text-red-700 p-1"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div>
