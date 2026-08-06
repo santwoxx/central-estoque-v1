@@ -1,0 +1,209 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Help function to determine if user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+    
+    // Check if the current user profile is marked as admin or is an authorized admin email
+    function isAdmin() {
+      return isAuth() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        request.auth.token.email == 'brisasofc@gmail.com' ||
+        request.auth.token.email == 'natandsantosmarinho10@gmail.com' ||
+        request.auth.token.email == 'isaacbomfim.te@gmail.com' ||
+        request.auth.token.email == 'isaacbomfim.00@gmail.com'
+      );
+    }
+
+    // Helper to get user profile data
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Helper to check user roles
+    function isVendedor() {
+      return isAuth() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        getUserData().role == 'vendedor';
+    }
+
+    function isAlimentador() {
+      return isAuth() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        (getUserData().role == 'alimentador' || getUserData().role == 'user');
+    }
+
+    // Users Collection rules
+    match /users/{userId} {
+      allow read, write: if isAuth(); // Allow profile creation and read on signup/login
+    }
+
+    // Companies Collection rules
+    match /companies/{companyId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // Custom Credentials Collection rules
+    match /custom_credentials/{credId} {
+      // Users can only read credentials that belong to them (or are unclaimed / not yet associated)
+      allow read: if isAdmin() || (
+        isAuth() && (
+          resource.data.associatedEmail == request.auth.token.email ||
+          resource.data.associatedEmail == ""
+        )
+      );
+      allow create: if isAuth() && (
+        isAdmin() || 
+        (request.resource.data.associatedEmail == 'brisasofc@gmail.com' && (request.resource.data.username == 'brisas' || request.resource.data.username == 'central')) ||
+        (request.resource.data.associatedEmail == 'natandsantosmarinho10@gmail.com' && request.resource.data.username == 'natand')
+      );
+      // Admin can update/delete anything.
+      // Operators can update their own password, but cannot change their other profile metadata (role, company, username, etc.)
+      allow update: if isAdmin() || (
+        isAuth() && resource.data.associatedEmail == request.auth.token.email &&
+        request.resource.data.username == resource.data.username &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.associatedEmail == resource.data.associatedEmail &&
+        request.resource.data.companyId == resource.data.companyId &&
+        request.resource.data.companyName == resource.data.companyName
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Stock Collection rules
+    match /stock/{itemId} {
+      // Admins and Vendedores can read all stock items.
+      // Alimentadores (Company Owners) can only read their own company's items.
+      allow read: if isAdmin() || isVendedor() || (
+        isAuth() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        resource.data.companyId == getUserData().companyId
+      );
+      
+      // Admin can create anything. Donos/Alimentadores can only create for their own company.
+      allow create: if isAdmin() || (
+        isAlimentador() && 
+        request.resource.data.companyId == getUserData().companyId
+      );
+      
+      // Admin can update anything. Donos/Alimentadores can only update their own company's items.
+      allow update: if isAdmin() || (
+        isAlimentador() && 
+        resource.data.companyId == getUserData().companyId &&
+        request.resource.data.companyId == getUserData().companyId
+      );
+      
+      // Admin can delete anything. Donos/Alimentadores can only delete their own company's items.
+      allow delete: if isAdmin() || (
+        isAlimentador() && 
+        resource.data.companyId == getUserData().companyId
+      );
+    }
+
+    // Movements Collection rules (Audit Logs)
+    match /movements/{movementId} {
+      // Admins and Vendedores can read all movements.
+      // Alimentadores (Company Owners) can only read their own company's movements.
+      allow read: if isAdmin() || isVendedor() || (
+        isAuth() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        resource.data.companyId == getUserData().companyId
+      );
+
+      // Admin can create. Donos/Alimentadores can only log movements for their own company.
+      allow create: if isAdmin() || (
+        isAlimentador() &&
+        request.resource.data.companyId == getUserData().companyId
+      );
+
+      // Audit logs are read-only and cannot be updated or deleted by normal users
+      allow update, delete: if isAdmin();
+    }
+
+    // Transfers Collection rules (Inter-company stock transfer requests with dual signature)
+    match /transfers/{transferId} {
+      // A user is considered a "party" to a transfer if they belong to either the
+      // source or destination company (or are admin/vendedor, who can see everything).
+      function isPartyToTransfer(data) {
+        return isAdmin() || isVendedor() || (
+          isAlimentador() &&
+          (data.sourceCompanyId == getUserData().companyId ||
+           data.destinationCompanyId == getUserData().companyId)
+        );
+      }
+
+      // Admin, vendedor, or an alimentador belonging to either company involved can read.
+      allow read: if isPartyToTransfer(resource.data);
+
+      // Admin, or an alimentador of the SOURCE or DESTINATION company, can create a transfer request.
+      // Must be a valid, unsigned, freshly-requested transfer for a positive quantity
+      // between two different companies.
+      allow create: if isAdmin() || (
+        isAlimentador() &&
+        (request.resource.data.sourceCompanyId == getUserData().companyId || request.resource.data.destinationCompanyId == getUserData().companyId) &&
+        request.resource.data.sourceCompanyId != request.resource.data.destinationCompanyId &&
+        request.resource.data.quantity is number &&
+        request.resource.data.quantity > 0 &&
+        request.resource.data.requestedByUid == request.auth.uid &&
+        request.resource.data.delivery == null &&
+        request.resource.data.receipt == null &&
+        (
+          (request.resource.data.scheduledFor == null && request.resource.data.status == 'PENDENTE') ||
+          (request.resource.data.scheduledFor is timestamp &&
+           request.resource.data.scheduledFor > request.time &&
+           request.resource.data.status == 'AGENDADO')
+        )
+      );
+
+      // Updates are split into narrow, field-locked transitions. Each branch only allows
+      // the specific fields relevant to that action to change (everything else must stay
+      // identical to the existing document), so a client cannot smuggle unrelated field
+      // changes (e.g. quantity, destination company) into a signature/status update.
+      allow update: if isAdmin() || (
+        // (a) Scheduled order becomes due: any involved party's client (the app's
+        // heartbeat check) can flip AGENDADO -> PENDENTE, but ONLY once the scheduled
+        // time has actually passed, and ONLY the status/updatedAt fields may change.
+        isPartyToTransfer(resource.data) &&
+        resource.data.status == 'AGENDADO' &&
+        request.resource.data.status == 'PENDENTE' &&
+        resource.data.scheduledFor is timestamp &&
+        request.time >= resource.data.scheduledFor &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+      ) || (
+        // (b) Delivery signature: only an alimentador of the SOURCE company, only while
+        // PENDENTE, transitioning to EM_TRANSITO, only touching status/delivery/updatedAt.
+        isAlimentador() &&
+        resource.data.sourceCompanyId == getUserData().companyId &&
+        resource.data.status == 'PENDENTE' &&
+        request.resource.data.status == 'EM_TRANSITO' &&
+        request.resource.data.delivery.signedByUid == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'delivery', 'dispatch', 'updatedAt'])
+      ) || (
+        // (c) Receipt signature: only an alimentador of the DESTINATION company, only
+        // while EM_TRANSITO, transitioning to CONCLUIDO.
+        isAlimentador() &&
+        resource.data.destinationCompanyId == getUserData().companyId &&
+        resource.data.status == 'EM_TRANSITO' &&
+        request.resource.data.status == 'CONCLUIDO' &&
+        request.resource.data.receipt.signedByUid == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'receipt', 'arrival', 'destinationStockItemId', 'updatedAt'])
+      ) || (
+        // (d) Pre-dispatch cancellation: an alimentador of the SOURCE or DESTINATION company,
+        // only while AGENDADO or PENDENTE (nothing has physically moved yet).
+        isAlimentador() &&
+        (resource.data.sourceCompanyId == getUserData().companyId || resource.data.destinationCompanyId == getUserData().companyId) &&
+        (resource.data.status == 'AGENDADO' || resource.data.status == 'PENDENTE') &&
+        request.resource.data.status == 'CANCELADO' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledByUid', 'cancelledByName', 'cancelledAt', 'cancelReason', 'updatedAt'])
+      );
+
+      // Only admin can hard-delete a transfer record (e.g. cleaning up test data).
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "central-estoque-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@vitejs/plugin-react": "^5.0.4",
+    "@yume-chan/adb": "^2.6.2",
+    "@yume-chan/adb-backend-webusb": "^0.0.19",
+    "@yume-chan/adb-credential-web": "^2.1.0",
+    "@yume-chan/android-bin": "^2.1.0",
+    "@yume-chan/stream-extra": "^2.6.1",
+    "firebase": "^12.15.0",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "react-signature-canvas": "^1.1.0-alpha.2",
+    "tailwindcss": "^4.1.14"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.21",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  }
+}

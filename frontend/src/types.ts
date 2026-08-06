@@ -1,0 +1,138 @@
+export type UserRole = "user" | "vendedor" | "alimentador" | "admin";
+
+export interface Company {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt?: any;
+}
+
+export interface UserProfile {
+  uid: string;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  createdAt?: any;
+  companyId?: string;
+  companyName?: string;
+}
+
+export interface UserCredential {
+  id: string;
+  username: string;
+  password: string;
+  displayName: string;
+  role: UserRole;
+  associatedEmail: string;
+  companyId?: string;
+  companyName?: string;
+  createdAt: any;
+}
+
+export interface StockItem {
+  id: string; // Document ID
+  sku: string; // Custom Product ID / SKU
+  brand: string;
+  model: string;
+  size: string;
+  quantity: number;
+  price: number; // Legacy or base price
+  priceCash?: number;
+  priceInstallment?: number;
+  notes: string;
+  description?: string; // Product description
+  imageUrl?: string; // Product image url
+  userId: string;
+  userEmail: string;
+  companyId?: string;
+  companyName?: string;
+  createdAt: any;
+  updatedAt: any;
+}
+
+export interface MovementLog {
+  id: string;
+  sku: string;
+  brand: string;
+  model: string;
+  size: string;
+  type: "ENTRADA" | "SAIDA" | "IMPORTACAO" | "AJUSTE" | "TRANSFERENCIA_SAIDA" | "TRANSFERENCIA_ENTRADA";
+  quantity: number; // positive or negative
+  balanceAfter: number;
+  userId: string;
+  userEmail: string;
+  companyId?: string;
+  companyName?: string;
+  timestamp: any;
+  reason: string;
+  transferId?: string; // Cross-reference to the transfers/{id} doc that generated this entry
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Inter-company Stock Transfer (dual signature + scheduling)
+// ─────────────────────────────────────────────────────────────────
+export type TransferStatus = "AGENDADO" | "PENDENTE" | "EM_TRANSITO" | "CONCLUIDO" | "CANCELADO";
+
+export interface SignatureRecord {
+  signedByUid: string;
+  signedByEmail: string;
+  signedByName: string;
+  signedAt: any; // serverTimestamp()
+  signatureDataUrl: string; // PNG base64 drawn via react-signature-canvas
+}
+
+export interface TransferOrderItem {
+  sourceStockItemId: string;
+  destinationStockItemId?: string | null; // resolved only when receipt is signed
+  sku: string;
+  brand: string;
+  model: string;
+  size: string;
+  quantity: number; // immutable after creation
+}
+
+export interface TransferOrder {
+  id: string;
+
+  // Companies involved
+  sourceCompanyId: string;
+  sourceCompanyName: string;
+  destinationCompanyId: string;
+  destinationCompanyName: string;
+  
+  items: TransferOrderItem[];
+
+  reason: string;
+  status: TransferStatus;
+  scheduledFor: any | null; // Timestamp, or null for immediate transfers
+
+  // Who requested it
+  requestedByUid: string;
+  requestedByEmail: string;
+  requestedByName: string;
+  requestedAt: any;
+
+  // Legacy dual signatures (for backwards compatibility)
+  delivery?: SignatureRecord | null; // Signed by someone from the source company
+  receipt?: SignatureRecord | null; // Signed by someone from the destination company
+
+  // New 4-signature process
+  dispatch?: {
+    sender: SignatureRecord;
+    driver: SignatureRecord;
+  } | null;
+
+  arrival?: {
+    driver: SignatureRecord;
+    receiver: SignatureRecord;
+  } | null;
+
+  // Cancellation / admin reversal
+  cancelledByUid?: string;
+  cancelledByName?: string;
+  cancelledAt?: any;
+  cancelReason?: string;
+
+  createdAt: any;
+  updatedAt: any;
+}

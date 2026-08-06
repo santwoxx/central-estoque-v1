@@ -1,0 +1,168 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with role and associated company information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "companyId": { "type": "string" },
+        "companyName": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Company": {
+      "title": "Company",
+      "description": "Company registration information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name"]
+    },
+    "StockItem": {
+      "title": "StockItem",
+      "description": "Inventory stock item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sku": { "type": "string" },
+        "brand": { "type": "string" },
+        "model": { "type": "string" },
+        "size": { "type": "string" },
+        "quantity": { "type": "number" },
+        "price": { "type": "number" },
+        "notes": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "companyId": { "type": "string" },
+        "companyName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sku", "brand", "model", "size", "quantity", "price", "userId", "userEmail"]
+    },
+    "MovementLog": {
+      "title": "MovementLog",
+      "description": "Logs tracking stock item state changes over time",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sku": { "type": "string" },
+        "brand": { "type": "string" },
+        "model": { "type": "string" },
+        "size": { "type": "string" },
+        "type": { "type": "string", "enum": ["ENTRADA", "SAIDA", "IMPORTACAO", "AJUSTE", "TRANSFERENCIA_SAIDA", "TRANSFERENCIA_ENTRADA"] },
+        "quantity": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "companyId": { "type": "string" },
+        "companyName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string" },
+        "transferId": { "type": "string" }
+      },
+      "required": ["sku", "brand", "model", "size", "type", "quantity", "balanceAfter", "userId", "userEmail", "reason"]
+    },
+    "SignatureRecord": {
+      "title": "SignatureRecord",
+      "description": "A hand-drawn signature captured for a transfer's delivery or receipt confirmation",
+      "type": "object",
+      "properties": {
+        "signedByUid": { "type": "string" },
+        "signedByEmail": { "type": "string" },
+        "signedByName": { "type": "string" },
+        "signedAt": { "type": "string", "format": "date-time" },
+        "signatureDataUrl": { "type": "string" }
+      },
+      "required": ["signedByUid", "signedByName", "signedAt", "signatureDataUrl"]
+    },
+    "TransferOrder": {
+      "title": "TransferOrder",
+      "description": "An inter-company stock transfer request, optionally scheduled for a future date, requiring a delivery signature (source company) and a receipt signature (destination company) before stock actually moves",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sku": { "type": "string" },
+        "brand": { "type": "string" },
+        "model": { "type": "string" },
+        "size": { "type": "string" },
+        "quantity": { "type": "number" },
+        "sourceCompanyId": { "type": "string" },
+        "sourceCompanyName": { "type": "string" },
+        "destinationCompanyId": { "type": "string" },
+        "destinationCompanyName": { "type": "string" },
+        "sourceStockItemId": { "type": "string" },
+        "destinationStockItemId": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["AGENDADO", "PENDENTE", "EM_TRANSITO", "CONCLUIDO", "CANCELADO"] },
+        "scheduledFor": { "type": "string", "format": "date-time" },
+        "requestedByUid": { "type": "string" },
+        "requestedByEmail": { "type": "string" },
+        "requestedByName": { "type": "string" },
+        "requestedAt": { "type": "string", "format": "date-time" },
+        "delivery": { "$ref": "#/entities/SignatureRecord" },
+        "receipt": { "$ref": "#/entities/SignatureRecord" },
+        "cancelledByUid": { "type": "string" },
+        "cancelledByName": { "type": "string" },
+        "cancelledAt": { "type": "string", "format": "date-time" },
+        "cancelReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sku", "brand", "model", "size", "quantity", "sourceCompanyId", "destinationCompanyId", "status", "requestedByUid"]
+    },
+    "Credential": {
+      "title": "Credential",
+      "description": "Custom site credentials stored by users/admins",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "associatedEmail": { "type": "string" },
+        "companyId": { "type": "string" },
+        "companyName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "password", "role", "associatedEmail"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles collection"
+    },
+    "companies/{companyId}": {
+      "schema": "Company",
+      "description": "Companies list collection"
+    },
+    "stock/{itemId}": {
+      "schema": "StockItem",
+      "description": "Inventory stock items collection"
+    },
+    "movements/{movementId}": {
+      "schema": "MovementLog",
+      "description": "Inventory transaction history logs collection"
+    },
+    "custom_credentials/{credId}": {
+      "schema": "Credential",
+      "description": "Custom user login credentials collection"
+    },
+    "transfers/{transferId}": {
+      "schema": "TransferOrder",
+      "description": "Inter-company stock transfer requests with dual signature (delivery + receipt) and optional scheduling"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Central estoque",
+  "description": "Sistema ultra-responsivo de controle de estoque inteligente com imagens, descrição, importação inteligente de PDF e relatórios detalhados.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
