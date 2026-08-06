@@ -32,8 +32,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [directLoginMode, setDirectLoginMode] = useState(false);
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
 
   // Status flags
   const [loading, setLoading] = useState(false);
