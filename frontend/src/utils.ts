@@ -47,6 +47,37 @@ export function formatDate(timestamp: any): string {
   }).format(date);
 }
 
+// Resolves a Firestore Timestamp (or plain Date/string/number) into milliseconds since epoch.
+// Shared by App.tsx (transfer scheduling/sorting) and the notification center (event ordering).
+export function toMillis(value: any): number {
+  if (!value) return 0;
+  if (typeof value.toDate === "function") return value.toDate().getTime();
+  if (value.seconds) return value.seconds * 1000;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+// Short, human-friendly relative timestamp for notification feeds ("há 5 min").
+// Falls back to a plain dd/mm date once the event is more than a week old.
+export function formatRelativeTime(millis: number): string {
+  if (!millis) return "";
+  const diffSec = Math.max(0, Math.floor((Date.now() - millis) / 1000));
+
+  if (diffSec < 30) return "agora";
+  if (diffSec < 60) return `${diffSec}s atrás`;
+
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `há ${diffMin} min`;
+
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `há ${diffHour} h`;
+
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 7) return `há ${diffDay} d`;
+
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(new Date(millis));
+}
+
 export function exportToCSV(data: any[], columns: { key: string; label: string }[], filename: string) {
   // Build header row
   const headers = columns.map(col => `"${col.label.replace(/"/g, '""')}"`).join(";");

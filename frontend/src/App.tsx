@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 
 // Hook into console to capture logs for error reporting
@@ -45,7 +45,9 @@ import {
   orderBy
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { StockItem, MovementLog, UserProfile, UserRole, Company, TransferOrder } from "./types";
+import { StockItem, MovementLog, UserProfile, UserRole, Company, TransferOrder, AppNotification } from "./types";
+import { toMillis } from "./utils";
+import { useAppNotifications } from "./hooks/useAppNotifications";
 
 // Components
 // AuthScreen is needed immediately on first paint (logged-out users see nothing else),
@@ -65,6 +67,8 @@ const TransferOrders = lazy(() => import("./components/TransferOrders"));
 const ApkInstaller = lazy(() =>
   import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
 );
+import NotificationBell, { NotificationToast } from "./components/NotificationBell";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 // Icons
 import {
@@ -115,15 +119,6 @@ function mapTransferDoc(docSnap: any): TransferOrder {
   };
 }
 
-// Helper: resolves a Firestore Timestamp (or plain Date/string) into milliseconds since epoch
-function toMillis(value: any): number {
-  if (!value) return 0;
-  if (typeof value.toDate === "function") return value.toDate().getTime();
-  if (value.seconds) return value.seconds * 1000;
-  const parsed = new Date(value).getTime();
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
 export default function App() {
   const [user, setUser] = useState<{ uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string; credentialId?: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -137,6 +132,10 @@ export default function App() {
   // Inter-company Transfer Orders State (raw per-query arrays, merged below)
   const [transfersAsSource, setTransfersAsSource] = useState<TransferOrder[]>([]);
   const [transfersAsDestination, setTransfersAsDestination] = useState<TransferOrder[]>([]);
+  // True once every attached transfer listener has delivered its first snapshot.
+  // Gates the notification center's diffing so login doesn't replay transfer
+  // history as a flood of "new transfer" alerts — see useAppNotifications.
+  const [transfersReady, setTransfersReady] = useState(false);
 
   // Support and Error Report State
   const [showReportModal, setShowReportModal] = useState(false);
@@ -323,22 +322,44 @@ export default function App() {
     };
   }, [user]);
 
-  // Trigger backup once a day when logged in as admin or alimentador
+  // Mirrors `stock` for the two timers below, which fire on a schedule (not on
+  // every stock edit) and just need "whatever stock looks like right now" at
+  // the moment they actually run — reading it via ref instead of a `stock`
+  // effect-dependency keeps those timers from tearing down/rebuilding on every
+  // single Firestore update while the user is editing inventory.
+  const stockRef = useRef<StockItem[]>([]);
   useEffect(() => {
-    if (!user || loadingData || stock.length === 0) return;
+    stockRef.current = stock;
+  }, [stock]);
+
+  // Trigger backup once a day when logged in as admin or alimentador.
+  // `dailyBackupStateRef` guards against firing twice: `stock` still needs to be
+  // in the dependency array (we retry once real inventory data has loaded), but
+  // without this guard, several stock updates arriving in quick succession while
+  // the first backup POST is still in flight would each pass the "not done yet"
+  // localStorage check and fire their own duplicate request to the backend.
+  const dailyBackupStateRef = useRef<"idle" | "in-flight" | "done">("idle");
+  useEffect(() => {
+    if (!user) {
+      dailyBackupStateRef.current = "idle";
+      return;
+    }
+    if (loadingData || stock.length === 0) return;
     if (user.role !== "admin" && user.role !== "alimentador") return;
+    if (dailyBackupStateRef.current !== "idle") return;
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (localStorage.getItem(`last_stock_backup_date_${user.uid}`) === todayStr) {
+      dailyBackupStateRef.current = "done";
+      return;
+    }
+
+    dailyBackupStateRef.current = "in-flight";
 
     const runDailyBackup = async () => {
       try {
-        const todayStr = new Date().toISOString().slice(0, 10);
-        const lastBackupDate = localStorage.getItem(`last_stock_backup_date_${user.uid}`);
-        
-        if (lastBackupDate === todayStr) {
-          return; // Already backed up today
-        }
-
         console.log("[BACKUP] Starting daily backup automation...");
-        
+
         // 1. Save in local storage
         const backupPayload = {
           date: new Date().toISOString(),
@@ -362,46 +383,52 @@ export default function App() {
 
         if (response.ok) {
           console.log("[BACKUP] Daily backup saved on server successfully.");
+          localStorage.setItem(`last_stock_backup_date_${user.uid}`, todayStr);
+          dailyBackupStateRef.current = "done";
         } else {
           console.warn("[BACKUP] Server daily backup failed.");
+          dailyBackupStateRef.current = "idle"; // allow a retry on the next stock update
         }
-
-        // Save last backup date to prevent duplicate runs today
-        localStorage.setItem(`last_stock_backup_date_${user.uid}`, todayStr);
       } catch (backupErr) {
         console.error("[BACKUP] Error running daily backup:", backupErr);
+        dailyBackupStateRef.current = "idle"; // allow a retry on the next stock update
       }
     };
 
     runDailyBackup();
   }, [user, stock, loadingData]);
 
-  // Trigger automatic download of stock backup file at 18:00
+  // Trigger automatic download of stock backup file at 18:00.
+  // Set up once per login (not re-armed on every stock change — see stockRef
+  // above) so the 30s interval isn't torn down and recreated on every edit.
   useEffect(() => {
-    if (!user || loadingData || stock.length === 0) return;
+    if (!user || loadingData) return;
     if (user.role !== "admin" && user.role !== "alimentador") return;
 
     const checkAndDownloadBackup = () => {
       try {
+        const currentStock = stockRef.current;
+        if (currentStock.length === 0) return;
+
         const now = new Date();
         const currentHour = now.getHours();
         const todayStr = now.toISOString().slice(0, 10);
-        
+
         // Only trigger if it is 18:00 (6:00 PM) or later
         if (currentHour >= 18) {
           const lastDownloadedDate = localStorage.getItem(`last_file_backup_download_date_${user.uid}`);
           if (lastDownloadedDate !== todayStr) {
             // Set first to prevent double triggers across concurrent tabs
             localStorage.setItem(`last_file_backup_download_date_${user.uid}`, todayStr);
-            
+
             console.log("[BACKUP] Past 18:00. Triggering automated file backup download...");
-            
+
             // Create and trigger download
             const backupPayload = {
               date: now.toISOString(),
               userEmail: user.email,
               companyName: user.companyName || "Geral",
-              items: stock
+              items: currentStock
             };
             const jsonString = JSON.stringify(backupPayload, null, 2);
             const blob = new Blob([jsonString], { type: "application/json" });
@@ -427,7 +454,7 @@ export default function App() {
     // Check every 30 seconds
     const interval = setInterval(checkAndDownloadBackup, 30000);
     return () => clearInterval(interval);
-  }, [user, stock, loadingData]);
+  }, [user, loadingData]);
 
   // Listen to companies in real-time
   useEffect(() => {
@@ -468,11 +495,21 @@ export default function App() {
     if (!user) {
       setTransfersAsSource([]);
       setTransfersAsDestination([]);
+      setTransfersReady(false);
       return;
     }
 
+    setTransfersReady(false);
     const transfersRef = collection(db, "transfers");
     const isGlobalViewer = user.role === "admin" || user.role === "vendedor" || !user.companyId;
+
+    // Both listeners must deliver at least one snapshot before we consider the
+    // transfer feed "ready" (see transfersReady usage in useAppNotifications).
+    let sourceLoaded = false;
+    let destinationLoaded = isGlobalViewer; // no second listener attached in this case
+    const markReadyIfComplete = () => {
+      if (sourceLoaded && destinationLoaded) setTransfersReady(true);
+    };
 
     const sourceQuery = isGlobalViewer
       ? transfersRef
@@ -482,6 +519,8 @@ export default function App() {
       const list: TransferOrder[] = [];
       snapshot.forEach(docSnap => list.push(mapTransferDoc(docSnap)));
       setTransfersAsSource(list);
+      sourceLoaded = true;
+      markReadyIfComplete();
     }, (error) => {
       console.error("Error fetching source transfers:", error);
     });
@@ -493,6 +532,8 @@ export default function App() {
         const list: TransferOrder[] = [];
         snapshot.forEach(docSnap => list.push(mapTransferDoc(docSnap)));
         setTransfersAsDestination(list);
+        destinationLoaded = true;
+        markReadyIfComplete();
       }, (error) => {
         console.error("Error fetching destination transfers:", error);
       });
@@ -519,18 +560,52 @@ export default function App() {
     });
   }, [transfersAsSource, transfersAsDestination]);
 
+  // Notification Center: derives the bell feed from the real-time transfer/stock
+  // streams above (new transfer requests, dispatch/receipt signatures, cancellations,
+  // low/zero stock). See hooks/useAppNotifications.ts for the diffing + persistence logic.
+  const { notifications, unreadCount, markAllAsRead, markAsRead } = useAppNotifications(
+    user,
+    transfers,
+    transfersReady,
+    stock,
+    !loadingData
+  );
+
+  const handleNotificationClick = (notification: AppNotification) => {
+    markAsRead(notification.id);
+    if (notification.targetTab) {
+      setActiveTab(notification.targetTab);
+    }
+  };
+
+  // Mirrors `transfers` for the heartbeat below, same rationale as stockRef above.
+  const transfersRef = useRef<TransferOrder[]>([]);
+  useEffect(() => {
+    transfersRef.current = transfers;
+  }, [transfers]);
+
   // Heartbeat: promote scheduled transfers (AGENDADO) to actionable (PENDENTE) once their
   // scheduled date/time has passed. Runs on mount and every 30s while the app is open —
   // the same "check on load / while open" pattern already used for the daily backup
-  // automations below, since there is no server-side cron in this project.
+  // automations below, since there is no server-side cron in this project. Set up once
+  // per login (`[user]` only, reading transfersRef for fresh data) rather than on every
+  // transfer change, and `promotingTransferIdsRef` prevents firing a second updateDoc for
+  // the same transfer while an earlier one is still in flight.
+  const promotingTransferIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!user) return;
 
     const promoteDueScheduledTransfers = async () => {
       const now = Date.now();
-      const due = transfers.filter(t => t.status === "AGENDADO" && t.scheduledFor && toMillis(t.scheduledFor) <= now);
+      const due = transfersRef.current.filter(t =>
+        t.status === "AGENDADO" &&
+        t.scheduledFor &&
+        toMillis(t.scheduledFor) <= now &&
+        !promotingTransferIdsRef.current.has(t.id)
+      );
 
       for (const t of due) {
+        promotingTransferIdsRef.current.add(t.id);
         try {
           await updateDoc(doc(db, "transfers", t.id), {
             status: "PENDENTE",
@@ -539,6 +614,7 @@ export default function App() {
           console.log(`[TRANSFERENCIAS] Pedido ${t.id} liberado para assinatura (data agendada atingida).`);
         } catch (err) {
           console.error(`[TRANSFERENCIAS] Falha ao liberar pedido agendado ${t.id}:`, err);
+          promotingTransferIdsRef.current.delete(t.id); // allow a retry on the next tick
         }
       }
     };
@@ -546,7 +622,7 @@ export default function App() {
     promoteDueScheduledTransfers();
     const interval = setInterval(promoteDueScheduledTransfers, 30000);
     return () => clearInterval(interval);
-  }, [user, transfers]);
+  }, [user]);
 
   // Handle Logout action
   const handleLogout = async () => {
@@ -843,15 +919,20 @@ export default function App() {
     }
   };
 
-  // Clear all stock items belonging to the company or all stock if admin
-  const handleClearCompanyStock = async () => {
+  // Clear stock items. Alimentadores are always scoped to their own company
+  // (the `companyId` argument is ignored for them, same as before). Admins must
+  // now pass an explicit `companyId` to wipe just that company — omitting it
+  // wipes every company, which the confirmation modal only allows as a
+  // deliberate, separately-selected choice (see StockTable.tsx), not the default
+  // outcome of clicking "Apagar Estoque".
+  const handleClearCompanyStock = async (companyId?: string) => {
     if (!user) return;
     if (user.role !== "admin" && user.role !== "alimentador") {
       throw new Error("Apenas administradores ou donos de empresa podem apagar o estoque.");
     }
 
     const itemsToClear = user.role === "admin"
-      ? stock
+      ? (companyId ? stock.filter(item => item.companyId === companyId) : stock)
       : stock.filter(item => item.companyId === user.companyId);
 
     if (itemsToClear.length === 0) {
@@ -884,7 +965,7 @@ export default function App() {
           userId: user.uid,
           userEmail: user.email,
           timestamp: serverTimestamp(),
-          reason: `Exclusao em lote do estoque por ${user.displayName}`
+          reason: `Exclusao em lote do estoque (${item.companyName || "empresa não identificada"}) por ${user.displayName}`
         });
       });
       await batch.commit();
@@ -1440,15 +1521,25 @@ export default function App() {
         <div className="flex flex-col p-5 space-y-7">
           
           {/* Logo Area */}
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-gold-600 via-gold-500 to-amber-200 text-[#0f172a] flex items-center justify-center shadow-lg shadow-gold-500/20 font-black hover:scale-105 active:scale-95 transition-all duration-300 border border-gold-300/30">
-              <Warehouse className="h-5 w-5 stroke-[2.2]" />
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-gold-600 via-gold-500 to-amber-200 text-[#0f172a] flex items-center justify-center shadow-lg shadow-gold-500/20 font-black hover:scale-105 active:scale-95 transition-all duration-300 border border-gold-300/30 shrink-0">
+                <Warehouse className="h-5 w-5 stroke-[2.2]" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-sm font-black text-white tracking-tight leading-none uppercase flex items-center gap-1">
+                  Central Stoque <span className="text-[9px] text-gold-400 font-black tracking-normal lowercase italic bg-gold-500/10 px-1.5 py-0.5 rounded-md border border-gold-500/20">v2.0</span>
+                </h1>
+              </div>
             </div>
-            <div>
-              <h1 className="text-sm font-black text-white tracking-tight leading-none uppercase flex items-center gap-1">
-                Central Stoque <span className="text-[9px] text-gold-400 font-black tracking-normal lowercase italic bg-gold-500/10 px-1.5 py-0.5 rounded-md border border-gold-500/20">v2.0</span>
-              </h1>
-            </div>
+            <NotificationBell
+              notifications={notifications}
+              unreadCount={unreadCount}
+              onMarkAllAsRead={markAllAsRead}
+              onNotificationClick={handleNotificationClick}
+              theme="dark"
+              align="right"
+            />
           </div>
 
           {/* Navigation Links Column */}
@@ -1640,14 +1731,24 @@ export default function App() {
           </div>
         </div>
         
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-900 transition-all"
-          title="Sair do sistema"
-        >
-          <LogOut size={16} />
-        </button>
+        <div className="flex items-center gap-1">
+          <NotificationBell
+            notifications={notifications}
+            unreadCount={unreadCount}
+            onMarkAllAsRead={markAllAsRead}
+            onNotificationClick={handleNotificationClick}
+            theme="dark"
+            align="right"
+          />
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-900 transition-all"
+            title="Sair do sistema"
+          >
+            <LogOut size={16} />
+          </button>
+        </div>
       </header>
 
       {/* Mobile navigation bottom bar */}
@@ -1796,6 +1897,9 @@ export default function App() {
 
         {/* Dynamic Tab Panel switches */}
         <div className="transition-all duration-200">
+        {/* Keyed by activeTab so a caught error resets automatically when the user
+            switches away instead of leaving this panel permanently broken. */}
+        <ErrorBoundary key={activeTab} variant="panel">
         <Suspense fallback={
           <div className="flex items-center justify-center py-20 text-slate-400">
             <div className="h-5 w-5 border-2 border-gold-500 border-t-transparent rounded-full animate-spin"></div>
@@ -1885,7 +1989,7 @@ export default function App() {
           )}
 
           {activeTab === "users-admin" && user.role === "admin" && (
-            <UsersAdmin />
+            <UsersAdmin companies={companies} />
           )}
 
           {activeTab === "how-to-use" && (
@@ -1896,6 +2000,7 @@ export default function App() {
             <ApkInstaller />
           )}
         </Suspense>
+        </ErrorBoundary>
         </div>
 
         </main>
@@ -1962,6 +2067,9 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* NOTIFICATION TOAST: pops up for brand-new transfer/stock events regardless of active tab */}
+      <NotificationToast notifications={notifications} onNotificationClick={handleNotificationClick} />
 
       {/* FLOATING REPORT ERROR BUTTON */}
       <button

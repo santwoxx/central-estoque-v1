@@ -48,4 +48,15 @@
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
+/* Notification bell "wiggle" — plays once whenever a new unread event arrives. */
+@keyframes bellRing {
+  0%, 100% { transform: rotate(0deg); }
+  15% { transform: rotate(14deg); }
+  30% { transform: rotate(-12deg); }
+  45% { transform: rotate(9deg); }
+  60% { transform: rotate(-7deg); }
+  75% { transform: rotate(4deg); }
+  90% { transform: rotate(-2deg); }
+}
+
 

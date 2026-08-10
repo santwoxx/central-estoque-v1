@@ -31,9 +31,16 @@ interface StockTableProps {
   onUpdateItem: (itemId: string, updatedFields: Partial<StockItem>, movementReason: string, quantityDiff?: number, extraMovementFields?: Record<string, any>) => Promise<void>;
   onDeleteItem: (itemId: string) => Promise<void>;
   onAddItem: (itemData: Omit<StockItem, "id" | "userId" | "userEmail" | "createdAt" | "updatedAt">) => Promise<void>;
-  onClearStock?: () => Promise<void>;
+  // Omitting companyId wipes every company's stock — only used for the explicit
+  // "todas as empresas" choice in the clear-stock modal below, never as a default.
+  onClearStock?: (companyId?: string) => Promise<void>;
   onRestoreBackup?: (backupItems: any[]) => Promise<void>;
 }
+
+// Sentinel value for the "wipe every company" option in the clear-stock modal —
+// distinct from "" (which means "no company picked yet") so admins must make an
+// explicit, deliberate choice instead of an empty selection defaulting to "all".
+const CLEAR_ALL_COMPANIES = "__ALL_COMPANIES__";
 
 export default function StockTable({ 
   items, 
@@ -94,6 +101,7 @@ export default function StockTable({
   // Batch Clear & Restore States
   const [showClearConfirmModal, setShowClearConfirmModal] = useState(false);
   const [clearConfirmText, setClearConfirmText] = useState("");
+  const [clearTargetCompanyId, setClearTargetCompanyId] = useState(""); // which company's stock to wipe (admin picks; alimentador is always their own)
   const [showBackupRestoreModal, setShowBackupRestoreModal] = useState(false);
 
   // Barcode Scanner Modal states
@@ -920,6 +928,9 @@ export default function StockTable({
                 type="button"
                 onClick={() => {
                   setClearConfirmText("");
+                  // Default to whatever company the table is currently filtered to (if any) —
+                  // never defaults to "all companies", that requires an explicit pick below.
+                  setClearTargetCompanyId(isAdmin ? selectedCompanyId : (user.companyId || ""));
                   setShowClearConfirmModal(true);
                 }}
                 className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-red-50 hover:bg-red-100 text-red-650 border border-red-200 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer shrink-0"
@@ -2248,16 +2259,28 @@ export default function StockTable({
         </div>
       )}
 
-      {/* MODAL: CLEAR ENTIRE STOCK CONFIRMATION */}
-      {showClearConfirmModal && (
+      {/* MODAL: CLEAR STOCK CONFIRMATION (admins pick which company; alimentadores are always scoped to their own) */}
+      {showClearConfirmModal && (() => {
+        const clearIsAllCompanies = isAdmin && clearTargetCompanyId === CLEAR_ALL_COMPANIES;
+        const clearTargetCompanyName = companies.find(c => c.id === clearTargetCompanyId)?.name || "";
+        const clearSelectionPending = isAdmin && !clearTargetCompanyId;
+        const clearScopeDescription = !isAdmin
+          ? "todos os pneus/peças pertencentes à sua filial"
+          : clearIsAllCompanies
+          ? "TODOS os pneus/peças de TODAS as empresas cadastradas no sistema"
+          : clearTargetCompanyName
+          ? `todos os pneus/peças da empresa "${clearTargetCompanyName}"`
+          : "os pneus/peças da empresa que você selecionar abaixo";
+
+        return (
         <div className="fixed inset-0 z-55 bg-slate-900/55 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl animate-scaleUp">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-lg font-bold text-red-650 flex items-center gap-1.5">
-                <AlertTriangle size={20} /> Excluir Todo o Estoque?
+                <AlertTriangle size={20} /> {isAdmin ? "Excluir Estoque de uma Empresa?" : "Excluir Todo o Estoque?"}
               </h3>
-              <button 
-                onClick={() => setShowClearConfirmModal(false)} 
+              <button
+                onClick={() => setShowClearConfirmModal(false)}
                 className="p-1 text-slate-400 hover:text-slate-900 rounded"
               >
                 <X size={18} />
@@ -2266,11 +2289,31 @@ export default function StockTable({
 
             <div className="space-y-4 py-4 text-xs text-slate-700">
               <p>
-                <strong>ATENÇÃO!</strong> Esta ação irá apagar permanentemente todos os pneus/peças cadastrados pertencentes à sua filial (ou todas as filiais, caso você seja um Administrador Master).
+                <strong>ATENÇÃO!</strong> Esta ação irá apagar permanentemente {clearScopeDescription}.
               </p>
               <p className="bg-red-50 text-red-700 p-3 rounded-lg border border-red-100 font-semibold leading-relaxed">
                 Todas as exclusões serão registradas individualmente no histórico de auditoria para segurança.
               </p>
+
+              {isAdmin && (
+                <div className="space-y-1.5">
+                  <label className="block font-bold text-slate-800 uppercase tracking-wide">
+                    Qual estoque você deseja apagar?
+                  </label>
+                  <select
+                    value={clearTargetCompanyId}
+                    onChange={(e) => setClearTargetCompanyId(e.target.value)}
+                    className="w-full px-3.5 py-2 border border-slate-200 rounded-xl text-xs outline-none focus:ring-4 focus:ring-red-500/10 focus:border-red-500 font-bold bg-slate-50/50 cursor-pointer"
+                  >
+                    <option value="" disabled>Selecione uma empresa...</option>
+                    {companies.map(comp => (
+                      <option key={comp.id} value={comp.id}>{comp.name}</option>
+                    ))}
+                    <option value={CLEAR_ALL_COMPANIES}>⚠️ TODAS AS EMPRESAS (ação total)</option>
+                  </select>
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <label className="block font-bold text-slate-800 uppercase tracking-wide">
                   Digite <span className="font-mono text-red-650 bg-red-50/50 px-1 py-0.5 rounded font-black border border-red-200">APAGAR</span> abaixo para prosseguir:
@@ -2295,12 +2338,15 @@ export default function StockTable({
               </button>
               <button
                 type="button"
-                disabled={clearConfirmText.trim().toUpperCase() !== "APAGAR" || submitting}
+                disabled={clearConfirmText.trim().toUpperCase() !== "APAGAR" || submitting || clearSelectionPending}
                 onClick={async () => {
                   if (onClearStock) {
                     setSubmitting(true);
                     try {
-                      await onClearStock();
+                      const scopeCompanyId = isAdmin
+                        ? (clearIsAllCompanies ? undefined : clearTargetCompanyId)
+                        : undefined; // handleClearCompanyStock always scopes alimentadores to their own company
+                      await onClearStock(scopeCompanyId);
                       setShowClearConfirmModal(false);
                     } catch (err: any) {
                       alert(err.message || "Erro ao apagar o estoque.");
@@ -2316,7 +2362,8 @@ export default function StockTable({
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* MODAL: BARCODE SCANNER VIA CAMERA */}
       {showScannerModal && (

@@ -35,11 +35,17 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
-export default function UsersAdmin() {
+interface UsersAdminProps {
+  // Companies are already streamed in real time by App.tsx and shared across every
+  // tab that needs them — passed down here instead of opening a second onSnapshot
+  // listener on the same "companies" collection (which duplicated every read while
+  // this tab was open).
+  companies: Company[];
+}
+
+export default function UsersAdmin({ companies }: UsersAdminProps) {
   const [credentials, setCredentials] = useState<UserCredential[]>([]);
-  const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingCompanies, setLoadingCompanies] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
   // Sub tab: credentials list or companies register
@@ -389,31 +395,6 @@ export default function UsersAdmin() {
     }, (error) => {
       console.error("Error reading custom credentials:", error);
       setLoading(false);
-    });
-
-    return unsub;
-  }, []);
-
-  // Fetch companies in real-time
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, "companies"), (snapshot) => {
-      const list: Company[] = [];
-      snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        list.push({
-          id: docSnap.id,
-          name: data.name || "",
-          description: data.description || "",
-          createdAt: data.createdAt
-        });
-      });
-      // Sort alphabetically by company name
-      list.sort((a, b) => a.name.localeCompare(b.name));
-      setCompanies(list);
-      setLoadingCompanies(false);
-    }, (error) => {
-      console.error("Error reading companies:", error);
-      setLoadingCompanies(false);
     });
 
     return unsub;
@@ -979,12 +960,7 @@ export default function UsersAdmin() {
               </p>
             </div>
 
-            {loadingCompanies ? (
-              <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-2">
-                <div className="h-6 w-6 border-2 border-gold-500 border-t-transparent rounded-full animate-spin"></div>
-                <p className="text-xs font-bold">Procurando empresas no Firestore...</p>
-              </div>
-            ) : companies.length === 0 ? (
+            {companies.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-xl">
                 <Building size={36} className="text-slate-300 mb-2" />
                 <p className="font-bold text-slate-700 text-sm">Nenhuma empresa cadastrada</p>

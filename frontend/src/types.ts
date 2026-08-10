@@ -136,3 +136,26 @@ export interface TransferOrder {
   createdAt: any;
   updatedAt: any;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Notification Center (bell icon): in-app events derived from
+// real-time transfer/stock changes, persisted per-user in localStorage.
+// ─────────────────────────────────────────────────────────────────
+export type NotificationType =
+  | "TRANSFER_ACTION_REQUIRED"
+  | "TRANSFER_UPDATE"
+  | "TRANSFER_COMPLETED"
+  | "TRANSFER_CANCELLED"
+  | "STOCK_LOW"
+  | "STOCK_OUT";
+
+export interface AppNotification {
+  id: string; // stable, e.g. `transfer:{id}:{status}` — dedupes re-fires of the same event
+  type: NotificationType;
+  title: string;
+  message: string;
+  createdAt: number; // epoch millis
+  read: boolean;
+  refId?: string; // transferId or stockItemId, for click-through context
+  targetTab?: "transfers" | "unified" | "inventory";
+}
