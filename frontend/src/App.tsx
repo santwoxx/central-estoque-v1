@@ -56,6 +56,7 @@ import { useAppNotifications } from "./hooks/useAppNotifications";
 // tab — keeps the initial bundle from dragging in things like the WebUSB ADB stack
 // (ApkInstaller) for users who never open that tab.
 import AuthScreen from "./components/AuthScreen";
+import PublicStock from "./components/PublicStock"; // Nova tela de consulta
 const PDFImporter = lazy(() => import("./components/PDFImporter"));
 const StockTable = lazy(() => import("./components/StockTable"));
 const MovementReports = lazy(() => import("./components/MovementReports"));
@@ -120,6 +121,11 @@ function mapTransferDoc(docSnap: any): TransferOrder {
 }
 
 export default function App() {
+  // Se for a rota pública, renderiza apenas o estoque público e ignora todo o resto
+  if (window.location.pathname === '/consulta') {
+    return <PublicStock />;
+  }
+
   const [user, setUser] = useState<{ uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string; credentialId?: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   

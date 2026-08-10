@@ -44,7 +44,7 @@ service cloud.firestore {
 
     // Companies Collection rules
     match /companies/{companyId} {
-      allow read: if isAuth();
+      allow read: if true;
       allow write: if isAdmin();
     }
 
@@ -77,10 +77,8 @@ service cloud.firestore {
 
     // Stock Collection rules
     match /stock/{itemId} {
-      // Everyone with a recognized role can read every company's stock — this is what
-      // lets an alimentador check whether another filial has what they need before
-      // requesting a transfer. Write access below stays strictly company-scoped.
-      allow read: if isAdmin() || isVendedor() || isAlimentador();
+      // Leitura pública habilitada para a rota de consulta sem login
+      allow read: if true;
 
       // Admin can create anything. Donos/Alimentadores can only create for their own company.
       allow create: if isAdmin() || (
