@@ -7,6 +7,17 @@ import http from 'http';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// 1. Blindagem contra Falhas Fatais (Crash Prevention)
+process.on('uncaughtException', (error) => {
+  console.error('[Electron] Uncaught Exception:', error);
+  // Mantém o app rodando
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Electron] Unhandled Rejection at:', promise, 'reason:', reason);
+  // Mantém o app rodando
+});
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -24,27 +35,59 @@ const MIME_TYPES = {
   '.map': 'application/json; charset=utf-8'
 };
 
-// Firebase's Google sign-in popup (signInWithPopup) needs the app to be
-// served from a real http(s) origin — it cannot work over the file://
-// protocol Electron uses by default (there is no domain to authorize).
-// Serving the already-built `dist/` folder over plain HTTP on localhost
-// gives it that origin, and "localhost" is authorized by default on every
-// Firebase project, so no extra Firebase Console setup is needed for this.
+// Variável para armazenar o servidor HTTP
+let localServer = null;
+
 function serveDistFolder(distDir) {
   return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
+    // 2. Servidor HTTP Robusto
+    localServer = http.createServer((req, res) => {
+      // 2.1 Rejeita métodos que não sejam GET ou HEAD
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { 'Content-Type': 'text/plain' });
+        res.end('Method Not Allowed');
+        return;
+      }
+
+      // 2.2 Cabeçalhos de Segurança e Cache
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      
       const reqPath = decodeURIComponent((req.url || '/').split('?')[0]);
       let filePath = path.join(distDir, reqPath);
 
-      // SPA fallback: any path that isn't an actual file on disk serves index.html
+      // Proteção de travessia de diretório (Directory Traversal)
+      if (!filePath.startsWith(distDir)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden');
+        return;
+      }
+
+      // SPA fallback
       if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
         filePath = path.join(distDir, 'index.html');
       }
 
+      // Adicionar cache para arquivos estáticos (melhora performance)
+      if (filePath.match(/\.(js|css|woff2?|png|jpe?g|svg)$/)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000'); // 1 ano
+      } else {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+
+      // Se for apenas HEAD, termina aqui
+      if (req.method === 'HEAD') {
+        res.writeHead(200);
+        res.end();
+        return;
+      }
+
+      // 2.3 Tratamento de erro de leitura robusto
       fs.readFile(filePath, (err, data) => {
         if (err) {
-          res.writeHead(404);
-          res.end('Not found');
+          console.error(`[Servidor Local] Erro ao ler arquivo ${filePath}:`, err.message);
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
           return;
         }
         const ext = path.extname(filePath).toLowerCase();
@@ -53,15 +96,23 @@ function serveDistFolder(distDir) {
       });
     });
 
-    server.on('error', reject);
-    // Port 0 lets the OS assign a free port, avoiding collisions with
-    // anything else already running on the user's machine.
-    server.listen(0, 'localhost', () => resolve(server.address().port));
+    localServer.on('error', (err) => {
+      console.error('[Servidor Local] Falha crítica:', err);
+      reject(err);
+    });
+    
+    localServer.listen(0, 'localhost', () => {
+      const port = localServer.address().port;
+      console.log(`[Servidor Local] Rodando com sucesso na porta ${port}`);
+      resolve(port);
+    });
   });
 }
 
+let mainWindow;
+
 async function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
     webPreferences: {
@@ -71,11 +122,7 @@ async function createWindow() {
     }
   });
 
-  // Firebase Auth opens the Google sign-in flow via window.open(); Electron
-  // blocks all new-window requests by default, so without this the popup
-  // never appears and the login screen just sits there. The popup itself
-  // gets no Node access either — it only ever shows Google's own page.
-  win.webContents.setWindowOpenHandler(() => ({
+  mainWindow.webContents.setWindowOpenHandler(() => ({
     action: 'allow',
     overrideBrowserWindowOptions: {
       webPreferences: { nodeIntegration: false, contextIsolation: true }
@@ -83,12 +130,18 @@ async function createWindow() {
   }));
 
   if (process.env.NODE_ENV === 'development') {
-    win.loadURL('http://localhost:5173');
-    win.webContents.openDevTools();
+    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.webContents.openDevTools();
   } else {
-    const distDir = path.join(__dirname, '../dist');
-    const port = await serveDistFolder(distDir);
-    win.loadURL(`http://localhost:${port}/`);
+    try {
+      const distDir = path.join(__dirname, '../dist');
+      const port = await serveDistFolder(distDir);
+      mainWindow.loadURL(`http://localhost:${port}/`);
+    } catch (err) {
+      console.error('[Electron] Falha ao iniciar servidor local:', err);
+      // Fallback seguro caso o servidor falhe por porta bloqueada, etc
+      mainWindow.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent('<h1>Erro fatal ao iniciar o servidor interno. Verifique seu firewall ou antivírus.</h1>'));
+    }
   }
 }
 
@@ -100,6 +153,14 @@ app.whenReady().then(() => {
   });
 });
 
+// 3. Fechamento Gracioso do Servidor HTTP
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (localServer) {
+    console.log('[Servidor Local] Encerrando servidor HTTP graciosamente...');
+    localServer.close();
+  }
+  
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
 });
