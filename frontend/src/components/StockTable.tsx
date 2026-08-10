@@ -816,6 +816,8 @@ export default function StockTable({
 
       {/* Search and Filters Hub */}
       <div className="bg-white p-5 rounded-2xl border-t-4 border-t-gold-500 border-x border-b border-slate-200/85 shadow-[0_10px_25px_rgba(0,0,0,0.02)] space-y-4">
+        
+        {/* SEARCH ROW */}
         <div className="flex flex-col lg:flex-row gap-3.5 items-stretch justify-between">
           
           {/* Main search bar */}
@@ -864,7 +866,10 @@ export default function StockTable({
               </button>
             )}
           </div>
+        </div>
 
+        {/* ACTION BUTTONS ROW */}
+        <div className="flex flex-wrap items-center gap-3">
           {/* Checkout product action trigger */}
           <button
             type="button"
