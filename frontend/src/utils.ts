@@ -1,3 +1,18 @@
+// Strips everything except digits, so "225/65 R17", "225 65 17" and
+// "22565r17" all normalize to the same "2256517" — lets users search tire
+// sizes without worrying about slashes, spaces, the "R", or case.
+export function normalizeTireSize(value: string): string {
+  return (value || "").replace(/[^0-9]/g, "");
+}
+
+// Fuzzy tire-size match: true if `query` (in any common format) is a
+// substring of `itemSize` once both are reduced to digits only.
+export function matchesTireSize(itemSize: string, query: string): boolean {
+  const normalizedQuery = normalizeTireSize(query);
+  if (normalizedQuery.length < 2) return false;
+  return normalizeTireSize(itemSize).includes(normalizedQuery);
+}
+
 export function formatBRL(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",

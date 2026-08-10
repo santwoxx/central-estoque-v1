@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 
 // Hook into console to capture logs for error reporting
@@ -48,16 +48,23 @@ import { auth, db } from "./firebase";
 import { StockItem, MovementLog, UserProfile, UserRole, Company, TransferOrder } from "./types";
 
 // Components
+// AuthScreen is needed immediately on first paint (logged-out users see nothing else),
+// so it stays a static import. Every tab below is only ever rendered one at a time behind
+// activeTab, so each is code-split into its own chunk and fetched on first visit to that
+// tab — keeps the initial bundle from dragging in things like the WebUSB ADB stack
+// (ApkInstaller) for users who never open that tab.
 import AuthScreen from "./components/AuthScreen";
-import PDFImporter from "./components/PDFImporter";
-import StockTable from "./components/StockTable";
-import MovementReports from "./components/MovementReports";
-import UsersAdmin from "./components/UsersAdmin";
-import UnifiedStock from "./components/UnifiedStock";
-import DashboardAnalytics from "./components/DashboardAnalytics";
-import HowToUse from "./components/HowToUse";
-import TransferOrders from "./components/TransferOrders";
-import { ApkInstaller } from "./components/ApkInstaller";
+const PDFImporter = lazy(() => import("./components/PDFImporter"));
+const StockTable = lazy(() => import("./components/StockTable"));
+const MovementReports = lazy(() => import("./components/MovementReports"));
+const UsersAdmin = lazy(() => import("./components/UsersAdmin"));
+const UnifiedStock = lazy(() => import("./components/UnifiedStock"));
+const DashboardAnalytics = lazy(() => import("./components/DashboardAnalytics"));
+const HowToUse = lazy(() => import("./components/HowToUse"));
+const TransferOrders = lazy(() => import("./components/TransferOrders"));
+const ApkInstaller = lazy(() =>
+  import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
+);
 
 // Icons
 import {
@@ -1789,6 +1796,11 @@ export default function App() {
 
         {/* Dynamic Tab Panel switches */}
         <div className="transition-all duration-200">
+        <Suspense fallback={
+          <div className="flex items-center justify-center py-20 text-slate-400">
+            <div className="h-5 w-5 border-2 border-gold-500 border-t-transparent rounded-full animate-spin"></div>
+          </div>
+        }>
           {activeTab === "unified" && (
             <div className="space-y-4">
               {loadingData && (
@@ -1883,6 +1895,7 @@ export default function App() {
           {activeTab === "apk-installer" && (
             <ApkInstaller />
           )}
+        </Suspense>
         </div>
 
         </main>

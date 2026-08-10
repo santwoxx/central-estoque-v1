@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company, UserRole } from "../types";
-import { formatBRL } from "../utils";
+import { formatBRL, matchesTireSize } from "../utils";
 import sajEstoqueData from "../saj_estoque.json";
 import autocarEstoqueData from "../autocar_estoque.json";
 import valencaEstoqueData from "../valenca_estoque.json";
@@ -397,6 +397,7 @@ export default function StockTable({
         item.brand.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.size.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        matchesTireSize(item.size, searchTerm) ||
         (item.description && item.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
         item.userEmail.toLowerCase().includes(searchTerm.toLowerCase());
 
@@ -749,7 +750,8 @@ export default function StockTable({
         item.sku.toLowerCase().includes(lower) ||
         item.brand.toLowerCase().includes(lower) ||
         item.model.toLowerCase().includes(lower) ||
-        item.size.toLowerCase().includes(lower)
+        item.size.toLowerCase().includes(lower) ||
+        matchesTireSize(item.size, lower)
       )
       .sort((a, b) => a.sku.localeCompare(b.sku))
       .slice(0, 60);
@@ -815,7 +817,7 @@ export default function StockTable({
             </div>
             <input
               type="text"
-              placeholder="Filtre por marca, modelo, descrição ou especificações..."
+              placeholder="Filtre por marca, modelo, medida (ex: 225/65R17) ou descrição..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 pr-4 py-2.5 w-full border border-slate-200 rounded-xl bg-slate-50/50 text-slate-900 font-semibold text-xs focus:bg-white focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 hover:border-slate-350 transition-all placeholder-slate-400 outline-none"
@@ -2012,7 +2014,7 @@ export default function StockTable({
                         </div>
                         <input
                           type="text"
-                          placeholder="Pesquise por SKU, marca ou modelo..."
+                          placeholder="Pesquise por SKU, marca, modelo ou medida..."
                           value={checkoutSearch}
                           onChange={e => setCheckoutSearch(e.target.value)}
                           className="w-full pl-8 pr-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"

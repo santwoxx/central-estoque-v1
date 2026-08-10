@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company } from "../types";
 import { Search, Plus, Building2, X, Loader2 } from "lucide-react";
+import { matchesTireSize } from "../utils";
 
 interface UnifiedStockProps {
   items: StockItem[];
@@ -88,10 +89,12 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
   const filteredItems = useMemo(() => {
     if (!searchTerm) return consolidatedItems;
     const lower = searchTerm.toLowerCase();
-    return consolidatedItems.filter(item => 
-      item.sku.toLowerCase().includes(lower) || 
+    return consolidatedItems.filter(item =>
+      item.sku.toLowerCase().includes(lower) ||
       item.description.toLowerCase().includes(lower) ||
-      item.brand.toLowerCase().includes(lower)
+      item.brand.toLowerCase().includes(lower) ||
+      item.size.toLowerCase().includes(lower) ||
+      matchesTireSize(item.size, lower)
     );
   }, [consolidatedItems, searchTerm]);
 
@@ -352,7 +355,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
           <Search size={16} className="text-slate-400 mr-2" />
           <input 
             type="text" 
-            placeholder="Pesquisar por SKU, modelo ou marca..." 
+            placeholder="Pesquisar por SKU, modelo, marca ou medida..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full outline-none text-xs text-slate-800 bg-transparent font-semibold"

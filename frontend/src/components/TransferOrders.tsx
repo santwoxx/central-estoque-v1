@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { StockItem, Company, TransferOrder, TransferStatus, UserRole } from "../types";
-import { exportToCSV, formatDate } from "../utils";
+import { exportToCSV, formatDate, matchesTireSize } from "../utils";
 import SignaturePad from "./SignaturePad";
 import {
   Plus,
@@ -121,7 +121,8 @@ export default function TransferOrders({
         item.sku.toLowerCase().includes(lower) ||
         item.brand.toLowerCase().includes(lower) ||
         item.model.toLowerCase().includes(lower) ||
-        item.size.toLowerCase().includes(lower)
+        item.size.toLowerCase().includes(lower) ||
+        matchesTireSize(item.size, lower)
       )
       .sort((a, b) => a.sku.localeCompare(b.sku))
       .slice(0, 60);
@@ -133,10 +134,11 @@ export default function TransferOrders({
   // ── Filtering / sorting the transfer list ───────────────────────
   const filteredTransfers = useMemo(() => {
     return transfers.filter(t => {
-      const itemStr = (t.items || []).map(i => i.sku + i.brand + i.model).join("").toLowerCase();
+      const itemStr = (t.items || []).map(i => i.sku + i.brand + i.model + i.size).join("").toLowerCase();
       const matchesSearch =
         searchTerm === "" ||
         itemStr.includes(searchTerm.toLowerCase()) ||
+        (t.items || []).some(i => matchesTireSize(i.size, searchTerm)) ||
         t.sourceCompanyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         t.destinationCompanyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         t.requestedByName.toLowerCase().includes(searchTerm.toLowerCase());
@@ -428,7 +430,7 @@ export default function TransferOrders({
           </div>
           <input
             type="text"
-            placeholder="Pesquise por SKU, empresa ou solicitante..."
+            placeholder="Pesquise por SKU, medida, empresa ou solicitante..."
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
             className="pl-9 pr-3 py-2 w-full border border-slate-200 rounded-xl bg-slate-50/50 text-slate-900 font-semibold text-xs focus:bg-white focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 outline-none transition-all"
@@ -768,7 +770,7 @@ export default function TransferOrders({
                       <input
                         type="text"
                         disabled={!effectiveSourceCompanyId}
-                        placeholder={effectiveSourceCompanyId ? "Pesquise por SKU, marca ou modelo..." : "Selecione a empresa de origem primeiro"}
+                        placeholder={effectiveSourceCompanyId ? "Pesquise por SKU, marca, modelo ou medida..." : "Selecione a empresa de origem primeiro"}
                         value={formStockSearch}
                         onChange={e => setFormStockSearch(e.target.value)}
                         className="w-full pl-8 pr-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold disabled:bg-slate-50 disabled:text-slate-400"

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { MovementLog } from "../types";
-import { exportToCSV, formatDate } from "../utils";
+import { exportToCSV, formatDate, matchesTireSize } from "../utils";
 import {
   Download,
   FileSpreadsheet,
@@ -35,6 +35,8 @@ export default function MovementReports({ logs, isAdmin, onDeleteLog, onClearLog
         log.brand.toLowerCase().includes(searchTerm.toLowerCase()) ||
         log.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
         log.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        log.size.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        matchesTireSize(log.size, searchTerm) ||
         log.reason.toLowerCase().includes(searchTerm.toLowerCase()) ||
         log.userEmail.toLowerCase().includes(searchTerm.toLowerCase());
         
@@ -180,7 +182,7 @@ export default function MovementReports({ logs, isAdmin, onDeleteLog, onClearLog
           </div>
           <input
             type="text"
-            placeholder="Pesquise por histórico, SKU, Marca de pneu ou colaborador..."
+            placeholder="Pesquise por histórico, SKU, marca, medida ou colaborador..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="pl-9 pr-3 py-2 w-full border border-slate-200 rounded-xl bg-slate-50/50 text-slate-900 font-semibold text-xs focus:bg-white focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 outline-none transition-all"
