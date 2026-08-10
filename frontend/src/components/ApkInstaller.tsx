@@ -19,7 +19,7 @@ export const ApkInstaller: React.FC = () => {
           Baixe o instalador <strong>.exe</strong> diretamente pelo Google Drive e instale no seu computador Windows para ter a melhor experiência.
         </div>
         <a
-          href="COLOQUE_AQUI_O_LINK_DO_GOOGLE_DRIVE"
+          href="https://drive.google.com/uc?export=download&id=1suPMiuuXCF5aDTd82vPMIGBBOfsHHh7t"
           target="_blank"
           rel="noopener noreferrer"
           className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-gold-400 border border-gold-500/20 shadow-[0_2px_10px_rgba(212,147,33,0.15)] font-black uppercase tracking-wider rounded-xl transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-xs"

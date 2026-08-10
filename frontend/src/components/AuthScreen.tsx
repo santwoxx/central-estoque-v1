@@ -364,7 +364,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   <p className="text-[10px] text-blue-700 mt-0.5">Mesmo sistema, num app fixo no seu computador. O site continua funcionando normalmente.</p>
                 </div>
                 <a
-                  href="https://github.com/santwoxx/central-estoque-v1/releases/tag/desktop-v1.0.0"
+                  href="https://drive.google.com/uc?export=download&id=1suPMiuuXCF5aDTd82vPMIGBBOfsHHh7t"
                   target="_blank"
                   rel="noreferrer"
                   className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold px-3 py-1.5 rounded shadow-sm transition-colors cursor-pointer ml-2"
