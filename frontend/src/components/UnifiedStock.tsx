@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company } from "../types";
-import { Search, Plus, Building2, X, Loader2, Share2, Check } from "lucide-react";
+import { Search, Plus, Building2, X, Loader2, Share2, Check, Printer } from "lucide-react";
 import { matchesTireSize } from "../utils";
+import PrintableReport from "./PrintableReport";
 
 interface UnifiedStockProps {
   items: StockItem[];
@@ -46,6 +47,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
   const [newProductQuantities, setNewProductQuantities] = useState<Record<string, number>>({});
   const [addProductLoading, setAddProductLoading] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const reportRef = React.useRef<HTMLDivElement>(null);
 
   const isAdmin = user.role === "admin";
   const isVendedor = user.role === "vendedor";
@@ -138,6 +140,10 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handlePrint = () => {
+    window.print();
   };
 
   const handleCopyPublicLink = async () => {
@@ -398,6 +404,15 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
             className="flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50"
           >
             <Building2 size={14} className="text-emerald-600" /> Exportar Planilha
+          </button>
+          
+          <button
+            type="button"
+            onClick={handlePrint}
+            disabled={filteredItems.length === 0}
+            className="flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50"
+          >
+            <Printer size={14} className="text-blue-600" /> Imprimir Relatório
           </button>
 
           {(!isVendedor) && (
@@ -1056,6 +1071,12 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
         </div>
       )}
 
+      <PrintableReport 
+        ref={reportRef}
+        items={filteredItems}
+        companies={companies}
+        companyName={user.companyName}
+      />
     </div>
   );
 }
