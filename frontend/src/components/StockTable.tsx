@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company, UserRole } from "../types";
 import { formatBRL } from "../utils";
+import sajEstoqueData from "../saj_estoque.json";
+import autocarEstoqueData from "../autocar_estoque.json";
 import { 
   Search, 
   Trash2, 
@@ -104,6 +106,79 @@ export default function StockTable({
   const [checkoutClientDoc, setCheckoutClientDoc] = useState("");
   const [checkoutClientVehicle, setCheckoutClientVehicle] = useState("");
   const [lastSaleReceipt, setLastSaleReceipt] = useState<any | null>(null);
+
+  const [isInjecting, setIsInjecting] = useState(false);
+
+  const handleInjectSajEstoque = async () => {
+    if (!window.confirm("ATENÇÃO: Deseja injetar todo o estoque da SAJ Pneus no banco de dados agora? Isso pode demorar alguns segundos.")) return;
+    setIsInjecting(true);
+    let successCount = 0;
+    try {
+      // Find SAJ company ID
+      const sajCompany = companies.find(c => c.name.toUpperCase().includes("SAJ PNEUS") || c.name.toUpperCase().includes("SAJ"));
+      const cid = sajCompany ? sajCompany.id : (user.companyId || "");
+      const cname = sajCompany ? sajCompany.name : (user.companyName || "");
+      
+      for (const item of sajEstoqueData) {
+        await onAddItem({
+          sku: item.sku,
+          brand: item.brand,
+          model: item.model,
+          size: item.size,
+          quantity: item.quantity,
+          price: item.price,
+          priceCash: item.priceCash,
+          priceInstallment: item.priceInstallment,
+          notes: item.notes,
+          description: item.description,
+          imageUrl: "",
+          companyId: cid,
+          companyName: cname
+        });
+        successCount++;
+      }
+      alert(`Sucesso! ${successCount} itens foram injetados com perfeição.`);
+    } catch (err: any) {
+      alert("Erro ao injetar: " + err.message);
+    } finally {
+      setIsInjecting(false);
+    }
+  };
+
+  const handleInjectAutocarEstoque = async () => {
+    if (!window.confirm("ATENÇÃO: Deseja injetar todo o estoque da Autocar no banco de dados agora? Isso pode demorar alguns segundos.")) return;
+    setIsInjecting(true);
+    let successCount = 0;
+    try {
+      const autocarCompany = companies.find(c => c.name.toUpperCase().includes("AUTOCAR"));
+      const cid = autocarCompany ? autocarCompany.id : (user.companyId || "");
+      const cname = autocarCompany ? autocarCompany.name : (user.companyName || "");
+      
+      for (const item of autocarEstoqueData) {
+        await onAddItem({
+          sku: item.sku,
+          brand: item.brand,
+          model: item.model,
+          size: item.size,
+          quantity: item.quantity,
+          price: item.price,
+          priceCash: item.priceCash,
+          priceInstallment: item.priceInstallment,
+          notes: item.notes,
+          description: item.description,
+          imageUrl: "",
+          companyId: cid,
+          companyName: cname
+        });
+        successCount++;
+      }
+      alert(`Sucesso! ${successCount} itens foram injetados com perfeição.`);
+    } catch (err: any) {
+      alert("Erro ao injetar: " + err.message);
+    } finally {
+      setIsInjecting(false);
+    }
+  };
 
   // Helper to open print window for thermal receipt
   const handlePrintReceipt = (receipt: any) => {
@@ -762,6 +837,30 @@ export default function StockTable({
           >
             <FileSpreadsheet size={15} className="text-emerald-600" /> Exportar CSV
           </button>
+
+          {/* INJETAR ESTOQUE SAJ PNEUS */}
+          {user.role === "admin" && (
+            <button
+              type="button"
+              onClick={handleInjectSajEstoque}
+              disabled={isInjecting}
+              className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-700 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+            >
+              {isInjecting ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} Injetar Estoque SAJ
+            </button>
+          )}
+
+          {/* INJETAR ESTOQUE AUTOCAR */}
+          {user.role === "admin" && (
+            <button
+              type="button"
+              onClick={handleInjectAutocarEstoque}
+              disabled={isInjecting}
+              className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-fuchsia-600 hover:bg-fuchsia-700 text-white border border-fuchsia-700 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+            >
+              {isInjecting ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} Injetar Estoque Autocar
+            </button>
+          )}
 
           {/* Admin/Owner Actions: Clear & Restore Backups */}
           {(user.role === "admin" || user.role === "alimentador") && (
