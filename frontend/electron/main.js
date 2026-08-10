@@ -56,7 +56,7 @@ function serveDistFolder(distDir) {
     server.on('error', reject);
     // Port 0 lets the OS assign a free port, avoiding collisions with
     // anything else already running on the user's machine.
-    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+    server.listen(0, 'localhost', () => resolve(server.address().port));
   });
 }
 
@@ -88,7 +88,7 @@ async function createWindow() {
   } else {
     const distDir = path.join(__dirname, '../dist');
     const port = await serveDistFolder(distDir);
-    win.loadURL(`http://127.0.0.1:${port}/`);
+    win.loadURL(`http://localhost:${port}/`);
   }
 }
 

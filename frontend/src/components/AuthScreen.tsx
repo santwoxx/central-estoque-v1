@@ -91,7 +91,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       console.error(err);
       if (err.code === "auth/unauthorized-domain") {
         setHasDomainError(true);
-        setError("Erro de autorização do Firebase (auth/unauthorized-domain): O domínio atual não está autorizado nas configurações de autenticação do seu projeto Firebase.");
+        setError(`Erro de autorização do Firebase (auth/unauthorized-domain): O domínio atual (${window.location.origin}) não está autorizado nas configurações de autenticação do seu projeto Firebase.`);
       } else {
         setError("Erro ao acessar Google. Verifique sua conexão e se os pop-ups estão liberados no navegador.");
       }
@@ -354,17 +354,19 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               Admin & Operator Portal
             </p>
             
-            {/* Download Desktop App Banner */}
+            {/* Download Desktop App Banner — hidden automatically once you're
+                already inside the desktop app (see electron/preload.cjs) */}
             {/* @ts-ignore */}
             {(!window.electronAPI) && (
               <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between">
                 <div className="text-left">
-                  <p className="text-xs font-bold text-blue-900">Novo Aplicativo Desktop</p>
-                  <p className="text-[10px] text-blue-700 mt-0.5">Mais rápido, seguro e com leitura automática de PDFs sem IA.</p>
+                  <p className="text-xs font-bold text-blue-900">Novo Aplicativo Desktop (Beta)</p>
+                  <p className="text-[10px] text-blue-700 mt-0.5">Mesmo sistema, num app fixo no seu computador. O site continua funcionando normalmente.</p>
                 </div>
-                <a 
-                  href="https://seusite.com/Instalador_Central_Estoque_v1.exe" 
-                  download
+                <a
+                  href="https://github.com/santwoxx/central-estoque-v1/releases/tag/desktop-v1.0.0"
+                  target="_blank"
+                  rel="noreferrer"
                   className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold px-3 py-1.5 rounded shadow-sm transition-colors cursor-pointer ml-2"
                 >
                   Baixar
@@ -455,35 +457,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               Autenticar com o Google
             </button>
 
-            {window.location.hostname === "localhost" && (
-              <button
-                type="button"
-                onClick={() => {
-                  const secAuthKey = "sec_auth_mock_uid_admin";
-                  const mockCred = {
-                    id: "admin_fallback_brisas",
-                    username: "central",
-                    password: "@#central@#",
-                    displayName: "Brisas Admin",
-                    role: "admin",
-                    associatedEmail: "brisasofc@gmail.com",
-                    createdAt: new Date().toISOString()
-                  };
-                  sessionStorage.setItem(secAuthKey, "true");
-                  sessionStorage.setItem(`${secAuthKey}_user`, JSON.stringify(mockCred));
-                  localStorage.setItem(secAuthKey, "true");
-                  onAuthSuccess({
-                    uid: "mock_uid_admin",
-                    email: "brisasofc@gmail.com",
-                    displayName: "Brisas Admin",
-                    role: "admin"
-                  });
-                }}
-                className="w-full py-2.5 px-4 rounded-xl text-white font-bold bg-[#1e3a8a] hover:bg-[#172554] transition-all text-xs cursor-pointer mt-2 border border-[#1d4ed8]/30 shadow-md"
-              >
-                [Dev Bypass] Entrar como Administrador
-              </button>
-            )}
+
 
             <div className="relative flex py-2 items-center">
               <div className="flex-grow border-t border-slate-200"></div>
