@@ -353,6 +353,24 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
             <p className="text-xs font-black text-gold-600 tracking-widest uppercase">
               Admin & Operator Portal
             </p>
+            
+            {/* Download Desktop App Banner */}
+            {/* @ts-ignore */}
+            {(!window.electronAPI) && (
+              <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between">
+                <div className="text-left">
+                  <p className="text-xs font-bold text-blue-900">Novo Aplicativo Desktop</p>
+                  <p className="text-[10px] text-blue-700 mt-0.5">Mais rápido, seguro e com leitura automática de PDFs sem IA.</p>
+                </div>
+                <a 
+                  href="https://seusite.com/Instalador_Central_Estoque_v1.exe" 
+                  download
+                  className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold px-3 py-1.5 rounded shadow-sm transition-colors cursor-pointer ml-2"
+                >
+                  Baixar
+                </a>
+              </div>
+            )}
           </div>
         </div>
 
