@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { StockItem, Company } from "../types";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, CircleDashed, Package, Store } from "lucide-react";
 import { matchesTireSize } from "../utils";
 
 interface ConsolidatedItem {
@@ -111,7 +111,14 @@ export default function PublicStock() {
       if (item.priceInstallment && item.priceInstallment > cons.priceInstallment) cons.priceInstallment = item.priceInstallment;
     });
 
-    return Array.from(map.values()).sort((a, b) => a.sku.localeCompare(b.sku));
+    // Filtra apenas produtos que têm alguma quantidade > 0 em alguma filial
+    // Como é um catálogo de vendas, talvez não faça sentido mostrar itens totalmente esgotados
+    // Se quiser mostrar tudo, basta remover o filtro abaixo.
+    const availableItems = Array.from(map.values()).filter(item => {
+      return Object.values(item.docs).some(doc => doc.quantity > 0);
+    });
+
+    return availableItems.sort((a, b) => a.sku.localeCompare(b.sku));
   }, [stock, companies]);
 
   const filteredItems = useMemo(() => {
@@ -131,103 +138,144 @@ export default function PublicStock() {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <Loader2 size={32} className="animate-spin text-gold-600" />
-          <p className="text-slate-500 font-bold text-sm uppercase tracking-wider">Carregando Estoque Público...</p>
+          <p className="text-slate-500 font-bold text-sm uppercase tracking-wider">Carregando Catálogo...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen bg-slate-100 font-sans pb-16">
+      
+      {/* HEADER DE LOJA VIRTUAL */}
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-12 shadow-xl relative overflow-hidden">
+        {/* Detalhe de fundo */}
+        <div className="absolute top-0 right-0 -mt-16 -mr-16 opacity-10">
+          <CircleDashed size={256} className="text-white animate-spin-slow" />
+        </div>
         
-        {/* Header Público */}
-        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-xl md:text-2xl font-black text-slate-900 uppercase tracking-tight">Consulta de Estoque</h1>
-            <p className="text-sm font-semibold text-slate-500">Visualização em tempo real (Somente Leitura)</p>
-          </div>
+        <div className="max-w-6xl mx-auto relative z-10 flex flex-col items-center text-center">
+          <h1 className="text-3xl md:text-5xl font-black text-white uppercase tracking-tight mb-3">
+            Catálogo de Pneus
+          </h1>
+          <p className="text-slate-300 font-medium text-sm md:text-base max-w-xl mb-8">
+            Consulte nossa disponibilidade em tempo real e encontre a medida perfeita.
+          </p>
           
-          <div className="flex items-center border border-slate-200 px-3 py-2 rounded-xl max-w-md w-full focus-within:ring-2 focus-within:ring-gold-500/20 focus-within:border-gold-500 transition-all bg-slate-50">
-            <Search size={16} className="text-slate-400 mr-2" />
+          {/* BARRA DE PESQUISA GRANDE */}
+          <div className="w-full max-w-2xl bg-white rounded-2xl shadow-lg p-2 flex items-center border border-transparent focus-within:border-gold-500 focus-within:ring-4 focus-within:ring-gold-500/20 transition-all">
+            <Search size={24} className="text-slate-400 mx-3" />
             <input 
               type="text" 
-              placeholder="Pesquisar por SKU, modelo, marca ou medida..."
+              placeholder="Digite a medida, marca ou modelo..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full outline-none text-xs text-slate-800 bg-transparent font-semibold"
+              className="w-full outline-none text-base md:text-lg text-slate-800 bg-transparent font-semibold py-2"
             />
+            {searchTerm && (
+              <button onClick={() => setSearchTerm("")} className="px-4 text-xs font-bold text-slate-400 hover:text-slate-700">
+                LIMPAR
+              </button>
+            )}
           </div>
         </div>
-
-        {/* Tabela de Estoque */}
-        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm overflow-x-auto">
-          <table className="w-full border-collapse text-left text-sm text-slate-850">
-            <thead className="bg-slate-50 text-slate-450 text-[10px] uppercase tracking-wider font-extrabold border-b border-slate-200">
-              <tr>
-                <th className="border-r border-slate-200 p-3 text-center" rowSpan={2}>CODIGO</th>
-                <th className="border-r border-slate-200 p-3 text-center" rowSpan={2}>MEDIDA</th>
-                <th className="border-r border-slate-200 p-3" rowSpan={2}>DESCRIÇÃO</th>
-                <th className="border-r border-slate-200 p-3 text-center" colSpan={companies.length}>QUANTIDADE</th>
-                <th className="border-r border-slate-200 p-3 text-center" rowSpan={2}>P/ A VISTA</th>
-                <th className="p-3 text-center" rowSpan={2}>P/PRAZO</th>
-              </tr>
-              <tr className="border-t border-slate-200">
-                {companies.map(comp => (
-                  <th key={comp.id} className="border-r border-slate-200 p-2 text-center text-[9px] min-w-[90px]">{comp.name.toUpperCase()}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-              {filteredItems.map((item) => (
-                <tr key={item.sku} className="hover:bg-gold-50/5 text-slate-800 transition-colors">
-                  <td className="border-r border-slate-200 p-3 text-center font-bold text-slate-900 whitespace-nowrap">{item.sku}</td>
-                  <td className="border-r border-slate-200 p-3 text-center font-mono font-bold text-gold-700 whitespace-nowrap">{item.size}</td>
-                  <td className="border-r border-slate-200 p-3 font-semibold text-slate-700 min-w-[200px]">
-                    {item.brand} <span className="font-normal text-slate-600">{item.model}</span>
-                  </td>
-                  
-                  {/* Quantidades por Filial */}
-                  {companies.map(comp => {
-                    const docItem = item.docs[comp.id];
-                    const qty = docItem ? docItem.quantity : 0;
-                    return (
-                      <td key={comp.id} className="border-r border-slate-200 p-3 text-center">
-                        {qty ? (
-                          <span className={`inline-block px-2 py-0.5 rounded-lg border font-black text-xs ${qty > 5 ? "bg-gold-500/10 text-gold-700 border-gold-400/20" : "bg-amber-100/60 text-amber-800 border-amber-300/30"}`}>
-                            {qty} un
-                          </span>
-                        ) : (
-                          <span className="text-slate-300 font-bold">—</span>
-                        )}
-                      </td>
-                    );
-                  })}
-
-                  <td className="border-r border-slate-200 p-3 text-center font-bold text-slate-900">
-                    {item.priceCash > 0 ? `R$ ${item.priceCash.toFixed(2).replace(".", ",")}` : <span className="text-slate-300">—</span>}
-                  </td>
-                  <td className="p-3 text-center font-bold text-slate-900">
-                    {item.priceInstallment > 0 ? `R$ ${item.priceInstallment.toFixed(2).replace(".", ",")}` : <span className="text-slate-300">—</span>}
-                  </td>
-                </tr>
-              ))}
-              
-              {filteredItems.length === 0 && (
-                <tr>
-                  <td colSpan={6 + companies.length} className="p-8 text-center text-slate-400 font-semibold">
-                    Nenhum pneu encontrado.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        
-        <div className="text-center text-[10px] text-slate-400 font-semibold uppercase tracking-wider pb-10">
-          Central de Estoque © Todos os direitos reservados.
-        </div>
       </div>
+
+      {/* RESULTADOS / GRID DE PRODUTOS */}
+      <div className="max-w-6xl mx-auto px-4 md:px-6 mt-10">
+        
+        <div className="mb-6 flex items-center justify-between">
+          <h2 className="text-lg font-bold text-slate-700">
+            {filteredItems.length} {filteredItems.length === 1 ? 'Produto Encontrado' : 'Produtos Encontrados'}
+          </h2>
+        </div>
+
+        {filteredItems.length === 0 ? (
+          <div className="bg-white rounded-3xl p-16 text-center shadow-sm border border-slate-200">
+            <Package size={48} className="mx-auto text-slate-300 mb-4" />
+            <h3 className="text-xl font-bold text-slate-700 mb-2">Pneu não encontrado</h3>
+            <p className="text-slate-500 font-medium">Não temos essa medida ou modelo disponível no momento.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            
+            {filteredItems.map((item) => (
+              <div key={item.sku} className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl border border-slate-200 transition-all duration-300 group flex flex-col h-full">
+                
+                {/* Imagem / Topo do Card */}
+                <div className="bg-slate-50 h-32 flex items-center justify-center border-b border-slate-100 relative overflow-hidden">
+                  <div className="absolute top-3 left-3 bg-white px-2 py-1 rounded-lg text-[10px] font-mono font-bold text-slate-400 border border-slate-200 shadow-sm">
+                    {item.sku}
+                  </div>
+                  <CircleDashed size={64} className="text-slate-200 group-hover:text-gold-300 transition-colors duration-500" />
+                </div>
+
+                {/* Info do Produto */}
+                <div className="p-5 flex-grow flex flex-col">
+                  {/* Marca e Modelo */}
+                  <div className="mb-1 text-xs font-black text-slate-400 uppercase tracking-widest truncate">
+                    {item.brand}
+                  </div>
+                  {/* Tamanho Gigante */}
+                  <h3 className="text-2xl font-black text-slate-900 tracking-tight leading-none mb-1">
+                    {item.size}
+                  </h3>
+                  <div className="text-sm font-semibold text-slate-600 mb-5 truncate">
+                    {item.model}
+                  </div>
+
+                  {/* Etiquetas de Estoque (Lojas) */}
+                  <div className="space-y-2 mt-auto">
+                    <div className="flex items-center text-[10px] font-black uppercase text-slate-400 tracking-wider mb-2">
+                      <Store size={12} className="mr-1" /> Disponibilidade
+                    </div>
+                    {companies.map(comp => {
+                      const qty = item.docs[comp.id]?.quantity || 0;
+                      if (qty === 0) return null; // Só exibe filiais que tem o pneu
+
+                      return (
+                        <div key={comp.id} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
+                          <span className="text-xs font-bold text-slate-600 truncate mr-2">{comp.name}</span>
+                          <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10px] font-black whitespace-nowrap">
+                            {qty} UN
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Rodapé: Preços */}
+                {(item.priceCash > 0 || item.priceInstallment > 0) && (
+                  <div className="bg-gradient-to-r from-gold-50/50 to-amber-50/50 p-5 border-t border-gold-100">
+                    <div className="flex justify-between items-end">
+                      {item.priceCash > 0 && (
+                        <div>
+                          <div className="text-[10px] font-bold uppercase text-gold-700 tracking-wider">À Vista</div>
+                          <div className="text-lg font-black text-emerald-700 leading-none mt-1">
+                            R$ {item.priceCash.toFixed(2).replace(".", ",")}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {item.priceInstallment > 0 && (
+                        <div className="text-right">
+                          <div className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">A Prazo</div>
+                          <div className="text-base font-black text-slate-800 leading-none mt-1">
+                            R$ {item.priceInstallment.toFixed(2).replace(".", ",")}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }

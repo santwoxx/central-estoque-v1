@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company } from "../types";
-import { Search, Plus, Building2, X, Loader2 } from "lucide-react";
+import { Search, Plus, Building2, X, Loader2, Share2, Check } from "lucide-react";
 import { matchesTireSize } from "../utils";
 
 interface UnifiedStockProps {
@@ -45,6 +45,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
   const [newProductPriceInst, setNewProductPriceInst] = useState("");
   const [newProductQuantities, setNewProductQuantities] = useState<Record<string, number>>({});
   const [addProductLoading, setAddProductLoading] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   const isAdmin = user.role === "admin";
   const isVendedor = user.role === "vendedor";
@@ -137,6 +138,17 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleCopyPublicLink = async () => {
+    try {
+      const publicUrl = window.location.origin + "/consulta";
+      await navigator.clipboard.writeText(publicUrl);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 3000);
+    } catch (err) {
+      alert("Erro ao copiar o link. Tente copiar manualmente: " + window.location.origin + "/consulta");
+    }
   };
 
   const canEditCompany = (colCompanyId: string) => {
@@ -368,6 +380,17 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          {(isAdmin || isVendedor) && (
+            <button
+              type="button"
+              onClick={handleCopyPublicLink}
+              className={`flex items-center gap-1.5 px-4 py-2 border font-bold rounded-xl text-xs shadow-sm transition-all cursor-pointer ${copiedLink ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-800 hover:bg-slate-900 text-white border-slate-800'}`}
+            >
+              {copiedLink ? <Check size={14} className="stroke-[3px]" /> : <Share2 size={14} />} 
+              {copiedLink ? "Copiado!" : "Copiar Link Catálogo"}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={exportUnifiedToCSV}
