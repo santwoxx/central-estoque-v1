@@ -233,10 +233,11 @@ export default function App() {
     const stockCollectionRef = collection(db, "stock");
     const movementsCollectionRef = collection(db, "movements");
 
-    // Admins and vendors query everything, alimentadores query only their own company's items!
-    const stockQuery = (user.role === "admin" || user.role === "vendedor" || !user.companyId)
-      ? stockCollectionRef
-      : query(stockCollectionRef, where("companyId", "==", user.companyId));
+    // Everyone reads the full stock collection now — an alimentador needs to see other
+    // filiais' stock to know whether it's worth requesting a transfer (Firestore rules
+    // still restrict writes to each user's own company; see ownScopedStock below for
+    // the views that should stay limited to "my company only").
+    const stockQuery = stockCollectionRef;
 
     const movementsQuery = (user.role === "admin" || user.role === "vendedor" || !user.companyId)
       ? query(movementsCollectionRef, orderBy("timestamp", "desc"), limit(150))
@@ -559,6 +560,18 @@ export default function App() {
       return timeB - timeA;
     });
   }, [transfersAsSource, transfersAsDestination]);
+
+  // Stock scoped to "my own company" — used for the KPI header cards and the
+  // Cadastros e Ajustes (StockTable) editing view, which should stay focused on the
+  // logged-in company even though `stock` itself now holds every company's items
+  // (everyone can read all stock so alimentadores can check other filiais before
+  // requesting a transfer — see the stock query above). Admins/vendedores (global
+  // viewers) keep seeing everything here too, matching their existing scope.
+  const ownScopedStock = useMemo(() => {
+    if (!user) return [];
+    const isGlobalViewer = user.role === "admin" || user.role === "vendedor" || !user.companyId;
+    return isGlobalViewer ? stock : stock.filter(item => item.companyId === user.companyId);
+  }, [stock, user]);
 
   // Notification Center: derives the bell feed from the real-time transfer/stock
   // streams above (new transfer requests, dispatch/receipt signatures, cancellations,
@@ -1506,10 +1519,11 @@ export default function App() {
     return <AuthScreen onAuthSuccess={(profile) => setUser(profile)} />;
   }
 
-  // Calculate overview metrics for top panel header
-  const totalStockItemsCount = stock.length;
-  const totalPneumaticsSum = stock.reduce((acc, item) => acc + item.quantity, 0);
-  const lowStockItems = stock.filter(item => item.quantity <= 4).length;
+  // Calculate overview metrics for top panel header (own company's stock only —
+  // ownScopedStock already resolves to everything for admin/vendedor)
+  const totalStockItemsCount = ownScopedStock.length;
+  const totalPneumaticsSum = ownScopedStock.reduce((acc, item) => acc + item.quantity, 0);
+  const lowStockItems = ownScopedStock.filter(item => item.quantity <= 4).length;
 
   return (
     <div className="min-h-screen bg-slate-50/70 flex flex-col md:flex-row font-sans transition-colors text-slate-800">
@@ -1544,19 +1558,20 @@ export default function App() {
 
           {/* Navigation Links Column */}
           <nav className="flex flex-col gap-1.5">
-            {(user.role === "vendedor" || user.role === "admin") && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("unified")}
-                className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                  activeTab === "unified" 
-                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                    : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                }`}
-              >
-                <Warehouse size={14} className="stroke-[2px]" /> Estoque Unificado
-              </button>
-            )}
+            {/* Everyone can browse everyone's stock here (read-only outside their own
+                company's column) — this is how an alimentador checks whether another
+                filial has what they need before requesting a transfer. */}
+            <button
+              type="button"
+              onClick={() => setActiveTab("unified")}
+              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                activeTab === "unified"
+                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+              }`}
+            >
+              <Warehouse size={14} className="stroke-[2px]" /> Estoque Unificado
+            </button>
 
             <button
               type="button"
@@ -1753,18 +1768,16 @@ export default function App() {
 
       {/* Mobile navigation bottom bar */}
       <div className="md:hidden bg-[#0b0f19] border-t border-gold-500/20 fixed bottom-0 inset-x-0 h-16 z-40 flex items-stretch divide-x divide-slate-800 shadow-[0_-4px_25px_rgba(0,0,0,0.2)] overflow-x-auto">
-        {(user.role === "vendedor" || user.role === "admin") && (
-          <button
-            type="button"
-            onClick={() => setActiveTab("unified")}
-            className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-              activeTab === "unified" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-            }`}
-          >
-            <Warehouse size={18} />
-            <span className="text-[9px] font-extrabold uppercase tracking-wide">Geral</span>
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => setActiveTab("unified")}
+          className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
+            activeTab === "unified" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+          }`}
+        >
+          <Warehouse size={18} />
+          <span className="text-[9px] font-extrabold uppercase tracking-wide">Geral</span>
+        </button>
 
         <button
           type="button"
@@ -1933,7 +1946,7 @@ export default function App() {
                 </div>
               )}
               <StockTable
-                items={stock}
+                items={ownScopedStock}
                 isAdmin={user.role === "admin"}
                 user={user}
                 companies={companies}

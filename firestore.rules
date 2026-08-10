@@ -77,14 +77,11 @@ service cloud.firestore {
 
     // Stock Collection rules
     match /stock/{itemId} {
-      // Admins and Vendedores can read all stock items.
-      // Alimentadores (Company Owners) can only read their own company's items.
-      allow read: if isAdmin() || isVendedor() || (
-        isAuth() && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        resource.data.companyId == getUserData().companyId
-      );
-      
+      // Everyone with a recognized role can read every company's stock — this is what
+      // lets an alimentador check whether another filial has what they need before
+      // requesting a transfer. Write access below stays strictly company-scoped.
+      allow read: if isAdmin() || isVendedor() || isAlimentador();
+
       // Admin can create anything. Donos/Alimentadores can only create for their own company.
       allow create: if isAdmin() || (
         isAlimentador() && 

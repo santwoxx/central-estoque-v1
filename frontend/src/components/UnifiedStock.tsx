@@ -288,6 +288,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
 
       let addedAtLeastOne = false;
       for (const comp of companies) {
+        if (!canEditCompany(comp.id)) continue; // defense in depth — the form only renders inputs for these anyway
         const quantity = newProductQuantities[comp.id] || 0;
         if (quantity > 0) {
           await onAddItem({
@@ -310,7 +311,10 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
       }
 
       if (!addedAtLeastOne && companies.length > 0) {
-        const firstComp = companies[0];
+        // Zero-stock placeholder registration (no quantity entered anywhere) — must
+        // land in a company this user is actually allowed to write to, not just
+        // whichever company happens to be first in the list.
+        const firstComp = companies.find(c => canEditCompany(c.id)) || companies[0];
         await onAddItem({
           sku,
           brand,
@@ -984,7 +988,9 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                   Quantidades Iniciais por Empresa / Filial
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[160px] overflow-y-auto pr-1">
-                  {companies.map(comp => (
+                  {/* Only companies this user is allowed to write to — a dono/alimentador
+                      can only stock their own filial, admin can seed any of them. */}
+                  {companies.filter(comp => canEditCompany(comp.id)).map(comp => (
                     <div key={comp.id} className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50/50">
                       <span className="text-xs font-bold text-slate-700 truncate max-w-[140px]" title={comp.name}>
                         {comp.name}
