@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company } from "../types";
-import { Search, Plus, Building2, X, Loader2, Share2, Check, Printer } from "lucide-react";
+import { Search, Plus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon } from "lucide-react";
+import html2canvas from "html2canvas";
 import { matchesTireSize } from "../utils";
 import PrintableReport from "./PrintableReport";
 
@@ -144,6 +145,25 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleExportImage = async () => {
+    if (!reportRef.current) return;
+    try {
+      const canvas = await html2canvas(reportRef.current, {
+        scale: 2, // Higher quality
+        useCORS: true,
+        backgroundColor: "#ffffff",
+      });
+      const dataUrl = canvas.toDataURL("image/png");
+      const link = document.createElement("a");
+      link.href = dataUrl;
+      link.download = `estoque_unificado_${new Date().toISOString().slice(0,10)}.png`;
+      link.click();
+    } catch (err) {
+      console.error("Erro ao gerar imagem", err);
+      alert("Não foi possível gerar a imagem.");
+    }
   };
 
   const handleCopyPublicLink = async () => {
@@ -406,6 +426,15 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
             <Building2 size={14} className="text-emerald-600" /> Exportar Planilha
           </button>
           
+          <button
+            type="button"
+            onClick={handleExportImage}
+            disabled={filteredItems.length === 0}
+            className="flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50"
+          >
+            <ImageIcon size={14} className="text-purple-600" /> Exportar Imagem
+          </button>
+
           <button
             type="button"
             onClick={handlePrint}

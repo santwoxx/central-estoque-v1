@@ -40,6 +40,7 @@
     "@yume-chan/android-bin": "^2.1.0",
     "@yume-chan/stream-extra": "^2.6.1",
     "firebase": "^12.15.0",
+    "html2canvas": "^1.4.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",

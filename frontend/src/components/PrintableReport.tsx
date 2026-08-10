@@ -13,7 +13,7 @@ const PrintableReport = forwardRef<HTMLDivElement, PrintableReportProps>(({ item
   const timeStr = today.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
-    <div ref={ref} className="hidden print:block print-report bg-white text-black p-4 w-full text-xs font-mono">
+    <div ref={ref} className="fixed -left-[10000px] top-0 print:static print-report bg-white text-black p-4 w-[1000px] print:w-full text-xs font-mono">
       <style>{`
         @media print {
           @page {
