@@ -1040,6 +1040,18 @@ export default function App() {
     }
   };
 
+  // Hard-delete a transfer record (e.g. cleaning up test data). Admin-only,
+  // mirrored by the Firestore rule on the transfers collection.
+  const handleDeleteTransfer = async (transferId: string) => {
+    if (!user || user.role !== "admin") return;
+    try {
+      await deleteDoc(doc(db, "transfers", transferId));
+    } catch (err) {
+      console.error("Erro ao excluir transferência:", err);
+      throw new Error("Erro ao excluir o pedido de transferência.");
+    }
+  };
+
   // Sign the delivery (source company confirms the goods are leaving). This is where
   // stock actually leaves the source company — decremented atomically inside a
   // transaction so a stale/insufficient balance or a duplicate signature attempt
@@ -1856,6 +1868,7 @@ export default function App() {
               onSignDelivery={handleSignDelivery}
               onSignReceipt={handleSignReceipt}
               onReverseTransfer={handleReverseInTransitTransfer}
+              onDeleteTransfer={handleDeleteTransfer}
             />
           )}
 

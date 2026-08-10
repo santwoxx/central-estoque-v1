@@ -20,7 +20,8 @@ import {
   User,
   Building2,
   AlertTriangle,
-  PenLine
+  PenLine,
+  Trash2
 } from "lucide-react";
 
 interface TransferOrdersProps {
@@ -41,6 +42,7 @@ interface TransferOrdersProps {
   onSignDelivery: (transferId: string, internalSignature: string, driverSignature: string, driverName: string) => Promise<void>;
   onSignReceipt: (transferId: string, internalSignature: string, driverSignature: string, driverName: string) => Promise<void>;
   onReverseTransfer?: (transferId: string) => Promise<void>;
+  onDeleteTransfer?: (transferId: string) => Promise<void>;
 }
 
 const STATUS_LABELS: Record<TransferStatus, string> = {
@@ -68,7 +70,8 @@ export default function TransferOrders({
   onCancelTransfer,
   onSignDelivery,
   onSignReceipt,
-  onReverseTransfer
+  onReverseTransfer,
+  onDeleteTransfer
 }: TransferOrdersProps) {
   const isAdmin = user.role === "admin";
   const isVendedor = user.role === "vendedor";
@@ -297,6 +300,19 @@ export default function TransferOrders({
       await onReverseTransfer(t.id);
     } catch (err: any) {
       alert(err.message || "Erro ao estornar transferência.");
+    } finally {
+      setProcessingId("");
+    }
+  };
+
+  const handleDeleteClick = async (t: TransferOrder) => {
+    if (!onDeleteTransfer) return;
+    if (!window.confirm("Excluir permanentemente este pedido de transferência? Esta ação não pode ser desfeita.")) return;
+    setProcessingId(t.id);
+    try {
+      await onDeleteTransfer(t.id);
+    } catch (err: any) {
+      alert(err.message || "Erro ao excluir pedido.");
     } finally {
       setProcessingId("");
     }
@@ -608,6 +624,16 @@ export default function TransferOrders({
                         title="Estornar transferência abandonada em trânsito (somente administrador)"
                       >
                         <RotateCcw size={13} /> Estornar (Admin)
+                      </button>
+                    )}
+                    {isAdmin && onDeleteTransfer && (
+                      <button
+                        disabled={isProcessing}
+                        onClick={() => handleDeleteClick(t)}
+                        title="Excluir permanentemente este pedido (somente administrador)"
+                        className={`flex items-center gap-1.5 px-3.5 py-2 border border-red-200 text-red-600 hover:bg-red-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50 ${canReverse(t) ? "" : "ml-auto"}`}
+                      >
+                        <Trash2 size={13} /> Excluir
                       </button>
                     )}
                   </div>
