@@ -4,6 +4,7 @@ import { formatBRL, matchesTireSize } from "../utils";
 import sajEstoqueData from "../saj_estoque.json";
 import autocarEstoqueData from "../autocar_estoque.json";
 import valencaEstoqueData from "../valenca_estoque.json";
+import centralAutocenterEstoqueData from "../central_autocenter_estoque.json";
 import { 
   Search, 
   Trash2, 
@@ -199,6 +200,41 @@ export default function StockTable({
       const cname = valencaCompany ? valencaCompany.name : (user.companyName || "");
       
       for (const item of valencaEstoqueData) {
+        await onAddItem({
+          sku: item.sku,
+          brand: item.brand,
+          model: item.model,
+          size: item.size,
+          quantity: item.quantity,
+          price: item.price,
+          priceCash: item.priceCash,
+          priceInstallment: item.priceInstallment,
+          notes: item.notes,
+          description: item.description,
+          imageUrl: "",
+          companyId: cid,
+          companyName: cname
+        });
+        successCount++;
+      }
+      alert(`Sucesso! ${successCount} itens foram injetados com perfeição.`);
+    } catch (err: any) {
+      alert("Erro ao injetar: " + err.message);
+    } finally {
+      setIsInjecting(false);
+    }
+  };
+
+  const handleInjectCentralAutocenterEstoque = async () => {
+    if (!window.confirm("ATENÇÃO: Deseja injetar todo o estoque da Central Autocenter no banco de dados agora? Isso pode demorar alguns segundos.")) return;
+    setIsInjecting(true);
+    let successCount = 0;
+    try {
+      const centralAutocenterCompany = companies.find(c => c.name.toUpperCase().includes("CENTRAL AUTOCENTER") || c.name.toUpperCase().includes("AUTOCENTER"));
+      const cid = centralAutocenterCompany ? centralAutocenterCompany.id : (user.companyId || "");
+      const cname = centralAutocenterCompany ? centralAutocenterCompany.name : (user.companyName || "");
+
+      for (const item of centralAutocenterEstoqueData) {
         await onAddItem({
           sku: item.sku,
           brand: item.brand,
@@ -922,6 +958,18 @@ export default function StockTable({
               className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-700 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
               {isInjecting ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} Injetar Estoque Valença
+            </button>
+          )}
+
+          {/* INJETAR ESTOQUE CENTRAL AUTOCENTER */}
+          {user.role === "admin" && (
+            <button
+              type="button"
+              onClick={handleInjectCentralAutocenterEstoque}
+              disabled={isInjecting}
+              className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-orange-600 hover:bg-orange-700 text-white border border-orange-700 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+            >
+              {isInjecting ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} Injetar Estoque Central Autocenter
             </button>
           )}
 
