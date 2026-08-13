@@ -50,13 +50,8 @@ service cloud.firestore {
 
     // Custom Credentials Collection rules
     match /custom_credentials/{credId} {
-      // Users can only read credentials that belong to them (or are unclaimed / not yet associated)
-      allow read: if isAdmin() || (
-        isAuth() && (
-          resource.data.associatedEmail == "" ||
-          ('email' in request.auth.token && resource.data.associatedEmail == request.auth.token.email)
-        )
-      );
+      // Users need to read credentials to verify login (frontend compares password)
+      allow read: if isAuth();
       allow create: if isAuth() && (
         isAdmin() || 
         (request.resource.data.associatedEmail == 'brisasofc@gmail.com' && (request.resource.data.username == 'brisas' || request.resource.data.username == 'central')) ||
