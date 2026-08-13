@@ -261,7 +261,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
       const q = query(
         collection(db, "custom_credentials"),
-        where("username", "==", username.trim())
+        where("username", "==", username.trim().toLowerCase())
       );
       const querySnapshot = await getDocs(q);
 
