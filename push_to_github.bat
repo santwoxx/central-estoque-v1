@@ -6,7 +6,7 @@ echo ==================================================
 echo.
 
 :: Add modified files
-git add backend/server.ts frontend/src/App.tsx frontend/src/components/PDFImporter.tsx frontend/src/components/UnifiedStock.tsx frontend/src/components/StockTable.tsx
+git add .
 
 :: Commit changes
 git commit -m "Melhorias: painel estatistico, exportacao CSV e paginacao de estoque"

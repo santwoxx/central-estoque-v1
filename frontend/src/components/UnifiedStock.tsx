@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company } from "../types";
 import { Search, Plus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon } from "lucide-react";
-import html2canvas from "html2canvas";
 import { matchesTireSize } from "../utils";
 import PrintableReport from "./PrintableReport";
 
@@ -48,6 +47,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
   const [newProductQuantities, setNewProductQuantities] = useState<Record<string, number>>({});
   const [addProductLoading, setAddProductLoading] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const reportRef = React.useRef<HTMLDivElement>(null);
 
   const isAdmin = user.role === "admin";
@@ -149,7 +149,11 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
 
   const handleExportImage = async () => {
     if (!reportRef.current) return;
+    setIsExporting(true);
     try {
+      // Dynamic import to avoid bloating initial bundle
+      const html2canvas = (await import("html2canvas")).default;
+      
       const canvas = await html2canvas(reportRef.current, {
         scale: 2, // Higher quality
         useCORS: true,
@@ -163,6 +167,8 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
     } catch (err) {
       console.error("Erro ao gerar imagem", err);
       alert("Não foi possível gerar a imagem.");
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -429,10 +435,11 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
           <button
             type="button"
             onClick={handleExportImage}
-            disabled={filteredItems.length === 0}
+            disabled={filteredItems.length === 0 || isExporting}
             className="flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50"
           >
-            <ImageIcon size={14} className="text-purple-600" /> Exportar Imagem
+            {isExporting ? <Loader2 size={14} className="animate-spin text-purple-600" /> : <ImageIcon size={14} className="text-purple-600" />} 
+            {isExporting ? "Gerando..." : "Exportar Imagem"}
           </button>
 
           <button

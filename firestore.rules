@@ -53,8 +53,8 @@ service cloud.firestore {
       // Users can only read credentials that belong to them (or are unclaimed / not yet associated)
       allow read: if isAdmin() || (
         isAuth() && (
-          resource.data.associatedEmail == request.auth.token.email ||
-          resource.data.associatedEmail == ""
+          resource.data.associatedEmail == "" ||
+          ('email' in request.auth.token && resource.data.associatedEmail == request.auth.token.email)
         )
       );
       allow create: if isAuth() && (

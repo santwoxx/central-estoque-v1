@@ -255,6 +255,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     setLoading(true);
 
     try {
+      // Autenticar anonimamente primeiro para ter permissão de leitura no Firestore
+      const result = await signInAnonymously(auth);
+      const uid = result.user.uid;
+
       const q = query(
         collection(db, "custom_credentials"),
         where("username", "==", username.trim())
@@ -285,9 +289,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           `Esta conta exige login via Google primeiro (${matchedCred.associatedEmail}).`
         );
       }
-
-      const result = await signInAnonymously(auth);
-      const uid = result.user.uid;
 
       const secAuthKey = `sec_auth_${uid}`;
       sessionStorage.setItem(secAuthKey, "true");
