@@ -743,7 +743,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                     )}
                   </td>
                   <td 
-                    className="border-r border-slate-200 px-2 py-3 text-center font-mono font-bold text-gold-700 whitespace-nowrap cursor-pointer hover:bg-gold-400/10 text-xs"
+                    className="border-r border-slate-200 px-2 py-3 text-center whitespace-nowrap cursor-pointer hover:bg-slate-50"
                     onClick={() => !isVendedor && startEdit(item, "size", item.size)}
                   >
                     {editingCell?.sku === item.sku && editingCell?.field === "size" ? (
@@ -755,10 +755,12 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                         onBlur={() => handleSaveEdit(item)}
                         onKeyDown={(e) => handleKeyDown(e, item)}
                         onClick={(e) => e.stopPropagation()}
-                        className="w-24 px-1 text-center outline-none bg-white border border-gold-400 rounded font-bold"
+                        className="w-24 px-1 text-center outline-none bg-white border border-sky-400 rounded font-bold"
                       />
                     ) : (
-                      item.size
+                      <span className="inline-block px-2.5 py-1 bg-sky-50 text-sky-700 border border-sky-200/80 rounded-lg font-extrabold text-[13px] tracking-wide shadow-sm font-sans">
+                        {item.size}
+                      </span>
                     )}
                   </td>
                   <td className="border-r border-slate-200 px-2 py-3 font-semibold text-slate-700 min-w-[150px] text-xs">
