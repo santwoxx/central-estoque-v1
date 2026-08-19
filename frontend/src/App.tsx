@@ -105,7 +105,8 @@ import {
   BookOpen,
   ArrowLeftRight,
   ArrowDownUp,
-  Smartphone
+  Smartphone,
+  DollarSign
 } from "lucide-react";
 
 // Quantos registros de movimentacao ficam em memoria. 400 (e nao 150) porque o
@@ -161,6 +162,7 @@ export default function App() {
 
   const [user, setUser] = useState<{ uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string; credentialId?: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [kpiCompanyId, setKpiCompanyId] = useState<string>("ALL");
   
   // Data State
   const [stock, setStock] = useState<StockItem[]>([]);
@@ -1953,9 +1955,15 @@ export default function App() {
 
   // Calculate overview metrics for top panel header (own company's stock only —
   // ownScopedStock already resolves to everything for admin/vendedor)
-  const totalStockItemsCount = ownScopedStock.length;
-  const totalPneumaticsSum = ownScopedStock.reduce((acc, item) => acc + item.quantity, 0);
-  const lowStockItems = ownScopedStock.filter(item => item.quantity <= 4).length;
+  const filteredKpiStock = useMemo(() => {
+    if (kpiCompanyId === "ALL") return ownScopedStock;
+    return ownScopedStock.filter(item => item.companyId === kpiCompanyId);
+  }, [ownScopedStock, kpiCompanyId]);
+
+  const totalStockItemsCount = filteredKpiStock.length;
+  const totalPneumaticsSum = filteredKpiStock.reduce((acc, item) => acc + (Number(item.quantity) || 0), 0);
+  const lowStockItems = filteredKpiStock.filter(item => (Number(item.quantity) || 0) <= 4).length;
+  const totalCostValue = filteredKpiStock.reduce((acc, item) => acc + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
 
   return (
     <div className="min-h-screen bg-slate-50/70 flex flex-col md:flex-row font-sans transition-colors text-slate-800">
@@ -2318,10 +2326,26 @@ export default function App() {
         <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 mb-20 md:mb-6 flex-1 space-y-6">
         
         {/* Sub-Header KPI Dashlet Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 font-sans">
-          
-          {/* Card 1: Total SKUs */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-[0_4px_20px_rgba(0,0,0,0.015)] flex items-center justify-between hover:scale-[1.01] transition-transform duration-250">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-black tracking-tight text-slate-800">Visão Geral</h2>
+            {(user.role === "admin" || user.role === "vendedor") && (
+              <select
+                value={kpiCompanyId}
+                onChange={(e) => setKpiCompanyId(e.target.value)}
+                className="text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm outline-none cursor-pointer focus:ring-2 focus:ring-gold-500/20 focus:border-gold-500 transition-all"
+              >
+                <option value="ALL">Todas as Lojas</option>
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 font-sans">
+            
+            {/* Card 1: Total SKUs */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-[0_4px_20px_rgba(0,0,0,0.015)] flex items-center justify-between hover:scale-[1.01] transition-transform duration-250">
             <div className="space-y-1">
               <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Modelos Cadastrados</span>
               <p className="text-2xl font-black text-slate-900 tracking-tight">{totalStockItemsCount}</p>
@@ -2361,6 +2385,20 @@ export default function App() {
             </div>
           </div>
 
+          {/* Card 4: Capital Imobilizado */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-[0_4px_20px_rgba(0,0,0,0.015)] flex items-center justify-between hover:scale-[1.01] transition-transform duration-250">
+              <div className="space-y-1">
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Capital Imobilizado</span>
+                <p className="text-xl font-black text-emerald-600 tracking-tight">
+                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalCostValue)}
+                </p>
+              </div>
+              <div className="h-11 w-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shadow-inner">
+                <DollarSign size={20} className="stroke-[1.8]" />
+              </div>
+            </div>
+
+          </div>
         </div>
 
         {/* Dynamic Tab Panel switches */}
