@@ -705,16 +705,16 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
         <table className="w-full border-collapse text-left text-sm font-sans text-slate-850">
           <thead className="bg-slate-50 text-slate-450 text-[10px] uppercase tracking-wider font-extrabold border-b border-slate-200">
             <tr>
-              <th className="border-r border-slate-200 p-3 text-center" rowSpan={2}>CODIGO</th>
-              <th className="border-r border-slate-200 p-3 text-center" rowSpan={2}>MEDIDA</th>
-              <th className="border-r border-slate-200 p-3" rowSpan={2}>DESCRIÇÃO</th>
-              <th className="border-r border-slate-200 p-3 text-center" colSpan={companies.length}>QUANTIDADE</th>
-              <th className="border-r border-slate-200 p-3 text-center" rowSpan={2}>P/ A VISTA</th>
-              <th className="p-3 text-center" rowSpan={2}>P/PRAZO</th>
+              <th className="border-r border-slate-200 px-2 py-3 text-center" rowSpan={2}>CODIGO</th>
+              <th className="border-r border-slate-200 px-2 py-3 text-center" rowSpan={2}>MEDIDA</th>
+              <th className="border-r border-slate-200 px-2 py-3" rowSpan={2}>DESCRIÇÃO</th>
+              <th className="border-r border-slate-200 px-2 py-3 text-center" colSpan={companies.length}>QUANTIDADE</th>
+              <th className="border-r border-slate-200 px-2 py-3 text-center" rowSpan={2}>P/ A VISTA</th>
+              <th className="px-2 py-3 text-center" rowSpan={2}>P/PRAZO</th>
             </tr>
             <tr className="border-t border-slate-200">
               {companies.map(comp => (
-                <th key={comp.id} className="border-r border-slate-200 p-2 text-center text-[9px] min-w-[90px]">{comp.name.toUpperCase()}</th>
+                <th key={comp.id} className="border-r border-slate-200 px-1 py-2 text-center text-[9px] min-w-[70px]">{comp.name.toUpperCase()}</th>
               ))}
             </tr>
           </thead>
@@ -724,7 +724,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
               return (
                 <tr key={item.sku} className={`hover:bg-gold-50/5 text-slate-800 transition-colors ${isProcessing ? "opacity-50" : ""}`}>
                   <td 
-                    className="border-r border-slate-200 p-3 text-center font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:bg-gold-400/10"
+                    className="border-r border-slate-200 px-2 py-3 text-center font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:bg-gold-400/10 text-xs"
                     onClick={() => !isVendedor && startEdit(item, "sku", item.sku)}
                   >
                     {editingCell?.sku === item.sku && editingCell?.field === "sku" ? (
@@ -743,7 +743,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                     )}
                   </td>
                   <td 
-                    className="border-r border-slate-200 p-3 text-center font-mono font-bold text-gold-700 whitespace-nowrap cursor-pointer hover:bg-gold-400/10"
+                    className="border-r border-slate-200 px-2 py-3 text-center font-mono font-bold text-gold-700 whitespace-nowrap cursor-pointer hover:bg-gold-400/10 text-xs"
                     onClick={() => !isVendedor && startEdit(item, "size", item.size)}
                   >
                     {editingCell?.sku === item.sku && editingCell?.field === "size" ? (
@@ -761,7 +761,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                       item.size
                     )}
                   </td>
-                  <td className="border-r border-slate-200 p-3 font-semibold text-slate-700 min-w-[200px]">
+                  <td className="border-r border-slate-200 px-2 py-3 font-semibold text-slate-700 min-w-[150px] text-xs">
                     <span 
                       className="cursor-pointer hover:bg-gold-400/10 px-1.5 py-0.5 rounded"
                       onClick={() => !isVendedor && startEdit(item, "brand", item.brand)}
@@ -813,7 +813,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                     return (
                       <td 
                         key={comp.id} 
-                        className={`border-r border-slate-200 p-3 text-center ${editable ? "cursor-pointer hover:bg-gold-400/10" : "bg-slate-50/30"}`}
+                        className={`border-r border-slate-200 px-1 py-3 text-center ${editable ? "cursor-pointer hover:bg-gold-400/10" : "bg-slate-50/30"}`}
                         onClick={() => editable && startEdit(item, comp.id, qty.toString())}
                       >
                         {isEditing ? (
@@ -841,7 +841,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
 
                   {/* Price Cash */}
                   <td 
-                    className={`border-r border-slate-200 p-3 text-center font-bold text-slate-900 ${(!isVendedor) ? "cursor-pointer hover:bg-gold-400/10" : ""}`}
+                    className={`border-r border-slate-200 px-2 py-3 text-center font-bold text-slate-900 text-xs whitespace-nowrap ${(!isVendedor) ? "cursor-pointer hover:bg-gold-400/10" : ""}`}
                     onClick={() => startEdit(item, "priceCash", item.priceCash.toString())}
                   >
                     {editingCell?.sku === item.sku && editingCell?.field === "priceCash" ? (
@@ -862,7 +862,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
 
                   {/* Price Installment */}
                   <td 
-                    className={`p-3 text-center font-bold text-slate-900 ${(!isVendedor) ? "cursor-pointer hover:bg-gold-400/10" : ""}`}
+                    className={`px-2 py-3 text-center font-bold text-slate-900 text-xs whitespace-nowrap ${(!isVendedor) ? "cursor-pointer hover:bg-gold-400/10" : ""}`}
                     onClick={() => startEdit(item, "priceInstallment", item.priceInstallment.toString())}
                   >
                     {editingCell?.sku === item.sku && editingCell?.field === "priceInstallment" ? (
