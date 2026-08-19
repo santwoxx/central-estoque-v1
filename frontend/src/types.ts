@@ -66,6 +66,74 @@ export interface MovementLog {
   timestamp: any;
   reason: string;
   transferId?: string; // Cross-reference to the transfers/{id} doc that generated this entry
+
+  // ── Campos gravados pelo módulo de Entrada e Saída (StockFlow) ──
+  // Todos os itens de uma mesma operação compartilham o mesmo operationId,
+  // o que permite reagrupar a operação inteira no histórico (e estorná-la).
+  stockItemId?: string;   // id do documento em stock/{id} que foi movimentado
+  operationId?: string;
+  operationReason?: string; // Motivo escolhido (Compra, Venda, Garantia, Perda...)
+  docNumber?: string;       // Nota fiscal / OS / pedido
+  partyName?: string;       // Fornecedor (entrada) ou cliente (saída)
+  partyDoc?: string;        // CPF/CNPJ do fornecedor/cliente
+  vehiclePlate?: string;    // Placa do veículo (saída)
+  observation?: string;     // Observação livre da operação
+  unitPrice?: number;       // Custo/preço unitário praticado na operação
+  totalAmount?: number;     // unitPrice * quantidade do item
+  reversalOf?: string;      // operationId estornado por este registro
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Módulo de Entrada e Saída de Pneus (StockFlow)
+// ─────────────────────────────────────────────────────────────────
+export type StockFlowType = "ENTRADA" | "SAIDA";
+
+export interface StockFlowItemInput {
+  stockItemId: string;
+  quantity: number;  // sempre positivo — o sinal é definido pelo tipo da operação
+  unitPrice?: number;
+}
+
+export interface StockFlowPayload {
+  type: StockFlowType;
+  items: StockFlowItemInput[];
+  reason: string;          // motivo/categoria da operação
+  docNumber?: string;
+  partyName?: string;
+  partyDoc?: string;
+  vehiclePlate?: string;
+  observation?: string;
+}
+
+export interface StockFlowResultItem {
+  sku: string;
+  brand: string;
+  model: string;
+  size: string;
+  quantity: number;       // quantidade movimentada (positiva)
+  balanceBefore: number;
+  balanceAfter: number;
+  unitPrice: number;
+  totalAmount: number;
+  companyName: string;
+}
+
+// Retorno da gravação — alimenta a tela de sucesso e o comprovante impresso.
+export interface StockFlowResult {
+  operationId: string;
+  type: StockFlowType;
+  items: StockFlowResultItem[];
+  totalUnits: number;
+  totalAmount: number;
+  reason: string;
+  docNumber: string;
+  partyName: string;
+  partyDoc: string;
+  vehiclePlate: string;
+  observation: string;
+  companyName: string;
+  userName: string;
+  date: string;
 }
 
 // ─────────────────────────────────────────────────────────────────

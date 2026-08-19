@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { StockItem, Company, TransferOrder, TransferStatus, UserRole } from "../types";
+import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord } from "../types";
 import { exportToCSV, formatDate, matchesTireSize } from "../utils";
 import SignaturePad from "./SignaturePad";
 import {
@@ -320,16 +320,29 @@ export default function TransferOrders({
     }
   };
 
-  // ── Printable dual-signature receipt (mirrors StockTable's thermal receipt pattern) ──
+  // Resolve as 4 assinaturas do pedido (remetente + motorista na saida, motorista +
+  // recebedor na chegada), caindo para o par legado delivery/receipt nos pedidos
+  // antigos, criados antes do fluxo de 4 vias existir.
+  const resolveSignatures = (t: TransferOrder) => [
+    { label: "Entrega — Responsável da Origem", sig: t.dispatch?.sender || t.delivery || null },
+    { label: "Entrega — Motorista (retirada)", sig: t.dispatch?.driver || null },
+    { label: "Recebimento — Motorista (entrega)", sig: t.arrival?.driver || null },
+    { label: "Recebimento — Responsável do Destino", sig: t.arrival?.receiver || t.receipt || null }
+  ];
+
+  const totalUnitsOf = (t: TransferOrder) =>
+    (t.items || []).reduce((acc, i) => acc + (Number(i.quantity) || 0), 0);
+
+  // ── Comprovante individual: itens + as 4 assinaturas ──
   const handlePrintReceipt = (t: TransferOrder) => {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
 
-    const renderSignatureBlock = (label: string, sig?: TransferOrder["delivery"]) => {
+    const renderSignatureBlock = (label: string, sig?: SignatureRecord | null) => {
       const img = sig?.signatureDataUrl
-        ? `<img src="${sig.signatureDataUrl}" alt="${label}" style="max-width:100%;height:80px;object-fit:contain;display:block;margin:0 auto;" />`
-        : `<div style="height:80px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;">Assinatura pendente</div>`;
-      const meta = sig ? `${sig.signedByName} — ${formatDate(sig.signedAt)}` : "—";
+        ? `<img src="${sig.signatureDataUrl}" alt="${label}" style="max-width:100%;height:70px;object-fit:contain;display:block;margin:0 auto;" />`
+        : `<div style="height:70px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;">Assinatura pendente</div>`;
+      const meta = sig ? `${sig.signedByName || "—"} — ${formatDate(sig.signedAt)}` : "—";
       return `
         <div class="sig-block">
           <div class="sig-title">${label}</div>
@@ -339,43 +352,173 @@ export default function TransferOrders({
       `;
     };
 
+    const itemRows = (t.items || []).map(i => `
+      <tr>
+        <td class="mono">${i.sku || "—"}</td>
+        <td>${i.brand || ""} ${i.model || ""}</td>
+        <td class="mono">${i.size || "—"}</td>
+        <td class="num">${i.quantity} un</td>
+      </tr>
+    `).join("");
+
     printWindow.document.write(`
       <html>
         <head>
-          <title>Comprovante de Transferência - Central Estoque</title>
+          <title>Comprovante de Transferência - Central Stoque</title>
           <style>
-            body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #1e293b; max-width: 480px; margin: auto; padding: 24px; }
+            body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #1e293b; max-width: 520px; margin: auto; padding: 24px; }
             .header { text-align: center; border-bottom: 2px dashed #ccc; padding-bottom: 12px; margin-bottom: 16px; }
             .title { font-weight: bold; font-size: 16px; text-transform: uppercase; }
+            .status { display: inline-block; margin-top: 6px; padding: 3px 10px; border: 1px solid #cbd5e1; border-radius: 999px; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: .5px; }
             .row { display: flex; justify-content: space-between; margin: 4px 0; gap: 12px; }
             .label { color: #64748b; font-weight: bold; white-space: nowrap; }
             .divider { border-top: 1px dashed #ccc; margin: 14px 0; }
-            .sig-block { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
-            .sig-title { font-weight: bold; font-size: 11px; text-transform: uppercase; color: #475569; margin-bottom: 6px; }
-            .sig-meta { font-size: 10px; color: #64748b; margin-top: 6px; text-align: center; }
+            table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+            th { text-align: left; font-size: 10px; text-transform: uppercase; color: #64748b; border-bottom: 1px solid #e2e8f0; padding: 5px 4px; }
+            td { padding: 5px 4px; border-bottom: 1px solid #f1f5f9; font-size: 11px; }
+            .mono { font-family: monospace; }
+            .num { text-align: right; font-weight: bold; white-space: nowrap; }
+            .total { text-align: right; font-weight: bold; margin-top: 8px; font-size: 13px; }
+            .sig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+            .sig-block { border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
+            .sig-title { font-weight: bold; font-size: 10px; text-transform: uppercase; color: #475569; margin-bottom: 4px; }
+            .sig-meta { font-size: 10px; color: #64748b; margin-top: 4px; text-align: center; }
             .btn-print { display: block; width: 100%; padding: 10px; background: #0f172a; color: #fff; border: none; font-weight: bold; text-align: center; cursor: pointer; margin-top: 18px; text-transform: uppercase; border-radius: 6px; }
-            @media print { .btn-print { display: none; } }
+            @media print { .btn-print { display: none; } body { padding: 0; } }
           </style>
         </head>
         <body>
           <div class="header">
             <div class="title">Comprovante de Transferência entre Empresas</div>
             <div>Central Stoque</div>
+            <div class="status">${STATUS_LABELS[t.status] || t.status}</div>
           </div>
 
-          <div class="row"><span class="label">Itens:</span><span>${(t.items || []).map(i => `[${i.sku}] ${i.brand} ${i.model} — ${i.size} (${i.quantity} un)`).join("<br/>")}</span></div>
-          <div class="row"><span class="label">Origem:</span><span>${t.sourceCompanyName}</span></div>
-          <div class="row"><span class="label">Destino:</span><span>${t.destinationCompanyName}</span></div>
-          <div class="row"><span class="label">Solicitado por:</span><span>${t.requestedByName}</span></div>
+          <div class="row"><span class="label">Origem:</span><span>${t.sourceCompanyName || "—"}</span></div>
+          <div class="row"><span class="label">Destino:</span><span>${t.destinationCompanyName || "—"}</span></div>
+          <div class="row"><span class="label">Solicitado por:</span><span>${t.requestedByName || "—"}</span></div>
           <div class="row"><span class="label">Data do pedido:</span><span>${formatDate(t.requestedAt)}</span></div>
+          ${t.scheduledFor ? `<div class="row"><span class="label">Agendado para:</span><span>${formatDate(t.scheduledFor)}</span></div>` : ""}
           <div class="row"><span class="label">Motivo:</span><span>${t.reason || "—"}</span></div>
+          ${t.status === "CANCELADO" ? `<div class="row"><span class="label">Cancelado por:</span><span>${t.cancelledByName || "—"} — ${t.cancelReason || "sem motivo"}</span></div>` : ""}
 
           <div class="divider"></div>
 
-          ${renderSignatureBlock("Assinatura de Entrega (Origem)", t.delivery || undefined)}
-          ${renderSignatureBlock("Assinatura de Recebimento (Destino)", t.receipt || undefined)}
+          <table>
+            <thead><tr><th>SKU</th><th>Pneu</th><th>Medida</th><th style="text-align:right">Qtde</th></tr></thead>
+            <tbody>${itemRows || `<tr><td colspan="4">Nenhum item</td></tr>`}</tbody>
+          </table>
+          <div class="total">Total: ${totalUnitsOf(t)} un em ${(t.items || []).length} ${(t.items || []).length === 1 ? "produto" : "produtos"}</div>
+
+          <div class="divider"></div>
+
+          <div class="sig-grid">
+            ${resolveSignatures(t).map(s => renderSignatureBlock(s.label, s.sig)).join("")}
+          </div>
 
           <button class="btn-print" onclick="window.print()">Imprimir</button>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // ── Relatorio do historico inteiro (a lista filtrada em uma folha so) ──
+  const handlePrintReport = () => {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    const signerOf = (t: TransferOrder, kind: "out" | "in") =>
+      kind === "out"
+        ? (t.dispatch?.sender?.signedByName || t.delivery?.signedByName || "—")
+        : (t.arrival?.receiver?.signedByName || t.receipt?.signedByName || "—");
+
+    const driverOf = (t: TransferOrder) =>
+      t.dispatch?.driver?.signedByName || t.arrival?.driver?.signedByName || "—";
+
+    const rows = filteredTransfers.map(t => `
+      <tr>
+        <td class="mono">${formatDate(t.requestedAt)}</td>
+        <td><span class="badge">${STATUS_LABELS[t.status] || t.status}</span></td>
+        <td>${t.sourceCompanyName || "—"} <span class="arrow">&rarr;</span> ${t.destinationCompanyName || "—"}</td>
+        <td>${(t.items || []).map(i => `${i.quantity}x ${i.sku} ${i.brand} ${i.model} (${i.size})`).join("<br/>") || "—"}</td>
+        <td class="num">${totalUnitsOf(t)}</td>
+        <td>${t.requestedByName || "—"}</td>
+        <td>${signerOf(t, "out")}</td>
+        <td>${driverOf(t)}</td>
+        <td>${signerOf(t, "in")}</td>
+      </tr>
+    `).join("");
+
+    const totalUnits = filteredTransfers.reduce((acc, t) => acc + totalUnitsOf(t), 0);
+    const concluded = filteredTransfers.filter(t => t.status === "CONCLUIDO").length;
+    const inTransit = filteredTransfers.filter(t => t.status === "EM_TRANSITO").length;
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Relatório de Transferências - Central Stoque</title>
+          <style>
+            @page { size: A4 landscape; margin: 12mm; }
+            body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #1e293b; padding: 16px; }
+            .header { border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: flex-end; }
+            .title { font-weight: bold; font-size: 17px; text-transform: uppercase; }
+            .sub { color: #64748b; font-size: 11px; margin-top: 3px; }
+            .summary { display: flex; gap: 22px; margin-bottom: 12px; }
+            .kpi { border: 1px solid #e2e8f0; border-radius: 6px; padding: 7px 12px; }
+            .kpi b { display: block; font-size: 16px; }
+            .kpi span { font-size: 9px; text-transform: uppercase; color: #64748b; letter-spacing: .5px; }
+            table { width: 100%; border-collapse: collapse; }
+            th { text-align: left; font-size: 9px; text-transform: uppercase; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; padding: 6px 5px; }
+            td { padding: 6px 5px; border: 1px solid #e2e8f0; vertical-align: top; font-size: 10px; }
+            tr { page-break-inside: avoid; }
+            .mono { font-family: monospace; white-space: nowrap; }
+            .num { text-align: right; font-weight: bold; }
+            .arrow { color: #94a3b8; }
+            .badge { display: inline-block; padding: 2px 7px; border: 1px solid #cbd5e1; border-radius: 999px; font-size: 9px; font-weight: bold; text-transform: uppercase; white-space: nowrap; }
+            .footer { margin-top: 14px; font-size: 9px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+            .btn-print { display: block; width: 220px; padding: 10px; background: #0f172a; color: #fff; border: none; font-weight: bold; text-align: center; cursor: pointer; margin: 18px auto 0; text-transform: uppercase; border-radius: 6px; }
+            @media print { .btn-print { display: none; } body { padding: 0; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div>
+              <div class="title">Relatório de Transferências entre Empresas</div>
+              <div class="sub">Central Stoque — emitido em ${formatDate(new Date())} por ${user.displayName}</div>
+            </div>
+            <div class="sub">${filteredTransfers.length} ${filteredTransfers.length === 1 ? "pedido" : "pedidos"}</div>
+          </div>
+
+          <div class="summary">
+            <div class="kpi"><b>${filteredTransfers.length}</b><span>Pedidos</span></div>
+            <div class="kpi"><b>${totalUnits}</b><span>Pneus movimentados</span></div>
+            <div class="kpi"><b>${concluded}</b><span>Concluídos</span></div>
+            <div class="kpi"><b>${inTransit}</b><span>Em trânsito</span></div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Data do Pedido</th>
+                <th>Status</th>
+                <th>Origem &rarr; Destino</th>
+                <th>Itens</th>
+                <th style="text-align:right">Qtde</th>
+                <th>Solicitante</th>
+                <th>Assin. Entrega</th>
+                <th>Motorista</th>
+                <th>Assin. Recebimento</th>
+              </tr>
+            </thead>
+            <tbody>${rows || `<tr><td colspan="9">Nenhuma transferência no filtro atual.</td></tr>`}</tbody>
+          </table>
+
+          <div class="footer">
+            Documento gerado pelo Central Stoque — histórico auditado de transferências entre empresas.
+          </div>
+
+          <button class="btn-print" onclick="window.print()">Imprimir Relatório</button>
         </body>
       </html>
     `);
@@ -386,9 +529,8 @@ export default function TransferOrders({
   const handleExportCSV = () => {
     const columns = [
       { key: "requestedAtFormatted", label: "Data do Pedido" },
-      { key: "sku", label: "SKU" },
-      { key: "itemDescription", label: "Item" },
-      { key: "quantity", label: "Quantidade" },
+      { key: "items", label: "Itens" },
+      { key: "totalUnits", label: "Total de Pneus" },
       { key: "sourceCompanyName", label: "Empresa Origem" },
       { key: "destinationCompanyName", label: "Empresa Destino" },
       { key: "requestedByName", label: "Solicitado Por" },
@@ -396,6 +538,8 @@ export default function TransferOrders({
       { key: "scheduledForFormatted", label: "Agendado Para" },
       { key: "deliverySignerName", label: "Assinatura Entrega - Nome" },
       { key: "deliverySignedAtFormatted", label: "Assinatura Entrega - Data" },
+      { key: "driverPickupName", label: "Motorista - Retirada" },
+      { key: "driverDropoffName", label: "Motorista - Entrega" },
       { key: "receiptSignerName", label: "Assinatura Recebimento - Nome" },
       { key: "receiptSignedAtFormatted", label: "Assinatura Recebimento - Data" },
       { key: "reason", label: "Motivo" }
@@ -404,16 +548,19 @@ export default function TransferOrders({
     // Deliberately excludes the raw base64 signature images — only presence/name/time.
     const dataToExport = filteredTransfers.map(t => ({
       requestedAtFormatted: formatDate(t.requestedAt),
-      items: (t.items || []).map(i => i.quantity + "x " + i.brand + " " + i.model).join("; "),
+      items: (t.items || []).map(i => `${i.quantity}x [${i.sku}] ${i.brand} ${i.model} (${i.size})`).join(" | "),
+      totalUnits: totalUnitsOf(t),
       sourceCompanyName: t.sourceCompanyName,
       destinationCompanyName: t.destinationCompanyName,
       requestedByName: t.requestedByName,
       statusLabel: STATUS_LABELS[t.status] || t.status,
       scheduledForFormatted: t.scheduledFor ? formatDate(t.scheduledFor) : "",
-      deliverySignerName: t.delivery?.signedByName || "",
-      deliverySignedAtFormatted: t.delivery ? formatDate(t.delivery.signedAt) : "",
-      receiptSignerName: t.receipt?.signedByName || "",
-      receiptSignedAtFormatted: t.receipt ? formatDate(t.receipt.signedAt) : "",
+      deliverySignerName: t.dispatch?.sender?.signedByName || t.delivery?.signedByName || "",
+      deliverySignedAtFormatted: t.dispatch?.sender ? formatDate(t.dispatch.sender.signedAt) : (t.delivery ? formatDate(t.delivery.signedAt) : ""),
+      driverPickupName: t.dispatch?.driver?.signedByName || "",
+      driverDropoffName: t.arrival?.driver?.signedByName || "",
+      receiptSignerName: t.arrival?.receiver?.signedByName || t.receipt?.signedByName || "",
+      receiptSignedAtFormatted: t.arrival?.receiver ? formatDate(t.arrival.receiver.signedAt) : (t.receipt ? formatDate(t.receipt.signedAt) : ""),
       reason: t.reason
     }));
 
@@ -458,6 +605,15 @@ export default function TransferOrders({
             className="flex items-center justify-center gap-1.5 px-4 py-2 font-black text-xs rounded-xl text-white bg-gradient-to-r from-gold-600 to-amber-500 hover:from-gold-700 hover:to-amber-600 disabled:opacity-40 border border-gold-400/20 transition-all shadow-md shadow-gold-500/10 cursor-pointer hover:scale-[1.01]"
           >
             <Download size={14} className="stroke-[2.5px]" /> Exportar CSV
+          </button>
+
+          <button
+            onClick={handlePrintReport}
+            disabled={filteredTransfers.length === 0}
+            className="flex items-center justify-center gap-1.5 px-4 py-2 font-black text-xs rounded-xl text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-40 transition-all shadow-sm cursor-pointer hover:scale-[1.01]"
+            title="Imprimir o histórico de transferências conforme os filtros atuais"
+          >
+            <Printer size={14} className="stroke-[2.5px]" /> Imprimir Histórico
           </button>
 
           {canCreate && (

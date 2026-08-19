@@ -131,14 +131,21 @@ service cloud.firestore {
       allow read: if isPartyToTransfer(resource.data);
 
       // Admin, or an alimentador of the SOURCE or DESTINATION company, can create a transfer request.
-      // Must be a valid, unsigned, freshly-requested transfer for a positive quantity
-      // between two different companies.
+      // Must be a valid, unsigned, freshly-requested transfer between two different companies.
+      //
+      // IMPORTANTE: um pedido carrega uma LISTA de itens (`items`), nao mais um unico
+      // par sku/quantity no topo do documento. A regra antiga exigia
+      // `request.resource.data.quantity is number`, campo que o app parou de enviar
+      // quando a transferencia passou a aceitar varios pneus — e por isso TODA criacao
+      // de transferencia por alimentador vinha sendo negada com "Missing or
+      // insufficient permissions". A validacao correta e sobre a lista de itens.
       allow create: if isAdmin() || (
         isAlimentador() &&
         (request.resource.data.sourceCompanyId == getUserData().companyId || request.resource.data.destinationCompanyId == getUserData().companyId) &&
         request.resource.data.sourceCompanyId != request.resource.data.destinationCompanyId &&
-        request.resource.data.quantity is number &&
-        request.resource.data.quantity > 0 &&
+        request.resource.data.items is list &&
+        request.resource.data.items.size() > 0 &&
+        request.resource.data.items.size() <= 100 &&
         request.resource.data.requestedByUid == request.auth.uid &&
         request.resource.data.delivery == null &&
         request.resource.data.receipt == null &&

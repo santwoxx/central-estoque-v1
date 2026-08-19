@@ -1,11 +1,12 @@
 import React, { useState } from "react";
-import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award } from "lucide-react";
+import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp } from "lucide-react";
 
 export default function HowToUse() {
   const [activeSection, setActiveSection] = useState<string>("intro");
 
   const sections = [
     { id: "intro", title: "Introdução", icon: Award },
+    { id: "stock-flow", title: "Entradas e Saídas", icon: ArrowDownUp },
     { id: "dashboard", title: "Painel & Indicadores", icon: BarChart2 },
     { id: "unified", title: "Estoque Unificado", icon: Layers },
     { id: "barcode", title: "Leitor de Código", icon: Camera },
@@ -66,6 +67,61 @@ export default function HowToUse() {
               <p className="text-xs text-slate-500 italic">
                 Selecione um tópico na barra lateral para começar o tour.
               </p>
+            </div>
+          )}
+
+          {activeSection === "stock-flow" && (
+            <div className="space-y-4 animate-scaleUp text-xs text-slate-650 leading-relaxed">
+              <h4 className="text-base font-black text-slate-900">🔄 Entradas e Saídas</h4>
+              <p>
+                É a tela do dia a dia do balcão. Dois botões, duas operações: <strong className="text-emerald-700">Entrada de Pneus</strong> soma
+                unidades ao estoque, <strong className="text-red-700">Saída de Pneus</strong> dá baixa. Nos dois casos a operação inteira fica
+                gravada no histórico, com quem fez, quando, quanto e por quê.
+              </p>
+
+              <div className="p-3 bg-white border border-slate-200 rounded-2xl space-y-2">
+                <strong className="text-slate-900 block">Como registrar uma movimentação</strong>
+                <ol className="list-decimal pl-5 space-y-1.5">
+                  <li>Clique em <strong>Entrada de Pneus</strong> ou <strong>Saída de Pneus</strong>.</li>
+                  <li>Pesquise o pneu por SKU, marca, modelo ou medida — a busca de medida ignora barra e "R", então <span className="font-mono">17565r14</span>, <span className="font-mono">175/65 R14</span> e <span className="font-mono">1756514</span> encontram a mesma coisa.</li>
+                  <li>Clique no pneu para adicionar 1 unidade, ou use os botões <strong>+1 / +2 / +4</strong> para jogo completo.</li>
+                  <li>Ajuste as quantidades no painel da direita, informe o motivo e (se quiser) nota fiscal, fornecedor/cliente e placa.</li>
+                  <li>Confirme. O saldo é atualizado na hora e você pode imprimir o comprovante.</li>
+                </ol>
+              </div>
+
+              <ul className="list-disc pl-5 space-y-2">
+                <li>
+                  <strong className="text-slate-900">Saída nunca fica negativa:</strong> o sistema confere o saldo real no servidor no
+                  momento de gravar. Se outra pessoa vender o mesmo pneu enquanto você monta a lista, a operação é recusada com aviso —
+                  em vez de zerar o estoque errado.
+                </li>
+                <li>
+                  <strong className="text-slate-900">Tudo de uma vez:</strong> vários pneus na mesma operação são gravados juntos.
+                  Ou entra tudo, ou não entra nada — não existe operação pela metade.
+                </li>
+                <li>
+                  <strong className="text-slate-900">Histórico agrupado:</strong> a lista embaixo mostra cada operação como uma linha só.
+                  Clique para abrir e ver item por item, com o saldo que ficou depois de cada um. Dá para filtrar por tipo, período
+                  e busca livre, e exportar em CSV.
+                </li>
+                <li>
+                  <strong className="text-slate-900">Estorno (Admin Master):</strong> errou a operação? O administrador estorna e o
+                  sistema devolve o saldo, gravando o estorno como um novo registro. O lançamento original nunca é apagado —
+                  auditoria não se apaga, se compensa.
+                </li>
+                <li>
+                  <strong className="text-slate-900">Atalhos:</strong> <span className="font-mono">Alt+E</span> abre entrada,
+                  <span className="font-mono"> Alt+S</span> abre saída, <span className="font-mono">Enter</span> na busca adiciona o
+                  pneu encontrado (funciona com leitor de código de barras) e <span className="font-mono">Esc</span> fecha.
+                </li>
+              </ul>
+
+              <div className="p-3 bg-gold-500/10 border border-gold-400/20 rounded-2xl text-xs leading-relaxed text-gold-800">
+                <strong>💡 Importante:</strong> esta tela movimenta pneus que já existem no cadastro. Se o produto ainda não existe,
+                cadastre primeiro em <strong>Cadastros e Ajustes</strong> (ou traga pela <strong>Importação</strong>) e depois volte aqui
+                para dar entrada.
+              </div>
             </div>
           )}
 

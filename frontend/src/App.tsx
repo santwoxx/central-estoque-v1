@@ -45,8 +45,20 @@ import {
   orderBy
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { StockItem, MovementLog, UserProfile, UserRole, Company, TransferOrder, AppNotification } from "./types";
-import { toMillis } from "./utils";
+import {
+  StockItem,
+  MovementLog,
+  UserProfile,
+  UserRole,
+  Company,
+  TransferOrder,
+  AppNotification,
+  StockFlowPayload,
+  StockFlowResult,
+  StockFlowResultItem,
+  StockFlowItemInput
+} from "./types";
+import { toMillis, formatDate } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
 // Components
@@ -65,6 +77,7 @@ const UnifiedStock = lazy(() => import("./components/UnifiedStock"));
 const DashboardAnalytics = lazy(() => import("./components/DashboardAnalytics"));
 const HowToUse = lazy(() => import("./components/HowToUse"));
 const TransferOrders = lazy(() => import("./components/TransferOrders"));
+const StockFlow = lazy(() => import("./components/StockFlow"));
 const ApkInstaller = lazy(() =>
   import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
 );
@@ -89,8 +102,15 @@ import {
   Loader2,
   BookOpen,
   ArrowLeftRight,
+  ArrowDownUp,
   Smartphone
 } from "lucide-react";
+
+// Quantos registros de movimentacao ficam em memoria. 400 (e nao 150) porque o
+// modulo de Entrada e Saida reagrupa esses mesmos documentos por operationId:
+// uma unica operacao com 10 pneus consome 10 registros, entao uma janela curta
+// apagaria o historico do dia rapido demais.
+const MOVEMENTS_WINDOW = 400;
 
 // Helper: maps a raw Firestore transfer document into a typed TransferOrder
 function mapTransferDoc(docSnap: any): TransferOrder {
@@ -111,6 +131,11 @@ function mapTransferDoc(docSnap: any): TransferOrder {
     requestedAt: data.requestedAt,
     delivery: data.delivery || null,
     receipt: data.receipt || null,
+    // Assinaturas do fluxo de 4 vias (remetente + motorista na saida, motorista +
+    // recebedor na chegada). Sem estas duas linhas a tela caia sempre no rotulo
+    // "(Legado)" e o comprovante impresso perdia as assinaturas do motorista.
+    dispatch: data.dispatch || null,
+    arrival: data.arrival || null,
     cancelledByUid: data.cancelledByUid || "",
     cancelledByName: data.cancelledByName || "",
     cancelledAt: data.cancelledAt,
@@ -155,7 +180,7 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
 
   // Active Tab/View state
-  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "pdf-import" | "reports" | "transfers" | "users-admin" | "how-to-use" | "apk-installer">("analytics");
+  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "users-admin" | "how-to-use" | "apk-installer">("analytics");
 
   // Authentication Status listener
   useEffect(() => {
@@ -246,8 +271,8 @@ export default function App() {
     const stockQuery = stockCollectionRef;
 
     const movementsQuery = (user.role === "admin" || user.role === "vendedor" || !user.companyId)
-      ? query(movementsCollectionRef, orderBy("timestamp", "desc"), limit(150))
-      : query(movementsCollectionRef, where("companyId", "==", user.companyId), orderBy("timestamp", "desc"), limit(150));
+      ? query(movementsCollectionRef, orderBy("timestamp", "desc"), limit(MOVEMENTS_WINDOW))
+      : query(movementsCollectionRef, where("companyId", "==", user.companyId), orderBy("timestamp", "desc"), limit(MOVEMENTS_WINDOW));
 
     // Listen to inventory changes
     const unsubStock = onSnapshot(stockQuery, (snapshot) => {
@@ -288,8 +313,11 @@ export default function App() {
       setLoadingData(false);
     });
 
-    // Listen to audit logs changes
-    const unsubMovements = onSnapshot(movementsQuery, (snapshot) => {
+    // Listen to audit logs changes.
+    // Extraido como funcao porque o mesmo tratamento serve tanto para a consulta
+    // indexada quanto para a consulta alternativa usada quando o indice composto
+    // ainda nao existe (ver o onError logo abaixo).
+    const applyMovementsSnapshot = (snapshot: any) => {
       const logsList: MovementLog[] = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -307,7 +335,19 @@ export default function App() {
           companyId: data.companyId || "",
           companyName: data.companyName || "",
           timestamp: data.timestamp,
-          reason: data.reason || ""
+          reason: data.reason || "",
+          // Campos do modulo de Entrada e Saida (ausentes nos registros antigos)
+          operationId: data.operationId || "",
+          operationReason: data.operationReason || "",
+          docNumber: data.docNumber || "",
+          partyName: data.partyName || "",
+          partyDoc: data.partyDoc || "",
+          vehiclePlate: data.vehiclePlate || "",
+          observation: data.observation || "",
+          unitPrice: data.unitPrice ?? 0,
+          totalAmount: data.totalAmount ?? 0,
+          reversalOf: data.reversalOf || "",
+          transferId: data.transferId || ""
         });
       });
 
@@ -318,14 +358,39 @@ export default function App() {
         return timeB - timeA;
       });
 
-      setMovements(sortedLogs);
-    }, (error) => {
+      // O corte final acontece aqui (e nao so no limit da consulta) porque a
+      // consulta alternativa abaixo nao usa limit — ela traz a empresa inteira.
+      setMovements(sortedLogs.slice(0, MOVEMENTS_WINDOW));
+    };
+
+    const movementUnsubs: (() => void)[] = [];
+
+    movementUnsubs.push(onSnapshot(movementsQuery, applyMovementsSnapshot, (error: any) => {
+      // Filtrar por companyId E ordenar por timestamp exige um indice composto no
+      // Firestore (movements: companyId ASC + timestamp DESC — ver
+      // firestore.indexes.json na raiz do repositorio). Enquanto ele nao existe,
+      // ou enquanto esta sendo construido, o Firestore devolve failed-precondition
+      // e a tela de Auditoria e o modulo de Entradas e Saidas ficariam vazios.
+      // Nesse caso caimos para uma consulta so por empresa, ordenando em memoria:
+      // custa mais leituras, mas devolve o dado certo em vez de nada.
+      if (error?.code === "failed-precondition" && user.companyId) {
+        console.warn(
+          "[MOVIMENTOS] Indice composto ausente no Firestore — usando consulta alternativa. " +
+          "Para restaurar a consulta rapida rode: firebase deploy --only firestore:indexes"
+        );
+        movementUnsubs.push(onSnapshot(
+          query(movementsCollectionRef, where("companyId", "==", user.companyId)),
+          applyMovementsSnapshot,
+          (fallbackError) => console.error("Error fetching movements (fallback):", fallbackError)
+        ));
+        return;
+      }
       console.error("Error fetching movements:", error);
-    });
+    }));
 
     return () => {
       unsubStock();
-      unsubMovements();
+      movementUnsubs.forEach(unsub => unsub());
     };
   }, [user]);
 
@@ -1073,6 +1138,255 @@ export default function App() {
   };
 
   // ─────────────────────────────────────────────────────────────────
+  // Módulo de Entrada e Saída de Pneus (StockFlow)
+  // ─────────────────────────────────────────────────────────────────
+
+  // Grava uma operação inteira (vários pneus de uma vez) dentro de uma única
+  // transação: lê o saldo atual de cada item, valida, e só então aplica as
+  // atualizações de estoque + os registros de histórico. Assim uma saída nunca
+  // derruba o saldo abaixo de zero mesmo com duas pessoas operando ao mesmo tempo.
+  const handleRegisterStockFlow = async (payload: StockFlowPayload): Promise<StockFlowResult> => {
+    if (!user) throw new Error("Sessão expirada. Faça login novamente.");
+    if (user.role !== "admin" && user.role !== "alimentador") {
+      throw new Error("Seu perfil não tem permissão para movimentar o estoque.");
+    }
+
+    const inputs = (payload.items || []).filter(i => i && i.stockItemId && i.quantity > 0);
+    if (inputs.length === 0) throw new Error("Selecione pelo menos um pneu para movimentar.");
+    if (new Set(inputs.map(i => i.stockItemId)).size !== inputs.length) {
+      throw new Error("O mesmo pneu foi adicionado duas vezes na operação.");
+    }
+    // Cada item gera 2 documentos (estoque + histórico); o limite do Firestore é 500.
+    if (inputs.length > 100) {
+      throw new Error("Máximo de 100 pneus por operação. Divida em mais de uma movimentação.");
+    }
+
+    const isEntry = payload.type === "ENTRADA";
+    const operationId = `OP-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const reason = (payload.reason || "").trim() || (isEntry ? "Entrada de pneus" : "Saída de pneus");
+    const docNumber = (payload.docNumber || "").trim();
+    const partyName = (payload.partyName || "").trim();
+    const partyDoc = (payload.partyDoc || "").trim();
+    const vehiclePlate = (payload.vehiclePlate || "").trim().toUpperCase();
+    const observation = (payload.observation || "").trim();
+
+    // Texto legível que aparece na coluna "Motivação" da Auditoria & Histórico.
+    const detailParts = [reason];
+    if (docNumber) detailParts.push(`${isEntry ? "NF" : "OS"} ${docNumber}`);
+    if (partyName) detailParts.push(`${isEntry ? "Fornecedor" : "Cliente"}: ${partyName}`);
+    if (vehiclePlate) detailParts.push(`Placa ${vehiclePlate}`);
+    const readableReason = `${isEntry ? "Entrada" : "Saída"} de pneus — ${detailParts.join(" • ")} (${operationId})`;
+
+    const resultItems: StockFlowResultItem[] = [];
+    let companyNameForReceipt = user.companyName || "Central Stoque";
+
+    await runTransaction(db, async (transaction) => {
+      resultItems.length = 0; // a transação pode ser reexecutada pelo Firestore
+
+      // --- TODAS AS LEITURAS PRIMEIRO (exigência do Firestore) ---
+      const pending: { ref: any; data: any; before: number; after: number; input: StockFlowItemInput }[] = [];
+      for (const input of inputs) {
+        const stockRef = doc(db, "stock", input.stockItemId);
+        const snap = await transaction.get(stockRef);
+        if (!snap.exists()) {
+          throw new Error("Um dos pneus selecionados não existe mais no estoque. Atualize a tela e refaça a operação.");
+        }
+        const data: any = snap.data();
+        const before = Number(data.quantity) || 0;
+        const after = isEntry ? before + input.quantity : before - input.quantity;
+
+        if (!isEntry && after < 0) {
+          throw new Error(
+            `Saldo insuficiente para ${data.sku || "o item"} (${data.brand || ""} ${data.size || ""}). ` +
+            `Disponível: ${before} un, solicitado: ${input.quantity} un.`
+          );
+        }
+
+        pending.push({ ref: stockRef, data, before, after, input });
+      }
+
+      // --- DEPOIS TODAS AS ESCRITAS ---
+      for (const entry of pending) {
+        const { ref, data, before, after, input } = entry;
+        const unitPrice = Number(input.unitPrice) || 0;
+        const totalAmount = unitPrice * input.quantity;
+        const itemCompanyId = data.companyId || user.companyId || "";
+        const itemCompanyName = data.companyName || user.companyName || "";
+        if (itemCompanyName) companyNameForReceipt = itemCompanyName;
+
+        transaction.update(ref, {
+          quantity: after,
+          updatedAt: serverTimestamp()
+        });
+
+        const movementRef = doc(collection(db, "movements"));
+        transaction.set(movementRef, {
+          sku: data.sku || "N/A",
+          brand: data.brand || "N/A",
+          model: data.model || "N/A",
+          size: data.size || "N/A",
+          type: payload.type,
+          quantity: isEntry ? input.quantity : -input.quantity,
+          balanceAfter: after,
+          companyId: itemCompanyId,
+          companyName: itemCompanyName,
+          userId: user.uid,
+          userEmail: user.email,
+          timestamp: serverTimestamp(),
+          reason: readableReason,
+          stockItemId: input.stockItemId,
+          operationId,
+          operationReason: reason,
+          docNumber,
+          partyName,
+          partyDoc,
+          vehiclePlate,
+          observation,
+          unitPrice,
+          totalAmount
+        });
+
+        resultItems.push({
+          sku: data.sku || "N/A",
+          brand: data.brand || "N/A",
+          model: data.model || "N/A",
+          size: data.size || "N/A",
+          quantity: input.quantity,
+          balanceBefore: before,
+          balanceAfter: after,
+          unitPrice,
+          totalAmount,
+          companyName: itemCompanyName
+        });
+      }
+    });
+
+    return {
+      operationId,
+      type: payload.type,
+      items: resultItems,
+      totalUnits: resultItems.reduce((acc, i) => acc + i.quantity, 0),
+      totalAmount: resultItems.reduce((acc, i) => acc + i.totalAmount, 0),
+      reason,
+      docNumber,
+      partyName,
+      partyDoc,
+      vehiclePlate,
+      observation,
+      companyName: companyNameForReceipt,
+      userName: user.displayName,
+      date: formatDate(new Date())
+    };
+  };
+
+  // Estorno de uma operação do módulo (admin). Relê os movimentos daquela
+  // operationId no servidor — nunca confia só no que está em memória — devolve
+  // o saldo ao estado anterior e grava movimentos de estorno no histórico.
+  // O registro original é preservado: auditoria não se apaga, se compensa.
+  const handleReverseStockFlowOperation = async (operationId: string) => {
+    if (!user || user.role !== "admin") {
+      throw new Error("Apenas administradores podem estornar uma movimentação.");
+    }
+    if (!operationId) throw new Error("Operação inválida.");
+
+    const movementsRef = collection(db, "movements");
+
+    // Já existe estorno para esta operação?
+    const existingReversal = await getDocs(query(movementsRef, where("reversalOf", "==", operationId)));
+    if (!existingReversal.empty) {
+      throw new Error("Esta operação já foi estornada anteriormente.");
+    }
+
+    const originalSnap = await getDocs(query(movementsRef, where("operationId", "==", operationId)));
+    if (originalSnap.empty) {
+      throw new Error("Não foi possível localizar os registros desta operação.");
+    }
+
+    const originalLogs = originalSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+
+    // Resolve a referência de estoque de cada item ANTES de abrir a transação
+    // (mesmo padrão de handleSignReceipt): consultas por query não podem rodar
+    // dentro dela. Operações gravadas pelo módulo trazem o stockItemId exato;
+    // registros mais antigos caem no fallback por empresa + SKU.
+    const resolvedRefs = new Map<string, any>();
+    for (const log of originalLogs) {
+      if (log.stockItemId) {
+        resolvedRefs.set(log.id, doc(db, "stock", log.stockItemId));
+        continue;
+      }
+      const stockDocs = await getDocs(query(
+        collection(db, "stock"),
+        where("companyId", "==", log.companyId || ""),
+        where("sku", "==", log.sku || "")
+      ));
+      resolvedRefs.set(log.id, stockDocs.empty ? null : stockDocs.docs[0].ref);
+    }
+
+    await runTransaction(db, async (transaction) => {
+      // --- LEITURAS ---
+      const pending: { ref: any; log: any; after: number; exists: boolean }[] = [];
+      for (const log of originalLogs) {
+        const stockRef = resolvedRefs.get(log.id);
+        if (!stockRef) {
+          // Produto já excluído do estoque: o estorno vira apenas registro de auditoria.
+          pending.push({ ref: null, log, after: 0, exists: false });
+          continue;
+        }
+        const fresh = await transaction.get(stockRef);
+        if (!fresh.exists()) {
+          pending.push({ ref: null, log, after: 0, exists: false });
+          continue;
+        }
+        const current = Number(fresh.data()?.quantity) || 0;
+        // O movimento original já vem com sinal (+ entrada / − saída): estornar é somar o inverso.
+        const after = current - (Number(log.quantity) || 0);
+        if (after < 0) {
+          throw new Error(
+            `Não é possível estornar: o saldo atual de ${log.sku} (${current} un) é menor que a quantidade da operação.`
+          );
+        }
+        pending.push({ ref: stockRef, log, after, exists: true });
+      }
+
+      // --- ESCRITAS ---
+      for (const entry of pending) {
+        const { ref, log, after, exists } = entry;
+        if (exists && ref) {
+          transaction.update(ref, { quantity: after, updatedAt: serverTimestamp() });
+        }
+
+        const movementRef = doc(collection(db, "movements"));
+        transaction.set(movementRef, {
+          sku: log.sku || "N/A",
+          brand: log.brand || "N/A",
+          model: log.model || "N/A",
+          size: log.size || "N/A",
+          // O estorno inverte o tipo: estornar uma entrada é uma saída, e vice-versa.
+          type: (Number(log.quantity) || 0) > 0 ? "SAIDA" : "ENTRADA",
+          quantity: -(Number(log.quantity) || 0),
+          balanceAfter: after,
+          companyId: log.companyId || "",
+          companyName: log.companyName || "",
+          userId: user.uid,
+          userEmail: user.email,
+          timestamp: serverTimestamp(),
+          reason: `Estorno da operação ${operationId} por ${user.displayName}${exists ? "" : " (produto não localizado no estoque — apenas registro)"}`,
+          operationId: `EST-${operationId}`,
+          operationReason: `Estorno da operação ${operationId}`,
+          reversalOf: operationId,
+          docNumber: log.docNumber || "",
+          partyName: log.partyName || "",
+          partyDoc: log.partyDoc || "",
+          vehiclePlate: log.vehiclePlate || "",
+          observation: "",
+          unitPrice: Number(log.unitPrice) || 0,
+          totalAmount: Number(log.totalAmount) || 0
+        });
+      }
+    });
+  };
+
+  // ─────────────────────────────────────────────────────────────────
   // Inter-company Transfer Orders: create, cancel, sign delivery/receipt, admin reversal
   // ─────────────────────────────────────────────────────────────────
 
@@ -1100,6 +1414,17 @@ export default function App() {
     if (!data.destinationCompanyId || data.sourceCompanyId === data.destinationCompanyId) {
       throw new Error("Selecione uma empresa de destino diferente da empresa de origem.");
     }
+    if (!data.sourceCompanyId) {
+      throw new Error("Selecione a empresa de origem.");
+    }
+    // Um operador sem empresa vinculada na credencial nao passa nas regras do
+    // Firestore (que comparam a empresa do pedido com a do perfil). Sem esta
+    // checagem o erro chegaria como um "Missing or insufficient permissions" seco.
+    if (user.role !== "admin" && !user.companyId) {
+      throw new Error(
+        "Seu usuário não está vinculado a nenhuma empresa. Peça ao administrador para definir a empresa da sua credencial em Operadores e Senhas e faça login novamente."
+      );
+    }
 
     const isScheduled = !!data.scheduledFor && data.scheduledFor.getTime() > Date.now();
 
@@ -1122,9 +1447,18 @@ export default function App() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro ao criar pedido de transferência:", err);
-      throw new Error("Erro ao salvar o pedido de transferência no banco de dados.");
+      if (err?.code === "permission-denied") {
+        // Causa quase sempre operacional: a empresa gravada no perfil (users/{uid},
+        // escrito no login) nao bate com a empresa do pedido — tipicamente porque a
+        // credencial trocou de empresa e a sessao ainda e a antiga.
+        throw new Error(
+          "O banco recusou o pedido por permissão. Verifique se a empresa de origem ou destino é a sua, " +
+          "e se sua credencial mudou de empresa recentemente, saia e entre novamente no sistema."
+        );
+      }
+      throw new Error(err?.message || "Erro ao salvar o pedido de transferência no banco de dados.");
     }
   };
 
@@ -1434,35 +1768,60 @@ export default function App() {
           throw new Error("Só é possível estornar pedidos em trânsito (entrega assinada, recebimento pendente).");
         }
 
-        const sourceStockRef = doc(db, "stock", transferData.sourceStockItemId);
-        const sourceStockSnap = await transaction.get(sourceStockRef);
-        const currentQty = sourceStockSnap.exists() ? (sourceStockSnap.data().quantity ?? 0) : 0;
-        const restoredQty = currentQty + transferData.quantity;
+        // Um pedido carrega uma LISTA de itens. A versao anterior lia
+        // transferData.sourceStockItemId/quantity/sku — campos de quando a
+        // transferencia era de um item so — entao o estorno falhava (ou pior,
+        // gravava undefined) em qualquer pedido criado pela tela atual.
+        const items = transferData.items || [];
+        if (items.length === 0) {
+          throw new Error("Pedido não contém itens para estornar.");
+        }
 
-        if (sourceStockSnap.exists()) {
-          transaction.update(sourceStockRef, {
-            quantity: restoredQty,
-            updatedAt: serverTimestamp()
+        // --- TODAS AS LEITURAS ---
+        const pending: { ref: any; item: any; restoredQty: number; exists: boolean }[] = [];
+        for (const item of items) {
+          const sourceStockRef = doc(db, "stock", item.sourceStockItemId);
+          const sourceStockSnap = await transaction.get(sourceStockRef);
+          const exists = sourceStockSnap.exists();
+          const currentQty = exists ? (sourceStockSnap.data()?.quantity ?? 0) : 0;
+          pending.push({
+            ref: sourceStockRef,
+            item,
+            restoredQty: currentQty + (Number(item.quantity) || 0),
+            exists
           });
         }
 
-        const movementRef = doc(collection(db, "movements"));
-        transaction.set(movementRef, {
-          sku: transferData.sku,
-          brand: transferData.brand,
-          model: transferData.model,
-          size: transferData.size,
-          type: "AJUSTE",
-          quantity: transferData.quantity,
-          balanceAfter: restoredQty,
-          companyId: transferData.sourceCompanyId,
-          companyName: transferData.sourceCompanyName,
-          userId: user.uid,
-          userEmail: user.email,
-          timestamp: serverTimestamp(),
-          reason: `Estorno de transferência abandonada em trânsito para ${transferData.destinationCompanyName}`,
-          transferId
-        });
+        // --- DEPOIS TODAS AS ESCRITAS ---
+        for (const entry of pending) {
+          const { ref, item, restoredQty, exists } = entry;
+
+          if (exists) {
+            transaction.update(ref, {
+              quantity: restoredQty,
+              updatedAt: serverTimestamp()
+            });
+          }
+
+          const movementRef = doc(collection(db, "movements"));
+          transaction.set(movementRef, {
+            sku: item.sku || "N/A",
+            brand: item.brand || "N/A",
+            model: item.model || "N/A",
+            size: item.size || "N/A",
+            type: "AJUSTE",
+            quantity: Number(item.quantity) || 0,
+            balanceAfter: restoredQty,
+            companyId: transferData.sourceCompanyId || "",
+            companyName: transferData.sourceCompanyName || "",
+            userId: user.uid,
+            userEmail: user.email,
+            timestamp: serverTimestamp(),
+            reason: `Estorno de transferência abandonada em trânsito para ${transferData.destinationCompanyName}` +
+              (exists ? "" : " (produto não localizado na origem — apenas registro)"),
+            transferId
+          });
+        }
 
         transaction.update(transferRef, {
           status: "CANCELADO",
@@ -1604,6 +1963,18 @@ export default function App() {
                 <Layers size={14} className="stroke-[2px]" /> Cadastros e Ajustes
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("stock-flow")}
+              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                activeTab === "stock-flow"
+                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+              }`}
+            >
+              <ArrowDownUp size={14} className="stroke-[2px]" /> Entradas e Saídas
+            </button>
 
             <button
               type="button"
@@ -1808,6 +2179,17 @@ export default function App() {
             <span className="text-[9px] font-extrabold uppercase tracking-wide">Cadastros</span>
           </button>
         )}
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("stock-flow")}
+          className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
+            activeTab === "stock-flow" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+          }`}
+        >
+          <ArrowDownUp size={18} />
+          <span className="text-[9px] font-extrabold uppercase tracking-wide">Ent/Saí</span>
+        </button>
         <button
           type="button"
           onClick={() => setActiveTab("pdf-import")}
@@ -1963,6 +2345,17 @@ export default function App() {
                 onRestoreBackup={handleRestoreBackup}
               />
             </div>
+          )}
+
+          {activeTab === "stock-flow" && (
+            <StockFlow
+              stock={stock}
+              movements={movements}
+              companies={companies}
+              user={user}
+              onRegister={handleRegisterStockFlow}
+              onReverse={user.role === "admin" ? handleReverseStockFlowOperation : undefined}
+            />
           )}
 
           {activeTab === "pdf-import" && (
