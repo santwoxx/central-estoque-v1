@@ -249,7 +249,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
       title: "Listagem de Produtos em Estoque",
       companyLine: companyLine.toUpperCase(),
       addressLine: reportCompanies.length === 1 ? (reportCompanies[0].description || "") : "",
-      scopeLine: `SALDO: ${balanceLabel} | ORDENADO POR: ${sortLabel}${brandLabel}${searchLabel}`,
+      scopeLine: `SALDO: ${balanceLabel} | ORDENADO POR: ${sortLabel}${brandLabel}`,
       searchLine: reportUseSearch && searchTerm ? searchTerm.toUpperCase() : "",
       generatedBy: user.displayName,
       showPrices: reportShowPrices,
