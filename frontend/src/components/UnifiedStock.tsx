@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company } from "../types";
 import { Search, Plus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon } from "lucide-react";
-import { matchesTireSize } from "../utils";
-import PrintableReport from "./PrintableReport";
+import { matchesTireSize, toMillis } from "../utils";
+import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
 
 interface UnifiedStockProps {
   items: StockItem[];
@@ -143,9 +143,225 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
     document.body.removeChild(link);
   };
 
-  const handlePrint = () => {
-    window.print();
+
+  // ─────────────────────────────────────────────────────────────────
+  // Configurador do Relatório (empresa, período, saldo, ordenação)
+  // Antes, "Imprimir Relatório" era um window.print() seco: saía sempre o
+  // estoque de TODAS as empresas, e o cabeçalho trazia "FILTRO: TODOS |
+  // ORDENADO: CÓDIGO" escrito fixo no código, independente do conteúdo.
+  // ─────────────────────────────────────────────────────────────────
+  const [showReportModal, setShowReportModal] = useState(false);
+
+  // Padrão consciente: o dono da empresa imprime a SUA filial; o admin, todas.
+  const defaultReportCompanyIds = useMemo(
+    () => (isAdmin || isVendedor
+      ? companies.map(c => c.id)
+      : companies.filter(c => c.id === user.companyId).map(c => c.id)),
+    [companies, isAdmin, isVendedor, user.companyId]
+  );
+
+  const [reportCompanyIds, setReportCompanyIds] = useState<string[]>([]);
+  const [reportPeriod, setReportPeriod] = useState<"ALL" | "TODAY" | "7D" | "30D" | "CUSTOM">("ALL");
+  const [reportFrom, setReportFrom] = useState("");
+  const [reportTo, setReportTo] = useState("");
+  const [reportBalance, setReportBalance] = useState<"ALL" | "WITH" | "LOW" | "ZERO">("ALL");
+  const [reportBrand, setReportBrand] = useState("");
+  const [reportSort, setReportSort] = useState<"SKU" | "BRAND" | "SIZE" | "QTY">("SKU");
+  const [reportUseSearch, setReportUseSearch] = useState(true);
+  const [reportShowPrices, setReportShowPrices] = useState(true);
+  const [reportShowCheckColumn, setReportShowCheckColumn] = useState(true);
+
+  // Mantém a seleção alinhada com a lista real de empresas: ela chega vazia no
+  // primeiro render e só preenche quando o snapshot do Firestore responde.
+  React.useEffect(() => {
+    setReportCompanyIds(prev =>
+      prev.length === 0 ? defaultReportCompanyIds : prev.filter(id => companies.some(c => c.id === id))
+    );
+  }, [defaultReportCompanyIds, companies]);
+
+  const reportCompanies = useMemo(
+    () => companies.filter(c => reportCompanyIds.includes(c.id)),
+    [companies, reportCompanyIds]
+  );
+
+  const availableBrands = useMemo(() => {
+    const set = new Set<string>();
+    consolidatedItems.forEach(i => { if (i.brand) set.add(i.brand); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [consolidatedItems]);
+
+  // Intervalo de datas resolvido a partir do preset ou dos campos livres.
+  const reportRange = useMemo(() => {
+    if (reportPeriod === "ALL") return { start: 0, end: Infinity };
+
+    if (reportPeriod === "CUSTOM") {
+      const start = reportFrom ? new Date(`${reportFrom}T00:00:00`).getTime() : 0;
+      // 23:59:59.999 do dia final, senão "até 10/03" excluiria o próprio dia 10.
+      const end = reportTo ? new Date(`${reportTo}T23:59:59.999`).getTime() : Infinity;
+      return { start: Number.isNaN(start) ? 0 : start, end: Number.isNaN(end) ? Infinity : end };
+    }
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    if (reportPeriod === "TODAY") return { start: startOfToday.getTime(), end: Infinity };
+    const days = reportPeriod === "7D" ? 7 : 30;
+    return { start: Date.now() - days * 24 * 60 * 60 * 1000, end: Infinity };
+  }, [reportPeriod, reportFrom, reportTo]);
+
+  // Itens que realmente vão para o papel.
+  const reportItems = useMemo(() => {
+    const activeCompanyIds = reportCompanyIds;
+
+    // Soma apenas das empresas selecionadas — é isso que sai impresso.
+    const qtyIn = (item: ConsolidatedItem) =>
+      activeCompanyIds.reduce((acc, id) => acc + (item.docs[id] ? Number(item.docs[id].quantity) || 0 : 0), 0);
+
+    const base = reportUseSearch ? filteredItems : consolidatedItems;
+
+    return base
+      // Um produto só entra se existir em alguma das empresas escolhidas — é
+      // isso que separa de fato o estoque de cada filial no relatório.
+      .filter(item => activeCompanyIds.some(id => !!item.docs[id]))
+      .filter(item => !reportBrand || item.brand === reportBrand)
+      .filter(item => {
+        if (reportPeriod === "ALL") return true;
+        // "Movimentados no período": vale a data de atualização (ou criação) do
+        // registro em qualquer uma das empresas selecionadas.
+        return activeCompanyIds.some(id => {
+          const docItem = item.docs[id];
+          if (!docItem) return false;
+          const stamp = toMillis(docItem.updatedAt) || toMillis(docItem.createdAt);
+          return stamp >= reportRange.start && stamp <= reportRange.end;
+        });
+      })
+      .filter(item => {
+        const total = qtyIn(item);
+        if (reportBalance === "WITH") return total > 0;
+        if (reportBalance === "LOW") return total > 0 && total <= 4;
+        if (reportBalance === "ZERO") return total === 0;
+        return true;
+      })
+      .sort((a, b) => {
+        if (reportSort === "BRAND") return (a.brand || "").localeCompare(b.brand || "") || a.sku.localeCompare(b.sku);
+        if (reportSort === "SIZE") return (a.size || "").localeCompare(b.size || "") || a.sku.localeCompare(b.sku);
+        if (reportSort === "QTY") return qtyIn(b) - qtyIn(a) || a.sku.localeCompare(b.sku);
+        return a.sku.localeCompare(b.sku);
+      });
+  }, [filteredItems, consolidatedItems, reportUseSearch, reportCompanyIds, reportBrand, reportBalance, reportSort, reportPeriod, reportRange]);
+
+  const reportTotalUnits = useMemo(
+    () => reportItems.reduce((acc, item) =>
+      acc + reportCompanyIds.reduce((sum, id) => sum + (item.docs[id] ? Number(item.docs[id].quantity) || 0 : 0), 0), 0),
+    [reportItems, reportCompanyIds]
+  );
+
+  // Texto do cabeçalho impresso — descreve exatamente o que foi filtrado.
+  const reportMeta = useMemo(() => {
+    const balanceLabel =
+      reportBalance === "WITH" ? "SOMENTE COM SALDO"
+      : reportBalance === "LOW" ? "SOMENTE CRÍTICOS (ATÉ 4 UN)"
+      : reportBalance === "ZERO" ? "SOMENTE ZERADOS"
+      : "TODOS OS SALDOS";
+
+    const fmt = (v: string) => (v ? v.split("-").reverse().join("/") : "");
+    const periodLabel =
+      reportPeriod === "ALL" ? "TODO O PERÍODO"
+      : reportPeriod === "TODAY" ? "MOVIMENTADOS HOJE"
+      : reportPeriod === "7D" ? "MOVIMENTADOS NOS ÚLTIMOS 7 DIAS"
+      : reportPeriod === "30D" ? "MOVIMENTADOS NOS ÚLTIMOS 30 DIAS"
+      : `MOVIMENTADOS DE ${fmt(reportFrom) || "INÍCIO"} ATÉ ${fmt(reportTo) || "HOJE"}`;
+
+    const sortLabel =
+      reportSort === "BRAND" ? "MARCA"
+      : reportSort === "SIZE" ? "MEDIDA"
+      : reportSort === "QTY" ? "QUANTIDADE"
+      : "CÓDIGO";
+
+    const brandLabel = reportBrand ? ` | MARCA: ${reportBrand.toUpperCase()}` : "";
+
+    const companyLine = reportCompanies.length === 0
+      ? "NENHUMA EMPRESA SELECIONADA"
+      : reportCompanies.length === companies.length && companies.length > 1
+        ? `TODAS AS EMPRESAS (${companies.length})`
+        : reportCompanies.map(c => c.name).join(" • ");
+
+    return {
+      title: "Listagem de Produtos em Estoque",
+      companyLine: companyLine.toUpperCase(),
+      addressLine: reportCompanies.length === 1 ? (reportCompanies[0].description || "") : "",
+      scopeLine: `${balanceLabel} | ${periodLabel}${brandLabel} | ORDENADO: ${sortLabel}`,
+      searchLine: reportUseSearch && searchTerm ? searchTerm.toUpperCase() : "",
+      generatedBy: user.displayName,
+      showPrices: reportShowPrices,
+      showCheckColumn: reportShowCheckColumn
+    };
+  }, [reportBalance, reportPeriod, reportFrom, reportTo, reportSort, reportBrand, reportCompanies, companies, reportUseSearch, searchTerm, user.displayName, reportShowPrices, reportShowCheckColumn]);
+
+  const openReportModal = () => {
+    if (reportCompanyIds.length === 0) setReportCompanyIds(defaultReportCompanyIds);
+    setShowReportModal(true);
   };
+
+  const toggleReportCompany = (companyId: string) => {
+    setReportCompanyIds(prev =>
+      prev.includes(companyId) ? prev.filter(id => id !== companyId) : [...prev, companyId]
+    );
+  };
+
+
+  // Planilha do relatório configurado: mesmas linhas e mesmas colunas de empresa
+  // que saem no papel. Diferente do "Exportar Planilha" da barra, que é um
+  // atalho para a tela inteira com todas as empresas.
+  const exportReportToCSV = () => {
+    if (reportItems.length === 0 || reportCompanies.length === 0) return;
+
+    const headers = [
+      "CODIGO", "MEDIDA", "DESCRICAO",
+      ...reportCompanies.map(c => c.name.toUpperCase()),
+      "TOTAL",
+      ...(reportShowPrices ? ["P/ A VISTA", "P/ PRAZO"] : [])
+    ];
+
+    const rows = reportItems.map(item => {
+      const quantities = reportCompanies.map(c => (item.docs[c.id] ? Number(item.docs[c.id].quantity) || 0 : 0));
+      const total = quantities.reduce((acc, q) => acc + q, 0);
+      return [
+        item.sku,
+        item.size,
+        `${item.brand} ${item.model}`.trim(),
+        ...quantities,
+        total,
+        ...(reportShowPrices ? [item.priceCash, item.priceInstallment] : [])
+      ];
+    });
+
+    const csvContent = [
+      `"RELATORIO: ${reportMeta.companyLine}"`,
+      `"${reportMeta.scopeLine}"`,
+      "",
+      headers.join(";"),
+      ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(";"))
+    ].join("\n");
+
+    const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `relatorio_estoque_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Fecha o modal antes de imprimir e dá um frame para o React repintar o
+  // relatório oculto com a configuração atual.
+  const handlePrint = () => {
+    setShowReportModal(false);
+    setTimeout(() => window.print(), 250);
+  };
+
 
   const handleExportImage = async () => {
     if (!reportRef.current) return;
@@ -435,7 +651,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
           <button
             type="button"
             onClick={handleExportImage}
-            disabled={filteredItems.length === 0 || isExporting}
+            disabled={reportItems.length === 0 || reportCompanies.length === 0 || isExporting}
             className="flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50"
           >
             {isExporting ? <Loader2 size={14} className="animate-spin text-purple-600" /> : <ImageIcon size={14} className="text-purple-600" />} 
@@ -444,8 +660,8 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
 
           <button
             type="button"
-            onClick={handlePrint}
-            disabled={filteredItems.length === 0}
+            onClick={openReportModal}
+            disabled={consolidatedItems.length === 0}
             className="flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50"
           >
             <Printer size={14} className="text-blue-600" /> Imprimir Relatório
@@ -1107,11 +1323,285 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
         </div>
       )}
 
-      <PrintableReport 
+
+      {/* ═══════════ CONFIGURADOR DO RELATÓRIO ═══════════ */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto animate-fadeIn print:hidden">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl my-8 flex flex-col max-h-[92vh]">
+
+            <div className="flex items-center justify-between border-b border-slate-100 p-5 shrink-0">
+              <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <Printer size={16} className="text-blue-600" /> Configurar Relatório de Estoque
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowReportModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-5">
+
+              {/* Empresas */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                    Empresas no relatório *
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setReportCompanyIds(companies.map(c => c.id))}
+                      className="text-[10px] font-black text-gold-700 hover:underline cursor-pointer uppercase tracking-wider"
+                    >
+                      Todas
+                    </button>
+                    {user.companyId && (
+                      <button
+                        type="button"
+                        onClick={() => setReportCompanyIds(companies.filter(c => c.id === user.companyId).map(c => c.id))}
+                        className="text-[10px] font-black text-gold-700 hover:underline cursor-pointer uppercase tracking-wider"
+                      >
+                        Só a minha
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-1">
+                  {companies.length === 0 ? (
+                    <p className="text-xs text-slate-400 font-semibold col-span-2 py-2">Nenhuma empresa cadastrada.</p>
+                  ) : companies.map(c => {
+                    const checked = reportCompanyIds.includes(c.id);
+                    const isMine = c.id === user.companyId;
+                    return (
+                      <button
+                        type="button"
+                        key={c.id}
+                        onClick={() => toggleReportCompany(c.id)}
+                        className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          checked ? "border-gold-500 bg-gold-50/50 shadow-xs" : "border-slate-200 bg-white hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${
+                          checked ? "bg-gold-600 border-gold-600 text-white" : "border-slate-300 bg-white"
+                        }`}>
+                          {checked && <Check size={11} className="stroke-[3.5px]" />}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-xs font-bold text-slate-800 truncate">{c.name}</span>
+                          {isMine && <span className="block text-[9px] font-black text-gold-700 uppercase tracking-wider">Sua empresa</span>}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-slate-400 font-semibold mt-1.5">
+                  Cada empresa marcada vira uma coluna de quantidade. Produtos que não existem em nenhuma
+                  das empresas marcadas ficam de fora.
+                </p>
+              </div>
+
+              {/* Período */}
+              <div>
+                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
+                  Período (data de movimentação do produto)
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {([
+                    { value: "ALL", label: "Tudo" },
+                    { value: "TODAY", label: "Hoje" },
+                    { value: "7D", label: "7 dias" },
+                    { value: "30D", label: "30 dias" },
+                    { value: "CUSTOM", label: "Escolher datas" }
+                  ] as const).map(opt => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setReportPeriod(opt.value)}
+                      className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-colors cursor-pointer ${
+                        reportPeriod === opt.value
+                          ? "bg-slate-900 text-white border-slate-900"
+                          : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {reportPeriod === "CUSTOM" && (
+                  <div className="grid grid-cols-2 gap-3 mt-3 animate-fadeIn">
+                    <div>
+                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">De</label>
+                      <input
+                        type="date"
+                        value={reportFrom}
+                        max={reportTo || undefined}
+                        onChange={e => setReportFrom(e.target.value)}
+                        className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-semibold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">Até</label>
+                      <input
+                        type="date"
+                        value={reportTo}
+                        min={reportFrom || undefined}
+                        onChange={e => setReportTo(e.target.value)}
+                        className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-semibold"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Saldo / Marca / Ordenação */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Saldo</label>
+                  <select
+                    value={reportBalance}
+                    onChange={e => setReportBalance(e.target.value as any)}
+                    className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-bold cursor-pointer"
+                  >
+                    <option value="ALL">Todos os saldos</option>
+                    <option value="WITH">Somente com saldo</option>
+                    <option value="LOW">Somente críticos (até 4 un)</option>
+                    <option value="ZERO">Somente zerados</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Marca</label>
+                  <select
+                    value={reportBrand}
+                    onChange={e => setReportBrand(e.target.value)}
+                    className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-bold cursor-pointer"
+                  >
+                    <option value="">Todas as marcas</option>
+                    {availableBrands.map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">Ordenar por</label>
+                  <select
+                    value={reportSort}
+                    onChange={e => setReportSort(e.target.value as any)}
+                    className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-bold cursor-pointer"
+                  >
+                    <option value="SKU">Código (SKU)</option>
+                    <option value="BRAND">Marca</option>
+                    <option value="SIZE">Medida</option>
+                    <option value="QTY">Quantidade (maior primeiro)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Opções do documento */}
+              <div className="space-y-2 border-t border-slate-100 pt-4">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">Opções do documento</label>
+
+                {searchTerm && (
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={reportUseSearch}
+                      onChange={e => setReportUseSearch(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-gold-600 focus:ring-gold-500 cursor-pointer"
+                    />
+                    <span className="text-xs font-bold text-slate-600">
+                      Aplicar a busca da tela (<span className="font-mono text-slate-800">{searchTerm}</span>)
+                    </span>
+                  </label>
+                )}
+
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={reportShowPrices}
+                    onChange={e => setReportShowPrices(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-gold-600 focus:ring-gold-500 cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-slate-600">Incluir coluna de preço</span>
+                </label>
+
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={reportShowCheckColumn}
+                    onChange={e => setReportShowCheckColumn(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-gold-600 focus:ring-gold-500 cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-slate-600">
+                    Incluir coluna em branco para conferência física
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Rodapé: prévia do que vai sair + ação */}
+            <div className="border-t border-slate-100 p-5 shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-black text-slate-900">
+                  {reportItems.length} {reportItems.length === 1 ? "produto" : "produtos"} • {reportTotalUnits} un
+                </p>
+                <p className="text-[10px] font-bold text-slate-400 truncate">
+                  {reportCompanies.length === 0
+                    ? "Selecione ao menos uma empresa"
+                    : reportCompanies.map(c => c.name).join(" • ")}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowReportModal(false)}
+                  className="px-4 py-2.5 border border-slate-200 text-slate-500 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={exportReportToCSV}
+                  disabled={reportItems.length === 0 || reportCompanies.length === 0}
+                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-black uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-40"
+                >
+                  <Building2 size={14} className="text-emerald-600" /> Planilha
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportImage}
+                  disabled={reportItems.length === 0 || reportCompanies.length === 0 || isExporting}
+                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-black uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-40"
+                >
+                  {isExporting ? <Loader2 size={14} className="animate-spin" /> : <ImageIcon size={14} className="text-purple-600" />}
+                  Imagem
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  disabled={reportItems.length === 0 || reportCompanies.length === 0}
+                  className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black uppercase tracking-wider shadow-md transition-all cursor-pointer hover:scale-[1.01] disabled:opacity-40 disabled:hover:scale-100"
+                >
+                  <Printer size={14} /> Imprimir
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Relatorio oculto: e ele que o window.print() e o html2canvas capturam.
+          Renderiza sempre a configuracao resolvida acima, nunca a tela inteira. */}
+      <PrintableReport
         ref={reportRef}
-        items={filteredItems}
-        companies={companies}
-        companyName={user.companyName}
+        items={reportItems}
+        companies={reportCompanies}
+        meta={reportMeta as PrintableReportMeta}
       />
     </div>
   );

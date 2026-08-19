@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord } from "../types";
-import { exportToCSV, formatDate, matchesTireSize } from "../utils";
+import { exportToCSV, formatDate, matchesTireSize, toMillis } from "../utils";
 import SignaturePad from "./SignaturePad";
 import {
   Plus,
@@ -82,6 +82,40 @@ export default function TransferOrders({
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ACAO_NECESSARIA" | TransferStatus>("ALL");
 
+  // ── Filtro de período e de empresa do histórico ──────────────────
+  // Alimenta a lista, o CSV e o relatório impresso — os três leem
+  // filteredTransfers, então nunca divergem do que está na tela.
+  const [periodFilter, setPeriodFilter] = useState<"ALL" | "TODAY" | "7D" | "30D" | "CUSTOM">("ALL");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("");
+
+  const periodRange = useMemo(() => {
+    if (periodFilter === "ALL") return { start: 0, end: Infinity };
+
+    if (periodFilter === "CUSTOM") {
+      const start = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : 0;
+      // 23:59:59.999 do dia final, senão "até 10/03" excluiria o próprio dia 10.
+      const end = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : Infinity;
+      return { start: Number.isNaN(start) ? 0 : start, end: Number.isNaN(end) ? Infinity : end };
+    }
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    if (periodFilter === "TODAY") return { start: startOfToday.getTime(), end: Infinity };
+    const days = periodFilter === "7D" ? 7 : 30;
+    return { start: Date.now() - days * 24 * 60 * 60 * 1000, end: Infinity };
+  }, [periodFilter, dateFrom, dateTo]);
+
+  const periodLabel = useMemo(() => {
+    const fmt = (v: string) => (v ? v.split("-").reverse().join("/") : "");
+    if (periodFilter === "ALL") return "Todo o período";
+    if (periodFilter === "TODAY") return "Hoje";
+    if (periodFilter === "7D") return "Últimos 7 dias";
+    if (periodFilter === "30D") return "Últimos 30 dias";
+    return `De ${fmt(dateFrom) || "início"} até ${fmt(dateTo) || "hoje"}`;
+  }, [periodFilter, dateFrom, dateTo]);
+
   // ── Create modal state ──────────────────────────────────────────
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [formSourceCompanyId, setFormSourceCompanyId] = useState(isAlimentador ? user.companyId || "" : "");
@@ -147,9 +181,21 @@ export default function TransferOrders({
         statusFilter === "ALL" ||
         (statusFilter === "ACAO_NECESSARIA" ? canSignDelivery(t) || canSignReceipt(t) : t.status === statusFilter);
 
-      return matchesSearch && matchesStatus;
+      // Data do pedido: e a data que o usuario reconhece como "quando isso aconteceu".
+      const requestedMillis = toMillis(t.requestedAt);
+      const matchesPeriod =
+        periodFilter === "ALL" ||
+        (requestedMillis >= periodRange.start && requestedMillis <= periodRange.end);
+
+      // Empresa envolvida, seja como origem ou como destino.
+      const matchesCompany =
+        !companyFilter ||
+        t.sourceCompanyId === companyFilter ||
+        t.destinationCompanyId === companyFilter;
+
+      return matchesSearch && matchesStatus && matchesPeriod && matchesCompany;
     });
-  }, [transfers, searchTerm, statusFilter]);
+  }, [transfers, searchTerm, statusFilter, periodFilter, periodRange, companyFilter]);
 
   // ── Reset / open create modal ───────────────────────────────────
   const openCreateModal = () => {
@@ -486,6 +532,7 @@ export default function TransferOrders({
             <div>
               <div class="title">Relatório de Transferências entre Empresas</div>
               <div class="sub">Central Stoque — emitido em ${formatDate(new Date())} por ${user.displayName}</div>
+              <div class="sub">Período: ${periodLabel} | Empresa: ${companyFilter ? (companies.find(c => c.id === companyFilter)?.name || "—") : "Todas"} | Status: ${statusFilter === "ALL" ? "Todos" : statusFilter === "ACAO_NECESSARIA" ? "Aguardando minha ação" : (STATUS_LABELS[statusFilter as TransferStatus] || statusFilter)}</div>
             </div>
             <div class="sub">${filteredTransfers.length} ${filteredTransfers.length === 1 ? "pedido" : "pedidos"}</div>
           </div>
@@ -624,6 +671,72 @@ export default function TransferOrders({
               <Plus size={14} className="stroke-[3px]" /> Nova Transferência
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Filtros de período e empresa do histórico */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col lg:flex-row lg:items-center gap-3 font-sans">
+        <div className="flex items-center gap-2 shrink-0">
+          <Calendar size={15} className="text-gold-600" />
+          <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Período</span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {([
+            { value: "ALL", label: "Tudo" },
+            { value: "TODAY", label: "Hoje" },
+            { value: "7D", label: "7 dias" },
+            { value: "30D", label: "30 dias" },
+            { value: "CUSTOM", label: "Escolher datas" }
+          ] as const).map(opt => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setPeriodFilter(opt.value)}
+              className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-colors cursor-pointer ${
+                periodFilter === opt.value
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {periodFilter === "CUSTOM" && (
+          <div className="flex items-center gap-2 animate-fadeIn">
+            <input
+              type="date"
+              value={dateFrom}
+              max={dateTo || undefined}
+              onChange={e => setDateFrom(e.target.value)}
+              className="px-2.5 py-1.5 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-semibold"
+            />
+            <span className="text-[10px] font-black text-slate-400 uppercase">até</span>
+            <input
+              type="date"
+              value={dateTo}
+              min={dateFrom || undefined}
+              onChange={e => setDateTo(e.target.value)}
+              className="px-2.5 py-1.5 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-semibold"
+            />
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 lg:ml-auto shrink-0">
+          <Building2 size={15} className="text-gold-600" />
+          <select
+            value={companyFilter}
+            onChange={e => setCompanyFilter(e.target.value)}
+            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-gold-500/20 focus:border-gold-500 text-slate-900 font-bold text-[11px] cursor-pointer max-w-[220px]"
+            title="Mostra apenas as transferências em que esta empresa é a origem ou o destino"
+          >
+            <option value="">Todas as empresas</option>
+            {companies.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
         </div>
       </div>
 
