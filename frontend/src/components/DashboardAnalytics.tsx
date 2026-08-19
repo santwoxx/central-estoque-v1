@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { StockItem, MovementLog, Company } from "../types";
 import { formatBRL } from "../utils";
-import { TrendingUp, TrendingDown, Package, AlertTriangle, RefreshCw, BarChart2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Package, AlertTriangle, RefreshCw, BarChart2, X } from "lucide-react";
 
 interface DashboardAnalyticsProps {
   items: StockItem[];
@@ -13,6 +13,8 @@ interface DashboardAnalyticsProps {
 export default function DashboardAnalytics({ items, movements, companies, user }: DashboardAnalyticsProps) {
   const [hoveredSegment, setHoveredSegment] = useState<number | null>(null);
   const [timeRange, setTimeRange] = useState<7 | 15 | 30>(7);
+  const [showAllSuggestions, setShowAllSuggestions] = useState(false);
+  const [suggestionCompanyFilter, setSuggestionCompanyFilter] = useState<string>("ALL");
 
   // Filter items by company if the user is an operator/alimentador
   const filteredItems = useMemo(() => {
@@ -53,7 +55,7 @@ export default function DashboardAnalytics({ items, movements, companies, user }
     });
 
     // Group current quantities by SKU
-    const skuStockMap = new Map<string, { brand: string; model: string; size: string; qty: number; id: string }>();
+    const skuStockMap = new Map<string, { brand: string; model: string; size: string; qty: number; id: string; companyId: string; companyName: string }>();
     filteredItems.forEach(item => {
       const existing = skuStockMap.get(item.sku);
       if (existing) {
@@ -64,7 +66,9 @@ export default function DashboardAnalytics({ items, movements, companies, user }
           model: item.model,
           size: item.size,
           qty: item.quantity,
-          id: item.id
+          id: item.id,
+          companyId: item.companyId || "",
+          companyName: item.companyName || ""
         });
       }
     });
@@ -78,6 +82,8 @@ export default function DashboardAnalytics({ items, movements, companies, user }
       monthlySales: number;
       daysRemaining: number;
       suggestedBuy: number;
+      companyId: string;
+      companyName: string;
     }[] = [];
 
     skuStockMap.forEach((stock, sku) => {
@@ -106,14 +112,21 @@ export default function DashboardAnalytics({ items, movements, companies, user }
             currentQty: stock.qty,
             monthlySales,
             daysRemaining,
-            suggestedBuy
+            suggestedBuy,
+            companyId: stock.companyId,
+            companyName: stock.companyName
           });
         }
       }
     });
 
-    return suggestions.sort((a, b) => a.daysRemaining - b.daysRemaining).slice(0, 5);
+    return suggestions.sort((a, b) => a.daysRemaining - b.daysRemaining);
   }, [filteredItems, filteredMovements]);
+
+  const filteredSuggestions = useMemo(() => {
+    if (suggestionCompanyFilter === "ALL") return reorderSuggestions;
+    return reorderSuggestions.filter(s => s.companyId === suggestionCompanyFilter);
+  }, [reorderSuggestions, suggestionCompanyFilter]);
 
   // ==========================================
   // 2. LINE CHART (Movements Flow)
@@ -523,13 +536,18 @@ export default function DashboardAnalytics({ items, movements, companies, user }
               <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest block">Sugestões de Compra</span>
               <span className="text-base font-black text-slate-900 mt-0.5 block">Reposição Inteligente (Predictive)</span>
             </div>
-            <div className="h-8 w-8 rounded-lg bg-gold-50 text-gold-600 border border-gold-100 flex items-center justify-center">
-              <Package size={15} />
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setShowAllSuggestions(true)}
+                className="px-3 py-1.5 rounded-lg bg-sky-50 text-sky-700 border border-sky-200 text-xs font-bold hover:bg-sky-100 transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <Package size={14} /> Ver Todos
+              </button>
             </div>
           </div>
 
           <div className="space-y-3">
-            {reorderSuggestions.map(s => (
+            {reorderSuggestions.slice(0, 5).map(s => (
               <div 
                 key={s.sku}
                 className="p-3 border border-slate-150 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/20 hover:border-gold-300 transition-colors"
@@ -577,6 +595,87 @@ export default function DashboardAnalytics({ items, movements, companies, user }
 
       </div>
 
+      {/* Modal Ver Tudo - Sugestões de Compra */}
+      {showAllSuggestions && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-xl border border-slate-200 w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-lg text-slate-900">Todas as Sugestões de Compra</h3>
+                <p className="text-xs text-slate-500 font-semibold mt-0.5">Itens com estoque baixo ou projeção de falta nos próximos 15 dias</p>
+              </div>
+              <button 
+                onClick={() => setShowAllSuggestions(false)}
+                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center gap-3">
+              <span className="text-sm font-bold text-slate-700">Filtrar por Empresa:</span>
+              <select 
+                value={suggestionCompanyFilter}
+                onChange={(e) => setSuggestionCompanyFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm font-semibold bg-white outline-none focus:border-gold-400"
+              >
+                <option value="ALL">Todas as Empresas</option>
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-3 flex-1">
+              {filteredSuggestions.map(s => (
+                <div 
+                  key={s.sku}
+                  className="p-3 border border-slate-150 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/20 hover:border-gold-300 transition-colors"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 font-mono text-[9px] font-black text-gold-700 bg-gold-50 border border-gold-200/40 rounded uppercase">
+                        {s.sku}
+                      </span>
+                      <span className="text-[10px] text-red-600 font-extrabold bg-red-50 px-1.5 py-0.5 rounded flex items-center gap-1 border border-red-100">
+                        <AlertTriangle size={10} /> {s.currentQty} restante{s.currentQty !== 1 ? "s" : ""}
+                      </span>
+                      {s.companyName && (
+                         <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded uppercase">
+                           {s.companyName}
+                         </span>
+                      )}
+                    </div>
+                    <h4 className="text-xs font-black text-slate-900 uppercase">
+                      {s.brand} <span className="font-semibold text-slate-600">{s.model}</span>
+                    </h4>
+                    <p className="text-[10px] text-slate-455 font-bold font-mono">
+                      Medida: {s.size} • Vendas 30d: {s.monthlySales} un
+                    </p>
+                  </div>
+
+                  <div className="text-left sm:text-right shrink-0 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-150">
+                    <span className="text-[9px] text-slate-400 font-black uppercase tracking-wider block">Sugestão de Compra</span>
+                    <span className="text-sm font-black text-emerald-700 block mt-0.5">Comprar +{s.suggestedBuy} un</span>
+                    <span className="text-[9px] text-slate-455 font-bold block">
+                      {s.daysRemaining === Infinity 
+                        ? "Giro sem histórico de saída" 
+                        : `Estoque estimado para ${s.daysRemaining} dia${s.daysRemaining !== 1 ? "s" : ""}`}
+                    </span>
+                  </div>
+                </div>
+              ))}
+
+              {filteredSuggestions.length === 0 && (
+                <div className="text-center py-12 text-slate-400">
+                  <Package size={48} className="mx-auto text-slate-200 mb-3" />
+                  <p className="font-bold text-slate-700">Nenhuma sugestão para esta empresa.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
