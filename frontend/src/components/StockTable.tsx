@@ -1144,15 +1144,15 @@ export default function StockTable({
                 <table className="min-w-full divide-y divide-slate-100 text-left text-sm table-fixed">
                   <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase tracking-widest font-extrabold sticky top-0">
                     <tr>
-                      <th className="py-3 px-4 border-b border-slate-100 w-[70px] text-center font-black">Foto</th>
-                      <th className="py-3 px-4 border-b border-slate-100 w-[125px] font-black">ID / SKU</th>
-                      <th className="py-3 px-4 border-b border-slate-100 font-black">Produto & Especificações</th>
-                      {isAdmin && <th className="py-3 px-4 border-b border-slate-100 w-[140px] font-black">Proprietário</th>}
-                      <th className="py-3 px-4 border-b border-slate-100 w-[110px] text-center font-black">Estoque</th>
-                      <th className="py-3 px-4 border-b border-slate-100 w-[100px] text-right font-black">À Vista</th>
-                      <th className="py-3 px-4 border-b border-slate-100 w-[100px] text-right font-black">A Prazo</th>
-                      <th className="py-3 px-4 border-b border-slate-100 w-[130px] font-black">Anotações</th>
-                      <th className="py-3 px-4 border-b border-slate-100 w-[90px] text-center font-black">Ações</th>
+                      <th className="py-3 px-2 border-b border-slate-100 w-[60px] text-center font-black">Foto</th>
+                      <th className="py-3 px-2 border-b border-slate-100 w-[110px] font-black">ID / SKU</th>
+                      <th className="py-3 px-2 border-b border-slate-100 font-black">Produto & Especificações</th>
+                      {isAdmin && <th className="py-3 px-2 border-b border-slate-100 w-[120px] font-black">Proprietário</th>}
+                      <th className="py-3 px-2 border-b border-slate-100 w-[90px] text-center font-black">Estoque</th>
+                      <th className="py-3 px-2 border-b border-slate-100 w-[85px] text-right font-black">À Vista</th>
+                      <th className="py-3 px-2 border-b border-slate-100 w-[85px] text-right font-black">A Prazo</th>
+                      <th className="py-3 px-2 border-b border-slate-100 w-[150px] font-black">Anotações</th>
+                      <th className="py-3 px-2 border-b border-slate-100 w-[90px] text-center font-black">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
@@ -1164,7 +1164,7 @@ export default function StockTable({
                         <tr key={item.id} className="hover:bg-gold-50/10 text-slate-800 transition-all border-b border-slate-100/60">
                           
                           {/* Image Thumbnail Column */}
-                          <td className="py-2.5 px-3 text-center align-middle">
+                          <td className="py-2 px-2 text-center align-middle">
                             <div className="h-10 w-10 mx-auto rounded-lg overflow-hidden border border-slate-200 bg-slate-50 hover:border-gold-400 group hover:scale-[1.08] transition-all shadow-sm">
                               <img 
                                 src={activeImg} 
@@ -1176,14 +1176,14 @@ export default function StockTable({
                           </td>
 
                           {/* ID column with high density styling */}
-                          <td className="py-2 px-4 font-semibold text-xs align-middle">
-                            <span className="inline-block px-2.5 py-0.5 text-gold-700 bg-gold-400/10 rounded-lg border border-gold-500/20 font-mono tracking-wider font-extrabold uppercase shadow-xs">
+                          <td className="py-2 px-2 font-semibold text-xs align-middle">
+                            <span className="inline-block px-2 py-0.5 text-gold-700 bg-gold-400/10 rounded-lg border border-gold-500/20 font-mono tracking-wider font-extrabold uppercase shadow-xs">
                               {item.sku}
                             </span>
                           </td>
 
                           {/* Brand, Model, Size, and Description Column */}
-                          <td className="py-2 px-4 align-middle">
+                          <td className="py-2 px-2 align-middle">
                             <div className="flex flex-col">
                               <span className="font-bold text-slate-900 uppercase text-xs sm:text-sm">
                                 <span className="text-gold-600 font-extrabold mr-1.5">{item.size}</span>
@@ -1199,7 +1199,7 @@ export default function StockTable({
 
                           {/* Owner column (Visible to admin only) */}
                           {isAdmin && (
-                            <td className="py-2 px-4 text-xs truncate align-middle" title={item.companyName || item.userEmail}>
+                            <td className="py-2 px-2 text-xs truncate align-middle max-w-[100px]" title={item.companyName || item.userEmail}>
                               {item.companyName ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-black bg-[#1e1a12] text-gold-400 border border-gold-500/30 uppercase tracking-widest leading-none">
                                   {item.companyName}
@@ -1218,7 +1218,7 @@ export default function StockTable({
                           )}
 
                           {/* Quantity column */}
-                          <td className="py-2 px-4 text-center align-middle">
+                          <td className="py-2 px-2 text-center align-middle">
                             <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-bold text-xs ${
                               item.quantity <= 4 
                                 ? "bg-red-55 text-red-700 border border-red-200 ring-4 ring-red-100/30 animate-pulse font-extrabold" 
@@ -1230,20 +1230,20 @@ export default function StockTable({
                           </td>
 
                           {/* Unit Price columns */}
-                          <td className="py-2 px-4 text-right font-bold text-emerald-700 align-middle">
+                          <td className="py-2 px-2 text-right font-bold text-emerald-700 align-middle whitespace-nowrap text-xs">
                             {(item.priceCash || item.price) > 0 ? formatBRL(item.priceCash || item.price) : <span className="text-slate-300 font-normal">—</span>}
                           </td>
-                          <td className="py-2 px-4 text-right font-bold text-slate-900 align-middle">
+                          <td className="py-2 px-2 text-right font-bold text-slate-900 align-middle whitespace-nowrap text-xs">
                             {(item.priceInstallment || item.price) > 0 ? formatBRL(item.priceInstallment || item.price) : <span className="text-slate-300 font-normal">—</span>}
                           </td>
 
                           {/* Shelf Location or generic notes */}
-                          <td className="py-2 px-4 text-xs text-slate-500 align-middle truncate" title={item.notes}>
+                          <td className="py-2 px-2 text-[11px] text-slate-500 align-middle truncate max-w-[150px]" title={item.notes}>
                             {item.notes || <span className="text-slate-305 italic">Sem notas</span>}
                           </td>
 
                           {/* Actions column */}
-                          <td className="py-2 px-4 text-center align-middle">
+                          <td className="py-2 px-2 text-center align-middle">
                             <div className="flex items-center justify-center gap-1.5">
                               <button
                                 onClick={() => handleOpenCheckout(item)}
