@@ -583,7 +583,8 @@ export default function App() {
 
     setTransfersReady(false);
     const transfersRef = collection(db, "transfers");
-    const isGlobalViewer = user.role === "admin" || user.role === "vendedor" || !user.companyId;
+    const isGlobalAdmin = user.role === "admin" && (!user.companyId || user.email === "brisasofc@gmail.com" || user.email === "isaacbomfim.te@gmail.com" || user.email === "isaacbomfim.00@gmail.com");
+    const isGlobalViewer = isGlobalAdmin || user.role === "vendedor" || !user.companyId;
 
     // Both listeners must deliver at least one snapshot before we consider the
     // transfer feed "ready" (see transfersReady usage in useAppNotifications).
@@ -1955,10 +1956,9 @@ export default function App() {
 
   // Calculate overview metrics for top panel header (own company's stock only —
   // ownScopedStock already resolves to everything for admin/vendedor)
-  const filteredKpiStock = useMemo(() => {
-    if (kpiCompanyId === "ALL") return ownScopedStock;
-    return ownScopedStock.filter(item => item.companyId === kpiCompanyId);
-  }, [ownScopedStock, kpiCompanyId]);
+  const filteredKpiStock = kpiCompanyId === "ALL" 
+    ? ownScopedStock 
+    : ownScopedStock.filter(item => item.companyId === kpiCompanyId);
 
   const totalStockItemsCount = filteredKpiStock.length;
   const totalPneumaticsSum = filteredKpiStock.reduce((acc, item) => acc + (Number(item.quantity) || 0), 0);

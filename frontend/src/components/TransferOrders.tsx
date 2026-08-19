@@ -150,8 +150,9 @@ export default function TransferOrders({
   const [driverTarget, setDriverTarget] = useState<{ transfer: TransferOrder; stage: "DISPATCH" | "ARRIVAL" } | null>(null);
   const [processingId, setProcessingId] = useState("");
 
-  const isSourceOf = (t: TransferOrder) => isAdmin || (isAlimentador && user.companyId === t.sourceCompanyId);
-  const isDestinationOf = (t: TransferOrder) => isAdmin || (isAlimentador && user.companyId === t.destinationCompanyId);
+  const isGlobalAdmin = isAdmin && (!user.companyId || user.email === "brisasofc@gmail.com" || user.email === "isaacbomfim.te@gmail.com" || user.email === "isaacbomfim.00@gmail.com");
+  const isSourceOf = (t: TransferOrder) => isGlobalAdmin || user.companyId === t.sourceCompanyId;
+  const isDestinationOf = (t: TransferOrder) => isGlobalAdmin || user.companyId === t.destinationCompanyId;
   // Cada ponta tem duas etapas: assinar (interna) e coletar a via do motorista.
   const canSignSender = (t: TransferOrder) => t.status === "PENDENTE" && isSourceOf(t) && !t.dispatch?.sender;
   const canCollectDispatchDriver = (t: TransferOrder) =>
@@ -164,7 +165,7 @@ export default function TransferOrders({
   const canSignDelivery = (t: TransferOrder) => canSignSender(t) || canCollectDispatchDriver(t);
   const canSignReceipt = (t: TransferOrder) => canSignReceiver(t) || canCollectArrivalDriver(t);
   const canCancel = (t: TransferOrder) => (t.status === "AGENDADO" || t.status === "PENDENTE") && (isSourceOf(t) || isDestinationOf(t));
-  const canReverse = (t: TransferOrder) => t.status === "EM_TRANSITO" && isAdmin;
+  const canReverse = (t: TransferOrder) => t.status === "EM_TRANSITO" && isGlobalAdmin;
 
   // ── Derived: item list available for the create form ───────────
   const effectiveSourceCompanyId = formSourceCompanyId;
@@ -294,8 +295,8 @@ export default function TransferOrders({
       setCreateError("Selecione a empresa de destino.");
       return;
     }
-    if (!isAdmin && effectiveSourceCompanyId !== user.companyId && formDestinationCompanyId !== user.companyId) {
-      setCreateError("Você só pode criar transferências enviando ou recebendo para a sua própria empresa.");
+    if (!isGlobalAdmin && effectiveSourceCompanyId !== user.companyId && formDestinationCompanyId !== user.companyId) {
+      setCreateError("Você só pode criar transferências que envolvam a sua própria loja.");
       return;
     }
 
@@ -1010,7 +1011,7 @@ export default function TransferOrders({
                         <RotateCcw size={13} /> Estornar (Admin)
                       </button>
                     )}
-                    {isAdmin && onDeleteTransfer && (
+                    {isGlobalAdmin && onDeleteTransfer && (
                       <button
                         disabled={isProcessing}
                         onClick={() => handleDeleteClick(t)}
