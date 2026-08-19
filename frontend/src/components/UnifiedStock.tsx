@@ -161,9 +161,6 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
   );
 
   const [reportCompanyIds, setReportCompanyIds] = useState<string[]>([]);
-  const [reportPeriod, setReportPeriod] = useState<"ALL" | "TODAY" | "7D" | "30D" | "CUSTOM">("ALL");
-  const [reportFrom, setReportFrom] = useState("");
-  const [reportTo, setReportTo] = useState("");
   const [reportBalance, setReportBalance] = useState<"ALL" | "WITH" | "LOW" | "ZERO">("ALL");
   const [reportBrand, setReportBrand] = useState("");
   const [reportSort, setReportSort] = useState<"SKU" | "BRAND" | "SIZE" | "QTY">("SKU");
@@ -190,24 +187,6 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [consolidatedItems]);
 
-  // Intervalo de datas resolvido a partir do preset ou dos campos livres.
-  const reportRange = useMemo(() => {
-    if (reportPeriod === "ALL") return { start: 0, end: Infinity };
-
-    if (reportPeriod === "CUSTOM") {
-      const start = reportFrom ? new Date(`${reportFrom}T00:00:00`).getTime() : 0;
-      // 23:59:59.999 do dia final, senão "até 10/03" excluiria o próprio dia 10.
-      const end = reportTo ? new Date(`${reportTo}T23:59:59.999`).getTime() : Infinity;
-      return { start: Number.isNaN(start) ? 0 : start, end: Number.isNaN(end) ? Infinity : end };
-    }
-
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    if (reportPeriod === "TODAY") return { start: startOfToday.getTime(), end: Infinity };
-    const days = reportPeriod === "7D" ? 7 : 30;
-    return { start: Date.now() - days * 24 * 60 * 60 * 1000, end: Infinity };
-  }, [reportPeriod, reportFrom, reportTo]);
-
   // Itens que realmente vão para o papel.
   const reportItems = useMemo(() => {
     const activeCompanyIds = reportCompanyIds;
@@ -224,17 +203,6 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
       .filter(item => activeCompanyIds.some(id => !!item.docs[id]))
       .filter(item => !reportBrand || item.brand === reportBrand)
       .filter(item => {
-        if (reportPeriod === "ALL") return true;
-        // "Movimentados no período": vale a data de atualização (ou criação) do
-        // registro em qualquer uma das empresas selecionadas.
-        return activeCompanyIds.some(id => {
-          const docItem = item.docs[id];
-          if (!docItem) return false;
-          const stamp = toMillis(docItem.updatedAt) || toMillis(docItem.createdAt);
-          return stamp >= reportRange.start && stamp <= reportRange.end;
-        });
-      })
-      .filter(item => {
         const total = qtyIn(item);
         if (reportBalance === "WITH") return total > 0;
         if (reportBalance === "LOW") return total > 0 && total <= 4;
@@ -247,7 +215,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
         if (reportSort === "QTY") return qtyIn(b) - qtyIn(a) || a.sku.localeCompare(b.sku);
         return a.sku.localeCompare(b.sku);
       });
-  }, [filteredItems, consolidatedItems, reportUseSearch, reportCompanyIds, reportBrand, reportBalance, reportSort, reportPeriod, reportRange]);
+  }, [filteredItems, consolidatedItems, reportUseSearch, reportCompanyIds, reportBrand, reportBalance, reportSort]);
 
   const reportTotalUnits = useMemo(
     () => reportItems.reduce((acc, item) =>
@@ -262,14 +230,6 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
       : reportBalance === "LOW" ? "SOMENTE CRÍTICOS (ATÉ 4 UN)"
       : reportBalance === "ZERO" ? "SOMENTE ZERADOS"
       : "TODOS OS SALDOS";
-
-    const fmt = (v: string) => (v ? v.split("-").reverse().join("/") : "");
-    const periodLabel =
-      reportPeriod === "ALL" ? "TODO O PERÍODO"
-      : reportPeriod === "TODAY" ? "MOVIMENTADOS HOJE"
-      : reportPeriod === "7D" ? "MOVIMENTADOS NOS ÚLTIMOS 7 DIAS"
-      : reportPeriod === "30D" ? "MOVIMENTADOS NOS ÚLTIMOS 30 DIAS"
-      : `MOVIMENTADOS DE ${fmt(reportFrom) || "INÍCIO"} ATÉ ${fmt(reportTo) || "HOJE"}`;
 
     const sortLabel =
       reportSort === "BRAND" ? "MARCA"
@@ -289,13 +249,13 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
       title: "Listagem de Produtos em Estoque",
       companyLine: companyLine.toUpperCase(),
       addressLine: reportCompanies.length === 1 ? (reportCompanies[0].description || "") : "",
-      scopeLine: `${balanceLabel} | ${periodLabel}${brandLabel} | ORDENADO: ${sortLabel}`,
+      scopeLine: `SALDO: ${balanceLabel} | ORDENADO POR: ${sortLabel}${brandLabel}${searchLabel}`,
       searchLine: reportUseSearch && searchTerm ? searchTerm.toUpperCase() : "",
       generatedBy: user.displayName,
       showPrices: reportShowPrices,
       showCheckColumn: reportShowCheckColumn
     };
-  }, [reportBalance, reportPeriod, reportFrom, reportTo, reportSort, reportBrand, reportCompanies, companies, reportUseSearch, searchTerm, user.displayName, reportShowPrices, reportShowCheckColumn]);
+  }, [reportBalance, reportSort, reportBrand, reportCompanies, companies, reportUseSearch, searchTerm, user.displayName, reportShowPrices, reportShowCheckColumn]);
 
   const openReportModal = () => {
     if (reportCompanyIds.length === 0) setReportCompanyIds(defaultReportCompanyIds);
@@ -1404,60 +1364,6 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                   Cada empresa marcada vira uma coluna de quantidade. Produtos que não existem em nenhuma
                   das empresas marcadas ficam de fora.
                 </p>
-              </div>
-
-              {/* Período */}
-              <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
-                  Período (data de movimentação do produto)
-                </label>
-                <div className="flex flex-wrap items-center gap-2">
-                  {([
-                    { value: "ALL", label: "Tudo" },
-                    { value: "TODAY", label: "Hoje" },
-                    { value: "7D", label: "7 dias" },
-                    { value: "30D", label: "30 dias" },
-                    { value: "CUSTOM", label: "Escolher datas" }
-                  ] as const).map(opt => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setReportPeriod(opt.value)}
-                      className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-colors cursor-pointer ${
-                        reportPeriod === opt.value
-                          ? "bg-slate-900 text-white border-slate-900"
-                          : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-
-                {reportPeriod === "CUSTOM" && (
-                  <div className="grid grid-cols-2 gap-3 mt-3 animate-fadeIn">
-                    <div>
-                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">De</label>
-                      <input
-                        type="date"
-                        value={reportFrom}
-                        max={reportTo || undefined}
-                        onChange={e => setReportFrom(e.target.value)}
-                        className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-semibold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">Até</label>
-                      <input
-                        type="date"
-                        value={reportTo}
-                        min={reportFrom || undefined}
-                        onChange={e => setReportTo(e.target.value)}
-                        className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-semibold"
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Saldo / Marca / Ordenação */}
