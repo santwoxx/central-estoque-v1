@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord } from "../types";
+import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord, SignatureMethod } from "../types";
 import { exportToCSV, formatDate, matchesTireSize, toMillis } from "../utils";
 import SignaturePad from "./SignaturePad";
+import DriverSignature from "./DriverSignature";
 import {
   Plus,
   X,
@@ -21,7 +22,7 @@ import {
   Building2,
   AlertTriangle,
   PenLine,
-  Trash2
+  Trash2,
 } from "lucide-react";
 
 interface TransferOrdersProps {
@@ -39,8 +40,13 @@ interface TransferOrdersProps {
     scheduledFor: Date | null;
   }) => Promise<void>;
   onCancelTransfer: (transferId: string, reason: string) => Promise<void>;
-  onSignDelivery: (transferId: string, internalSignature: string, driverSignature: string, driverName: string) => Promise<void>;
-  onSignReceipt: (transferId: string, internalSignature: string, driverSignature: string, driverName: string) => Promise<void>;
+  // A saida e a chegada acontecem em DUAS vias cada: primeiro a assinatura
+  // interna (grava na hora), depois a do motorista (link publico ou foto do
+  // papel). O estoque so se move na segunda.
+  onSignSenderDispatch: (transferId: string, signatureDataUrl: string) => Promise<void>;
+  onCompleteDispatch: (transferId: string, driverSignature: string, driverName: string, method: SignatureMethod) => Promise<void>;
+  onSignReceiverArrival: (transferId: string, signatureDataUrl: string) => Promise<void>;
+  onCompleteArrival: (transferId: string, driverSignature: string, driverName: string, method: SignatureMethod) => Promise<void>;
   onReverseTransfer?: (transferId: string) => Promise<void>;
   onDeleteTransfer?: (transferId: string) => Promise<void>;
 }
@@ -51,6 +57,13 @@ const STATUS_LABELS: Record<TransferStatus, string> = {
   EM_TRANSITO: "Em Trânsito",
   CONCLUIDO: "Concluído",
   CANCELADO: "Cancelado"
+};
+
+// Como a via do motorista foi coletada — vai para o CSV e para o comprovante.
+const METHOD_LABELS: Record<string, string> = {
+  DESENHO: "Assinou na tela",
+  LINK: "Assinou por link no celular",
+  FOTO: "Papel assinado (foto anexada)"
 };
 
 const STATUS_BADGE_STYLES: Record<TransferStatus, string> = {
@@ -68,8 +81,10 @@ export default function TransferOrders({
   user,
   onCreateTransfer,
   onCancelTransfer,
-  onSignDelivery,
-  onSignReceipt,
+  onSignSenderDispatch,
+  onCompleteDispatch,
+  onSignReceiverArrival,
+  onCompleteArrival,
   onReverseTransfer,
   onDeleteTransfer
 }: TransferOrdersProps) {
@@ -132,12 +147,22 @@ export default function TransferOrders({
 
   // ── Signature modal state ───────────────────────────────────────
   const [signatureTarget, setSignatureTarget] = useState<{ transfer: TransferOrder; mode: "delivery" | "receipt" } | null>(null);
+  const [driverTarget, setDriverTarget] = useState<{ transfer: TransferOrder; stage: "DISPATCH" | "ARRIVAL" } | null>(null);
   const [processingId, setProcessingId] = useState("");
 
   const isSourceOf = (t: TransferOrder) => isAdmin || (isAlimentador && user.companyId === t.sourceCompanyId);
   const isDestinationOf = (t: TransferOrder) => isAdmin || (isAlimentador && user.companyId === t.destinationCompanyId);
-  const canSignDelivery = (t: TransferOrder) => t.status === "PENDENTE" && isSourceOf(t);
-  const canSignReceipt = (t: TransferOrder) => t.status === "EM_TRANSITO" && isDestinationOf(t);
+  // Cada ponta tem duas etapas: assinar (interna) e coletar a via do motorista.
+  const canSignSender = (t: TransferOrder) => t.status === "PENDENTE" && isSourceOf(t) && !t.dispatch?.sender;
+  const canCollectDispatchDriver = (t: TransferOrder) =>
+    t.status === "PENDENTE" && isSourceOf(t) && !!t.dispatch?.sender && !t.dispatch?.driver;
+  const canSignReceiver = (t: TransferOrder) => t.status === "EM_TRANSITO" && isDestinationOf(t) && !t.arrival?.receiver;
+  const canCollectArrivalDriver = (t: TransferOrder) =>
+    t.status === "EM_TRANSITO" && isDestinationOf(t) && !!t.arrival?.receiver && !t.arrival?.driver;
+
+  // "Aguardando minha ação" cobre as quatro etapas.
+  const canSignDelivery = (t: TransferOrder) => canSignSender(t) || canCollectDispatchDriver(t);
+  const canSignReceipt = (t: TransferOrder) => canSignReceiver(t) || canCollectArrivalDriver(t);
   const canCancel = (t: TransferOrder) => (t.status === "AGENDADO" || t.status === "PENDENTE") && (isSourceOf(t) || isDestinationOf(t));
   const canReverse = (t: TransferOrder) => t.status === "EM_TRANSITO" && isAdmin;
 
@@ -309,19 +334,41 @@ export default function TransferOrders({
   };
 
   // ── Row actions ──────────────────────────────────────────────────
-  const handleConfirmSignature = async (internalSignature: string, driverSignature: string, driverName: string) => {
+  // Via 1: assinatura interna. Ao confirmar, ja emenda no painel do motorista —
+  // e o "assino, daí ja confirma, abre outro campo" do fluxo de balcao.
+  const handleConfirmInternalSignature = async (signatureDataUrl: string) => {
     if (!signatureTarget) return;
     const { transfer, mode } = signatureTarget;
     setProcessingId(transfer.id);
     try {
       if (mode === "delivery") {
-        await onSignDelivery(transfer.id, internalSignature, driverSignature, driverName);
+        await onSignSenderDispatch(transfer.id, signatureDataUrl);
       } else {
-        await onSignReceipt(transfer.id, internalSignature, driverSignature, driverName);
+        await onSignReceiverArrival(transfer.id, signatureDataUrl);
       }
       setSignatureTarget(null);
+      setDriverTarget({ transfer, stage: mode === "delivery" ? "DISPATCH" : "ARRIVAL" });
     } catch (err: any) {
-      alert(err.message || "Erro ao registrar assinatura.");
+      throw new Error(err?.message || "Erro ao registrar assinatura.");
+    } finally {
+      setProcessingId("");
+    }
+  };
+
+  // Via 2: a do motorista. E aqui que o estoque efetivamente se move.
+  const handleCompleteDriverSignature = async (signatureDataUrl: string, driverName: string, method: SignatureMethod) => {
+    if (!driverTarget) return;
+    const { transfer, stage } = driverTarget;
+    setProcessingId(transfer.id);
+    try {
+      if (stage === "DISPATCH") {
+        await onCompleteDispatch(transfer.id, signatureDataUrl, driverName, method);
+      } else {
+        await onCompleteArrival(transfer.id, signatureDataUrl, driverName, method);
+      }
+      setDriverTarget(null);
+    } catch (err: any) {
+      throw new Error(err?.message || "Erro ao concluir a operação.");
     } finally {
       setProcessingId("");
     }
@@ -385,10 +432,17 @@ export default function TransferOrders({
     if (!printWindow) return;
 
     const renderSignatureBlock = (label: string, sig?: SignatureRecord | null) => {
+      // Foto de papel assinado precisa de mais altura que um rabisco de tela,
+      // senao sai ilegivel no comprovante.
+      const height = sig?.method === "FOTO" ? 170 : 70;
       const img = sig?.signatureDataUrl
-        ? `<img src="${sig.signatureDataUrl}" alt="${label}" style="max-width:100%;height:70px;object-fit:contain;display:block;margin:0 auto;" />`
+        ? `<img src="${sig.signatureDataUrl}" alt="${label}" style="max-width:100%;height:${height}px;object-fit:contain;display:block;margin:0 auto;" />`
         : `<div style="height:70px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;">Assinatura pendente</div>`;
-      const meta = sig ? `${sig.signedByName || "—"} — ${formatDate(sig.signedAt)}` : "—";
+      const origin =
+        sig?.method === "FOTO" ? " • via papel assinado (foto)"
+        : sig?.method === "LINK" ? " • assinado por link no celular"
+        : "";
+      const meta = sig ? `${sig.signedByName || "—"} — ${formatDate(sig.signedAt)}${origin}` : "—";
       return `
         <div class="sig-block">
           <div class="sig-title">${label}</div>
@@ -586,7 +640,9 @@ export default function TransferOrders({
       { key: "deliverySignerName", label: "Assinatura Entrega - Nome" },
       { key: "deliverySignedAtFormatted", label: "Assinatura Entrega - Data" },
       { key: "driverPickupName", label: "Motorista - Retirada" },
+      { key: "driverPickupMethod", label: "Retirada - Forma da Assinatura" },
       { key: "driverDropoffName", label: "Motorista - Entrega" },
+      { key: "driverDropoffMethod", label: "Entrega - Forma da Assinatura" },
       { key: "receiptSignerName", label: "Assinatura Recebimento - Nome" },
       { key: "receiptSignedAtFormatted", label: "Assinatura Recebimento - Data" },
       { key: "reason", label: "Motivo" }
@@ -605,7 +661,9 @@ export default function TransferOrders({
       deliverySignerName: t.dispatch?.sender?.signedByName || t.delivery?.signedByName || "",
       deliverySignedAtFormatted: t.dispatch?.sender ? formatDate(t.dispatch.sender.signedAt) : (t.delivery ? formatDate(t.delivery.signedAt) : ""),
       driverPickupName: t.dispatch?.driver?.signedByName || "",
+      driverPickupMethod: METHOD_LABELS[t.dispatch?.driver?.method || ""] || "",
       driverDropoffName: t.arrival?.driver?.signedByName || "",
+      driverDropoffMethod: METHOD_LABELS[t.arrival?.driver?.method || ""] || "",
       receiptSignerName: t.arrival?.receiver?.signedByName || t.receipt?.signedByName || "",
       receiptSignedAtFormatted: t.arrival?.receiver ? formatDate(t.arrival.receiver.signedAt) : (t.receipt ? formatDate(t.receipt.signedAt) : ""),
       reason: t.reason
@@ -808,38 +866,75 @@ export default function TransferOrders({
                   <p className="text-xs text-slate-500 font-medium border-l-2 border-slate-200 pl-2.5">{t.reason}</p>
                 )}
 
-                {/* Signature status strip */}
+                {/* Signature status strip: mostra as DUAS vias de cada ponta,
+                    inclusive o estado intermediario "interna assinada, motorista
+                    pendente" — antes esta faixa lia dispatch.driver direto e
+                    quebrava assim que a via interna existia sozinha. */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div className={`rounded-xl border p-2.5 flex flex-col gap-2 ${t.dispatch || t.delivery ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-slate-50/40"}`}>
-                    <div className="flex items-center gap-2.5">
-                      <Truck size={16} className={t.dispatch || t.delivery ? "text-emerald-600" : "text-slate-350"} />
-                      <div className="min-w-0 text-[10px]">
-                        <div className="font-black uppercase tracking-wide text-slate-500">Assinaturas de Envio</div>
-                        <div className="font-bold text-slate-700 truncate">
-                          {t.dispatch ? (
-                            <span>{t.dispatch.sender.signedByName} + Motorista: {t.dispatch.driver.signedByName}</span>
-                          ) : t.delivery ? (
-                            <span>{t.delivery.signedByName} (Legado)</span>
-                          ) : "Aguardando"}
+                  {([
+                    {
+                      key: "dispatch",
+                      label: "Assinaturas de Envio",
+                      icon: <Truck size={16} />,
+                      internal: t.dispatch?.sender || t.delivery || null,
+                      internalRole: "Remetente",
+                      driver: t.dispatch?.driver || null,
+                      legacy: !t.dispatch && !!t.delivery
+                    },
+                    {
+                      key: "arrival",
+                      label: "Assinaturas de Recebimento",
+                      icon: <PackageCheck size={16} />,
+                      internal: t.arrival?.receiver || t.receipt || null,
+                      internalRole: "Recebedor",
+                      driver: t.arrival?.driver || null,
+                      legacy: !t.arrival && !!t.receipt
+                    }
+                  ] as const).map(block => {
+                    const complete = !!block.internal && (!!block.driver || block.legacy);
+                    const partial = !!block.internal && !complete;
+                    return (
+                      <div
+                        key={block.key}
+                        className={`rounded-xl border p-2.5 flex flex-col gap-2 ${
+                          complete ? "border-emerald-200 bg-emerald-50/40"
+                          : partial ? "border-amber-200 bg-amber-50/40"
+                          : "border-slate-200 bg-slate-50/40"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className={complete ? "text-emerald-600" : partial ? "text-amber-600" : "text-slate-350"}>
+                            {block.icon}
+                          </span>
+                          <div className="min-w-0 text-[10px] flex-1">
+                            <div className="font-black uppercase tracking-wide text-slate-500">{block.label}</div>
+
+                            {block.internal ? (
+                              <div className="space-y-0.5 mt-0.5">
+                                <div className="font-bold text-slate-700 truncate">
+                                  {block.internalRole}: {block.internal.signedByName}
+                                  {block.legacy && <span className="text-slate-400"> (legado)</span>}
+                                </div>
+                                {block.driver ? (
+                                  <div className="font-bold text-slate-700 truncate">
+                                    Motorista: {block.driver.signedByName}
+                                    {block.driver.method === "FOTO" && <span className="text-slate-400"> (papel)</span>}
+                                    {block.driver.method === "LINK" && <span className="text-slate-400"> (link)</span>}
+                                  </div>
+                                ) : !block.legacy && (
+                                  <div className="font-black text-amber-700 truncate flex items-center gap-1">
+                                    <Clock size={10} className="shrink-0" /> Aguardando assinatura do motorista
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="font-bold text-slate-700 truncate">Aguardando</div>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                  <div className={`rounded-xl border p-2.5 flex flex-col gap-2 ${t.arrival || t.receipt ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-slate-50/40"}`}>
-                    <div className="flex items-center gap-2.5">
-                      <PackageCheck size={16} className={t.arrival || t.receipt ? "text-emerald-600" : "text-slate-350"} />
-                      <div className="min-w-0 text-[10px]">
-                        <div className="font-black uppercase tracking-wide text-slate-500">Assinaturas de Recebimento</div>
-                        <div className="font-bold text-slate-700 truncate">
-                          {t.arrival ? (
-                            <span>{t.arrival.receiver.signedByName} + Motorista: {t.arrival.driver.signedByName}</span>
-                          ) : t.receipt ? (
-                            <span>{t.receipt.signedByName} (Legado)</span>
-                          ) : "Aguardando"}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  })}
                 </div>
 
                 {t.status === "CANCELADO" && t.cancelReason && (
@@ -852,7 +947,7 @@ export default function TransferOrders({
                 {/* Action buttons */}
                 {!isVendedor && (
                   <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-                    {canSignDelivery(t) && (
+                    {canSignSender(t) && (
                       <button
                         disabled={isProcessing}
                         onClick={() => setSignatureTarget({ transfer: t, mode: "delivery" })}
@@ -861,13 +956,31 @@ export default function TransferOrders({
                         {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <PenLine size={13} />} Assinar Envio
                       </button>
                     )}
-                    {canSignReceipt(t) && (
+                    {canCollectDispatchDriver(t) && (
+                      <button
+                        disabled={isProcessing}
+                        onClick={() => setDriverTarget({ transfer: t, stage: "DISPATCH" })}
+                        className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-[11px] shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <Truck size={13} /> Assinatura do Motorista
+                      </button>
+                    )}
+                    {canSignReceiver(t) && (
                       <button
                         disabled={isProcessing}
                         onClick={() => setSignatureTarget({ transfer: t, mode: "receipt" })}
                         className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-gold-600 to-amber-550 text-white font-black rounded-xl text-[11px] shadow-sm transition-all cursor-pointer disabled:opacity-50"
                       >
                         {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <PenLine size={13} />} Assinar Recebimento
+                      </button>
+                    )}
+                    {canCollectArrivalDriver(t) && (
+                      <button
+                        disabled={isProcessing}
+                        onClick={() => setDriverTarget({ transfer: t, stage: "ARRIVAL" })}
+                        className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-[11px] shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <Truck size={13} /> Assinatura do Motorista
                       </button>
                     )}
                     {canCancel(t) && (
@@ -915,17 +1028,36 @@ export default function TransferOrders({
         </div>
       )}
 
-      {/* ============ SIGNATURE MODAL ============ */}
+      {/* ============ ASSINATURA INTERNA (remetente / recebedor) ============ */}
       {signatureTarget && (
         <SignaturePad
-          mode={signatureTarget.mode}
-          subtitle={`Pedido com ${signatureTarget.transfer.items?.length || 0} itens • ${
+          title={signatureTarget.mode === "delivery" ? "Assinatura de Envio" : "Assinatura de Recebimento"}
+          subtitle={`Pedido com ${signatureTarget.transfer.items?.length || 0} ${
+            (signatureTarget.transfer.items?.length || 0) === 1 ? "item" : "itens"
+          } • ${
             signatureTarget.mode === "delivery"
               ? `Saindo de ${signatureTarget.transfer.sourceCompanyName}`
               : `Recebendo em ${signatureTarget.transfer.destinationCompanyName}`
           }`}
-          onConfirm={handleConfirmSignature}
+          roleLabel={signatureTarget.mode === "delivery" ? "Assinatura do Remetente" : "Assinatura do Recebedor"}
+          signerName={user.displayName}
+          confirmLabel="Confirmar minha assinatura"
+          nextStepHint="Depois de confirmar, o sistema abre a coleta da assinatura do motorista — por link no WhatsApp ou papel impresso."
+          onConfirm={handleConfirmInternalSignature}
           onClose={() => setSignatureTarget(null)}
+        />
+      )}
+
+      {/* ============ ASSINATURA DO MOTORISTA (link ou papel) ============ */}
+      {/* Resolve o pedido pela lista viva: driverTarget guarda o objeto do momento
+          do clique, e a via interna acabou de ser gravada logo antes de abrir. */}
+      {driverTarget && (
+        <DriverSignature
+          transfer={transfers.find(x => x.id === driverTarget.transfer.id) || driverTarget.transfer}
+          stage={driverTarget.stage}
+          user={user}
+          onComplete={handleCompleteDriverSignature}
+          onClose={() => setDriverTarget(null)}
         />
       )}
 

@@ -147,6 +147,50 @@ export interface SignatureRecord {
   signedByName: string;
   signedAt: any; // serverTimestamp()
   signatureDataUrl: string; // PNG base64 drawn via react-signature-canvas
+  // Como a assinatura foi coletada. Fica no comprovante impresso: uma via
+  // assinada em papel e fotografada tem valor diferente de uma assinada na tela.
+  method?: SignatureMethod;
+}
+
+export type SignatureMethod = "DESENHO" | "LINK" | "FOTO";
+
+// ─────────────────────────────────────────────────────────────────
+// Assinatura do motorista por link publico
+//
+// O motorista nao tem login. Quem opera gera um destes documentos, manda o
+// link por WhatsApp, e o motorista assina numa pagina publica. O token e o
+// proprio id do documento — aleatorio e longo. O documento carrega uma copia
+// do que o motorista precisa ver, para a colecao `transfers` continuar
+// fechada para quem nao esta autenticado.
+// ─────────────────────────────────────────────────────────────────
+export type SignatureRequestStatus = "PENDENTE" | "ASSINADO" | "APLICADO" | "CANCELADO";
+
+export interface SignatureRequestItem {
+  sku: string;
+  brand: string;
+  model: string;
+  size: string;
+  quantity: number;
+}
+
+export interface SignatureRequest {
+  id: string; // = token
+  transferId: string;
+  stage: "DISPATCH" | "ARRIVAL"; // retirada na origem ou entrega no destino
+  sourceCompanyName: string;
+  destinationCompanyName: string;
+  items: SignatureRequestItem[];
+  totalUnits: number;
+  driverName: string;         // informado por quem gerou o link
+  signedDriverName: string;   // confirmado pelo proprio motorista
+  requestedByName: string;
+  status: SignatureRequestStatus;
+  signatureDataUrl: string;
+  createdAt: any;
+  expiresAt: any;
+  signedAt?: any;
+  appliedAt?: any;
+  cancelledAt?: any;
 }
 
 export interface TransferOrderItem {
@@ -185,14 +229,16 @@ export interface TransferOrder {
   receipt?: SignatureRecord | null; // Signed by someone from the destination company
 
   // New 4-signature process
+  // A via do motorista chega DEPOIS da via interna (por link publico ou foto do
+  // papel assinado), entao ela e opcional enquanto a coleta esta em andamento.
   dispatch?: {
     sender: SignatureRecord;
-    driver: SignatureRecord;
+    driver?: SignatureRecord | null;
   } | null;
 
   arrival?: {
-    driver: SignatureRecord;
     receiver: SignatureRecord;
+    driver?: SignatureRecord | null;
   } | null;
 
   // Cancellation / admin reversal

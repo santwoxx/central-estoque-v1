@@ -56,7 +56,8 @@ import {
   StockFlowPayload,
   StockFlowResult,
   StockFlowResultItem,
-  StockFlowItemInput
+  StockFlowItemInput,
+  SignatureMethod
 } from "./types";
 import { toMillis, formatDate } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
@@ -69,6 +70,7 @@ import { useAppNotifications } from "./hooks/useAppNotifications";
 // (ApkInstaller) for users who never open that tab.
 import AuthScreen from "./components/AuthScreen";
 import PublicStock from "./components/PublicStock"; // Nova tela de consulta
+import PublicSignature from "./components/PublicSignature"; // Assinatura do motorista via link
 const PDFImporter = lazy(() => import("./components/PDFImporter"));
 const StockTable = lazy(() => import("./components/StockTable"));
 const MovementReports = lazy(() => import("./components/MovementReports"));
@@ -149,6 +151,12 @@ export default function App() {
   // Se for a rota pública, renderiza apenas o estoque público e ignora todo o resto
   if (window.location.pathname === '/consulta') {
     return <PublicStock />;
+  }
+
+  // Pagina publica de assinatura do motorista. Ele nao tem login: chega por um
+  // link com token e assina ali. Fica antes de qualquer checagem de sessao.
+  if (window.location.pathname === '/assinar') {
+    return <PublicSignature />;
   }
 
   const [user, setUser] = useState<{ uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string; credentialId?: string } | null>(null);
@@ -1493,11 +1501,76 @@ export default function App() {
     }
   };
 
+  // ─────────────────────────────────────────────────────────────────
+  // Assinaturas em duas vias
+  //
+  // Cada ponta (saida e chegada) coleta DUAS assinaturas: a do responsavel
+  // interno, gravada na hora, e a do motorista, que chega depois — por link
+  // publico no celular dele ou por foto do papel assinado. O estoque so se
+  // move quando a segunda via chega.
+  // ─────────────────────────────────────────────────────────────────
+
+  // Via 1 da saida: o responsavel da origem assina e ja fica registrado.
+  // Nada de estoque se move aqui; o pedido continua PENDENTE.
+  const handleSignSenderDispatch = async (transferId: string, signatureDataUrl: string) => {
+    if (!user) return;
+    try {
+      const senderRecord = {
+        signedByUid: user.uid,
+        signedByEmail: user.email,
+        signedByName: user.displayName,
+        signedAt: serverTimestamp(),
+        signatureDataUrl,
+        method: "DESENHO"
+      };
+      await updateDoc(doc(db, "transfers", transferId), {
+        dispatch: { sender: senderRecord, driver: null },
+        delivery: senderRecord, // espelho legado, lido por telas/relatorios antigos
+        updatedAt: serverTimestamp()
+      });
+    } catch (err: any) {
+      console.error("Erro ao registrar assinatura do remetente:", err);
+      throw new Error(
+        err?.code === "permission-denied"
+          ? "Sem permissão para assinar por esta empresa. Confirme se você pertence à empresa de origem."
+          : "Erro ao registrar a assinatura do remetente."
+      );
+    }
+  };
+
+  // Via 1 da chegada: o responsavel do destino assina. O pedido segue EM_TRANSITO
+  // ate a via do motorista chegar.
+  const handleSignReceiverArrival = async (transferId: string, signatureDataUrl: string) => {
+    if (!user) return;
+    try {
+      const receiverRecord = {
+        signedByUid: user.uid,
+        signedByEmail: user.email,
+        signedByName: user.displayName,
+        signedAt: serverTimestamp(),
+        signatureDataUrl,
+        method: "DESENHO"
+      };
+      await updateDoc(doc(db, "transfers", transferId), {
+        arrival: { receiver: receiverRecord, driver: null },
+        receipt: receiverRecord, // espelho legado
+        updatedAt: serverTimestamp()
+      });
+    } catch (err: any) {
+      console.error("Erro ao registrar assinatura do recebedor:", err);
+      throw new Error(
+        err?.code === "permission-denied"
+          ? "Sem permissão para assinar por esta empresa. Confirme se você pertence à empresa de destino."
+          : "Erro ao registrar a assinatura do recebedor."
+      );
+    }
+  };
+
   // Sign the delivery (source company confirms the goods are leaving). This is where
   // stock actually leaves the source company — decremented atomically inside a
   // transaction so a stale/insufficient balance or a duplicate signature attempt
   // fails cleanly instead of double-counting or driving stock negative.
-  const handleSignDelivery = async (transferId: string, signatureDataUrl: string, driverPickupSignatureDataUrl: string, driverName: string) => {
+  const handleCompleteDispatch = async (transferId: string, driverSignatureDataUrl: string, driverName: string, method: SignatureMethod) => {
     if (!user) return;
 
     try {
@@ -1511,6 +1584,9 @@ export default function App() {
 
         if (transferData.status !== "PENDENTE") {
           throw new Error("Este pedido não está mais aguardando assinatura de envio (talvez já tenha sido assinado).");
+        }
+        if (!transferData.dispatch?.sender) {
+          throw new Error("A assinatura do remetente ainda não foi registrada.");
         }
 
         const items = transferData.items || [];
@@ -1566,31 +1642,24 @@ export default function App() {
           });
         }
 
+        // A via do remetente ja esta gravada: preserva como veio, so acrescenta
+        // a do motorista. Reescrever aqui apagaria quem realmente assinou.
+        const senderRecord = transferData.dispatch.sender;
+
         transaction.update(transferRef, {
           status: "EM_TRANSITO",
           dispatch: {
-            sender: {
-              signedByUid: user.uid,
-              signedByEmail: user.email,
-              signedByName: user.displayName,
-              signedAt: serverTimestamp(),
-              signatureDataUrl: signatureDataUrl
-            },
+            sender: senderRecord,
             driver: {
               signedByUid: "MOTORISTA",
               signedByEmail: "",
               signedByName: driverName.trim(),
               signedAt: serverTimestamp(),
-              signatureDataUrl: driverPickupSignatureDataUrl
+              signatureDataUrl: driverSignatureDataUrl,
+              method
             }
           },
-          delivery: {
-            signedByUid: user.uid,
-            signedByEmail: user.email,
-            signedByName: user.displayName,
-            signedAt: serverTimestamp(),
-            signatureDataUrl: signatureDataUrl
-          },
+          delivery: senderRecord,
           updatedAt: serverTimestamp()
         });
       });
@@ -1600,7 +1669,7 @@ export default function App() {
     }
   };
 
-  const handleSignReceipt = async (transferId: string, signatureDataUrl: string, driverDropoffSignatureDataUrl: string, driverName: string) => {
+  const handleCompleteArrival = async (transferId: string, driverSignatureDataUrl: string, driverName: string, method: SignatureMethod) => {
     if (!user) return;
 
     try {
@@ -1613,6 +1682,9 @@ export default function App() {
 
       if (tData.status !== "EM_TRANSITO") {
         throw new Error("Este pedido não está aguardando confirmação de recebimento.");
+      }
+      if (!tData.arrival?.receiver) {
+        throw new Error("A assinatura do recebedor ainda não foi registrada.");
       }
 
       const items = tData.items || [];
@@ -1643,6 +1715,9 @@ export default function App() {
 
         if (latestTData.status !== "EM_TRANSITO") {
           throw new Error("Este pedido não está aguardando confirmação de recebimento.");
+        }
+        if (!latestTData.arrival?.receiver) {
+          throw new Error("A assinatura do recebedor ainda não foi registrada.");
         }
 
         // --- ALL READS ---
@@ -1717,31 +1792,23 @@ export default function App() {
           });
         }
 
+        // Preserva a via do recebedor exatamente como foi assinada.
+        const receiverRecord = latestTData.arrival.receiver;
+
         transaction.update(transferRef, {
           status: "CONCLUIDO",
           arrival: {
+            receiver: receiverRecord,
             driver: {
               signedByUid: "MOTORISTA",
               signedByEmail: "",
               signedByName: driverName.trim(),
               signedAt: serverTimestamp(),
-              signatureDataUrl: driverDropoffSignatureDataUrl
-            },
-            receiver: {
-              signedByUid: user.uid,
-              signedByEmail: user.email,
-              signedByName: user.displayName,
-              signedAt: serverTimestamp(),
-              signatureDataUrl: signatureDataUrl
+              signatureDataUrl: driverSignatureDataUrl,
+              method
             }
           },
-          receipt: {
-            signedByUid: user.uid,
-            signedByEmail: user.email,
-            signedByName: user.displayName,
-            signedAt: serverTimestamp(),
-            signatureDataUrl
-          },
+          receipt: receiverRecord,
           updatedAt: serverTimestamp()
         });
       });
@@ -2393,8 +2460,10 @@ export default function App() {
               user={user}
               onCreateTransfer={handleCreateTransfer}
               onCancelTransfer={handleCancelTransfer}
-              onSignDelivery={handleSignDelivery}
-              onSignReceipt={handleSignReceipt}
+              onSignSenderDispatch={handleSignSenderDispatch}
+              onCompleteDispatch={handleCompleteDispatch}
+              onSignReceiverArrival={handleSignReceiverArrival}
+              onCompleteArrival={handleCompleteArrival}
               onReverseTransfer={handleReverseInTransitTransfer}
               onDeleteTransfer={handleDeleteTransfer}
             />

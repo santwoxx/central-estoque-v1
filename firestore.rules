@@ -172,13 +172,36 @@ service cloud.firestore {
         request.time >= resource.data.scheduledFor &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
       ) || (
+        // (b0) Assinatura do REMETENTE isolada: o responsavel da origem assina e
+        // ja fica gravado, sem mover o pedido. O status so vira EM_TRANSITO na
+        // regra (b), quando a assinatura do motorista chegar. Nada de estoque se
+        // move aqui — e so a coleta da primeira das duas vias da saida.
+        isAlimentador() &&
+        resource.data.sourceCompanyId == getUserData().companyId &&
+        resource.data.status == 'PENDENTE' &&
+        request.resource.data.status == 'PENDENTE' &&
+        request.resource.data.dispatch.sender.signedByUid == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dispatch', 'delivery', 'updatedAt'])
+      ) || (
+        // (c0) Assinatura do RECEBEDOR isolada: mesma ideia no lado do destino.
+        // O pedido so vira CONCLUIDO na regra (c), com a via do motorista.
+        isAlimentador() &&
+        resource.data.destinationCompanyId == getUserData().companyId &&
+        resource.data.status == 'EM_TRANSITO' &&
+        request.resource.data.status == 'EM_TRANSITO' &&
+        request.resource.data.arrival.receiver.signedByUid == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['arrival', 'receipt', 'updatedAt'])
+      ) || (
         // (b) Delivery signature: only an alimentador of the SOURCE company, only while
         // PENDENTE, transitioning to EM_TRANSITO, only touching status/delivery/updatedAt.
         isAlimentador() &&
         resource.data.sourceCompanyId == getUserData().companyId &&
         resource.data.status == 'PENDENTE' &&
         request.resource.data.status == 'EM_TRANSITO' &&
-        request.resource.data.delivery.signedByUid == request.auth.uid &&
+        // A via do remetente ja precisa existir (gravada na regra b0). A via do
+        // motorista nao carrega uid: ele assina por link publico ou em papel,
+        // sem login — por isso aqui nao se compara signedByUid com auth.uid.
+        resource.data.dispatch.sender.signedByUid is string &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'delivery', 'dispatch', 'updatedAt'])
       ) || (
         // (c) Receipt signature: only an alimentador of the DESTINATION company, only
@@ -187,7 +210,9 @@ service cloud.firestore {
         resource.data.destinationCompanyId == getUserData().companyId &&
         resource.data.status == 'EM_TRANSITO' &&
         request.resource.data.status == 'CONCLUIDO' &&
-        request.resource.data.receipt.signedByUid == request.auth.uid &&
+        // Mesma logica da regra (b): a via do recebedor ja tem que estar
+        // gravada (regra c0) e a via do motorista chega sem uid.
+        resource.data.arrival.receiver.signedByUid is string &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'receipt', 'arrival', 'destinationStockItemId', 'updatedAt'])
       ) || (
         // (d) Pre-dispatch cancellation: an alimentador of the SOURCE or DESTINATION company,
@@ -200,6 +225,54 @@ service cloud.firestore {
       );
 
       // Only admin can hard-delete a transfer record (e.g. cleaning up test data).
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Signature Requests: link publico de assinatura do motorista
+    //
+    // O motorista NAO tem login. Ele abre um link com um token aleatorio de
+    // 32 caracteres (o proprio id do documento) e assina ali. O documento
+    // carrega uma copia do que ele precisa ver (empresas, itens) para que a
+    // colecao transfers continue fechada para quem nao esta autenticado.
+    // ─────────────────────────────────────────────────────────────
+    match /signature_requests/{token} {
+
+      // get: qualquer um que TENHA o token le aquele documento — e assim que a
+      // pagina publica funciona. list fica restrito a usuarios autenticados,
+      // senao um anonimo poderia varrer a colecao inteira e assinar todos os
+      // pedidos pendentes sem nunca ter recebido link nenhum.
+      allow get: if true;
+      allow list: if isAdmin() || isAlimentador();
+
+      // Só quem opera o estoque gera um pedido de assinatura.
+      allow create: if (isAdmin() || isAlimentador()) &&
+        request.resource.data.status == 'PENDENTE' &&
+        request.resource.data.signatureDataUrl == '' &&
+        request.resource.data.expiresAt is timestamp;
+
+      allow update: if
+        // (1) O motorista anonimo: carimba a assinatura UMA vez, apenas
+        // enquanto o pedido esta pendente e dentro da validade, e so pode
+        // tocar nos campos da propria assinatura. Nao alcanca itens,
+        // transferId nem validade.
+        (
+          resource.data.status == 'PENDENTE' &&
+          request.time < resource.data.expiresAt &&
+          request.resource.data.status == 'ASSINADO' &&
+          request.resource.data.signatureDataUrl is string &&
+          request.resource.data.signatureDataUrl.size() > 0 &&
+          request.resource.data.signatureDataUrl.size() < 700000 &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'signatureDataUrl', 'signedAt', 'signedDriverName'])
+        )
+        // (2) O painel autenticado: marca como aplicada ou cancela o link.
+        || (
+          (isAdmin() || isAlimentador()) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'appliedAt', 'cancelledAt'])
+        );
+
       allow delete: if isAdmin();
     }
   }
