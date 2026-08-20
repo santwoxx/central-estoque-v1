@@ -32,6 +32,7 @@ import {
   ChevronRight,
   ArrowDownLeft,
   ArrowUpRight,
+  ArrowLeftRight,
   Keyboard,
   Info,
   ClipboardList,
@@ -69,6 +70,29 @@ const REASONS: Record<StockFlowType, string[]> = {
 // Atalhos de quantidade — pneu quase sempre entra/sai em par ou jogo completo.
 const QUICK_QTY = [1, 2, 4];
 
+// Quais movimentos representam entrada/saida FISICA de pneu e, por isso,
+// aparecem no historico desta tela. A transferencia entre filiais conta: o pneu
+// sai de verdade da origem e entra de verdade no destino — cada empresa precisa
+// ver a sua metade aqui. IMPORTACAO e AJUSTE ficam de fora (carga inicial e
+// correcao de saldo, nao operacao de balcao).
+const FLOW_TYPE_OF: Partial<Record<MovementLog["type"], StockFlowType>> = {
+  ENTRADA: "ENTRADA",
+  SAIDA: "SAIDA",
+  TRANSFERENCIA_ENTRADA: "ENTRADA",
+  TRANSFERENCIA_SAIDA: "SAIDA"
+};
+
+const isTransferType = (type: MovementLog["type"]) =>
+  type === "TRANSFERENCIA_ENTRADA" || type === "TRANSFERENCIA_SAIDA";
+
+// A empresa do outro lado da transferencia vem do motivo gravado pelo modulo de
+// Transferencias ("Recebido de X — assinado por Y" / "Transferência para X — ...").
+// Sem correspondencia, devolve vazio — o motivo completo continua na tela.
+const transferCounterpart = (reason: string) => {
+  const match = reason.match(/^(?:Recebido de|Transfer[êe]ncia para)\s+(.+?)\s+—/);
+  return match ? match[1].trim() : "";
+};
+
 interface CartLine {
   stockItemId: string;
   quantity: number;
@@ -95,6 +119,10 @@ interface FlowOperation {
   observation: string;
   reversalOf: string;
   isModuleOperation: boolean;
+  // Operacao originada no modulo de Transferencias (nao tem operationId e nao
+  // pode ser estornada por aqui — o estorno vive na tela de Transferencias).
+  isTransfer: boolean;
+  transferId: string;
 }
 
 export default function StockFlow({ stock, movements, companies, user, onRegister, onReverse }: StockFlowProps) {
@@ -365,14 +393,24 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
     }
   };
 
-  // ── Histórico: agrupa os movimentos por operationId ──────────────
+  // ── Histórico: agrupa os movimentos por operação ─────────────────
+  // Operações do módulo se agrupam pelo operationId; transferências entre
+  // filiais não têm operationId, então se agrupam pelo pedido (transferId) —
+  // uma operação por lado, já que o remetente grava a saída na empresa de
+  // origem e o recebedor grava a entrada na empresa de destino.
   const operations = useMemo(() => {
     const map = new Map<string, FlowOperation>();
 
     for (const log of movements) {
-      if (log.type !== "ENTRADA" && log.type !== "SAIDA") continue;
-      const opId = log.operationId || "";
-      const key = opId || `avulso:${log.id}`;
+      const flowType = FLOW_TYPE_OF[log.type];
+      if (!flowType) continue;
+
+      const isTransfer = isTransferType(log.type);
+      const opId = isTransfer ? "" : (log.operationId || "");
+      const transferId = isTransfer ? (log.transferId || "") : "";
+      const key = isTransfer
+        ? (transferId ? `transferencia:${log.type}:${transferId}` : `avulso:${log.id}`)
+        : (opId || `avulso:${log.id}`);
       const millis = toMillis(log.timestamp);
 
       const existing = map.get(key);
@@ -385,7 +423,7 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
         map.set(key, {
           key,
           operationId: opId,
-          type: log.type as StockFlowType,
+          type: flowType,
           logs: [log],
           timestamp: millis,
           totalUnits: Math.abs(log.quantity),
@@ -394,11 +432,13 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
           companyName: log.companyName || "",
           reason: log.operationReason || log.reason || "",
           docNumber: log.docNumber || "",
-          partyName: log.partyName || "",
+          partyName: log.partyName || (isTransfer ? transferCounterpart(log.reason || "") : ""),
           vehiclePlate: log.vehiclePlate || "",
           observation: log.observation || "",
           reversalOf: log.reversalOf || "",
-          isModuleOperation: !!opId
+          isModuleOperation: !!opId,
+          isTransfer,
+          transferId
         });
       }
     }
@@ -433,6 +473,7 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
       if (!term) return true;
       return (
         op.operationId.toLowerCase().includes(term) ||
+        op.transferId.toLowerCase().includes(term) ||
         op.reason.toLowerCase().includes(term) ||
         op.partyName.toLowerCase().includes(term) ||
         op.docNumber.toLowerCase().includes(term) ||
@@ -498,9 +539,11 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
   const handleExportCSV = () => {
     const rows = filteredOperations.flatMap(op =>
       op.logs.map(log => ({
-        operationId: op.operationId || "—",
+        operationId: op.operationId || (op.transferId ? `TRANSF-${op.transferId}` : "—"),
         timestamp: formatDate(log.timestamp),
-        type: op.type === "ENTRADA" ? "Entrada de Pneus" : "Saída de Pneus",
+        type: op.isTransfer
+          ? (op.type === "ENTRADA" ? "Entrada por Transferência" : "Saída por Transferência")
+          : (op.type === "ENTRADA" ? "Entrada de Pneus" : "Saída de Pneus"),
         sku: log.sku,
         brand: log.brand,
         model: log.model,
@@ -558,13 +601,21 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
     observation: string;
     totalUnits: number;
     totalAmount: number;
+    isTransfer?: boolean;
     items: { sku: string; brand: string; model: string; size: string; quantity: number; unitPrice: number; balanceAfter: number }[];
   }) => {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
 
-    const title = data.type === "ENTRADA" ? "Comprovante de Entrada" : "Comprovante de Saída";
-    const partyLabel = data.type === "ENTRADA" ? "FORNECEDOR" : "CLIENTE";
+    const isEntry = data.type === "ENTRADA";
+    // Numa transferencia nao existe fornecedor nem cliente: existe a filial do
+    // outro lado do pedido.
+    const title = data.isTransfer
+      ? (isEntry ? "Entrada por Transferência" : "Saída por Transferência")
+      : (isEntry ? "Comprovante de Entrada" : "Comprovante de Saída");
+    const partyLabel = data.isTransfer
+      ? (isEntry ? "ORIGEM" : "DESTINO")
+      : (isEntry ? "FORNECEDOR" : "CLIENTE");
     const money = (v: number) => v.toFixed(2).replace(".", ",");
 
     const itemsHtml = data.items.map(item => `
@@ -672,7 +723,8 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
   const printHistoryOperation = (op: FlowOperation) => {
     printOperation({
       type: op.type,
-      operationId: op.operationId || "—",
+      isTransfer: op.isTransfer,
+      operationId: op.operationId || (op.transferId ? `TRANSF-${op.transferId}` : "—"),
       companyName: op.companyName,
       userName: op.userEmail,
       date: formatDate(op.logs[0]?.timestamp),
@@ -935,6 +987,7 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
             <p className="font-bold text-slate-800 text-base">Nenhuma movimentação no período</p>
             <p className="text-xs text-slate-500 mt-1 max-w-md">
               Registre uma entrada ou uma saída nos botões acima e a operação aparece aqui na hora,
+              junto com as transferências concluídas entre filiais,
               com todos os pneus, saldos e responsável.
             </p>
           </div>
@@ -967,8 +1020,14 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
                         }`}>
                           {isEntry ? "Entrada" : "Saída"}
                         </span>
+                        {op.isTransfer && (
+                          <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-lg border bg-blue-50 text-blue-800 border-blue-100/80 flex items-center gap-1">
+                            <ArrowLeftRight size={9} className="stroke-[3px]" /> Transferência
+                          </span>
+                        )}
                         <span className="text-xs font-black text-slate-900 truncate">{op.reason || "Sem motivo informado"}</span>
-                        {op.partyName && (
+                        {/* Na transferência a filial do outro lado já vem escrita no motivo. */}
+                        {op.partyName && !op.isTransfer && (
                           <span className="text-[10px] font-bold text-slate-500 truncate">• {op.partyName}</span>
                         )}
                         {op.docNumber && (
@@ -1071,7 +1130,18 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
                             )}
                             {op.vehiclePlate && <div>Placa: <span className="font-mono font-black text-slate-700">{op.vehiclePlate}</span></div>}
                             {op.observation && <div className="italic text-slate-400 truncate max-w-md">Obs.: {op.observation}</div>}
-                            {!op.isModuleOperation && (
+                            {op.isTransfer ? (
+                              <>
+                                {op.transferId && (
+                                  <div className="font-mono text-slate-400">
+                                    Pedido: <span className="text-slate-700 font-black">{op.transferId}</span>
+                                  </div>
+                                )}
+                                <div className="text-blue-700/80 italic">
+                                  Movimentação do módulo de Transferências — assinaturas e estorno ficam naquela tela.
+                                </div>
+                              </>
+                            ) : !op.isModuleOperation && (
                               <div className="text-slate-400 italic">Registro avulso — gerado por outra tela do sistema.</div>
                             )}
                           </div>

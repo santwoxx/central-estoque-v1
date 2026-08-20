@@ -2121,27 +2121,46 @@ export default function App() {
         }
 
         // --- ALL READS ---
-        const stockDataToUpdate = [];
+        // O destino e resolvido por SKU, e dois itens do pedido podem cair no
+        // MESMO documento de destino (o mesmo pneu cadastrado duas vezes na
+        // origem). Agrupar por SKU antes de escrever e obrigatorio: duas
+        // escritas no mesmo doc dentro da transacao fariam a segunda
+        // sobrescrever a primeira e as unidades da outra linha sumiriam.
+        const stockDataToUpdate: any[] = [];
+        const bySku = new Map<string, any>();
+
         for (const item of latestTData.items) {
+          const grouped = bySku.get(item.sku);
+          if (grouped) {
+            grouped.newQty += item.quantity;
+            grouped.items.push(item);
+            continue;
+          }
+
           let destStockRef = destDocsMap.get(item.sku);
-          let newQty = item.quantity;
+          let baseQty = 0;
           let isNewStockDoc = false;
 
           if (destStockRef) {
             const freshDestSnap = await transaction.get(destStockRef);
             const freshData: any = freshDestSnap.data() || {};
-            newQty = (freshData.quantity ?? 0) + item.quantity;
+            baseQty = freshData.quantity ?? 0;
           } else {
             destStockRef = doc(collection(db, "stock"));
             isNewStockDoc = true;
           }
-          
-          stockDataToUpdate.push({
+
+          const entry = {
             ref: destStockRef,
-            newQty,
+            newQty: baseQty + item.quantity,
             isNewStockDoc,
-            item
-          });
+            item,
+            // Uma linha de movimento por item do pedido, mesmo quando varios
+            // itens somam no mesmo documento de estoque.
+            items: [item]
+          };
+          bySku.set(item.sku, entry);
+          stockDataToUpdate.push(entry);
         }
 
         // --- ALL WRITES ---
@@ -2173,23 +2192,28 @@ export default function App() {
             });
           }
 
-          const movementRef = doc(collection(db, "movements"));
-          transaction.set(movementRef, {
-            sku: updateData.item.sku,
-            brand: updateData.item.brand,
-            model: updateData.item.model,
-            size: updateData.item.size,
-            type: "TRANSFERENCIA_ENTRADA",
-            quantity: updateData.item.quantity,
-            balanceAfter: updateData.newQty,
-            companyId: latestTData.destinationCompanyId,
-            companyName: latestTData.destinationCompanyName,
-            userId: user.uid,
-            userEmail: user.email,
-            timestamp: serverTimestamp(),
-            reason: `Recebido de ${latestTData.sourceCompanyName} — assinado por ${user.displayName}`,
-            transferId
-          });
+          // Este e o registro que faz a transferencia aparecer como ENTRADA na
+          // tela de Entradas e Saidas da empresa de destino (e o par
+          // TRANSFERENCIA_SAIDA, gravado no despacho, como saida na origem).
+          for (const movementItem of updateData.items) {
+            const movementRef = doc(collection(db, "movements"));
+            transaction.set(movementRef, {
+              sku: movementItem.sku,
+              brand: movementItem.brand,
+              model: movementItem.model,
+              size: movementItem.size,
+              type: "TRANSFERENCIA_ENTRADA",
+              quantity: movementItem.quantity,
+              balanceAfter: updateData.newQty,
+              companyId: latestTData.destinationCompanyId,
+              companyName: latestTData.destinationCompanyName,
+              userId: user.uid,
+              userEmail: user.email,
+              timestamp: serverTimestamp(),
+              reason: `Recebido de ${latestTData.sourceCompanyName} — assinado por ${user.displayName}`,
+              transferId
+            });
+          }
         }
 
         // Preserva a via do recebedor exatamente como foi assinada.
