@@ -1,16 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
     // Help function to determine if user is authenticated
     function isAuth() {
       return request.auth != null;
     }
-    
+
     // Check if the current user profile is marked as admin or is an authorized admin email
     function isAdmin() {
       return isAuth() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
         request.auth.token.email == 'brisasofc@gmail.com' ||
         request.auth.token.email == 'natandsantosmarinho10@gmail.com' ||
@@ -26,14 +26,14 @@ service cloud.firestore {
 
     // Helper to check user roles
     function isVendedor() {
-      return isAuth() && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+      return isAuth() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         getUserData().role == 'vendedor';
     }
 
     function isAlimentador() {
-      return isAuth() && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+      return isAuth() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         (getUserData().role == 'alimentador' || getUserData().role == 'user');
     }
 
@@ -53,7 +53,7 @@ service cloud.firestore {
       // Users need to read credentials to verify login (frontend compares password)
       allow read: if isAuth();
       allow create: if isAuth() && (
-        isAdmin() || 
+        isAdmin() ||
         (request.resource.data.associatedEmail == 'brisasofc@gmail.com' && (request.resource.data.username == 'brisas' || request.resource.data.username == 'central')) ||
         (request.resource.data.associatedEmail == 'natandsantosmarinho10@gmail.com' && request.resource.data.username == 'natand')
       );
@@ -77,21 +77,35 @@ service cloud.firestore {
 
       // Admin can create anything. Donos/Alimentadores can only create for their own company.
       allow create: if isAdmin() || (
-        isAlimentador() && 
+        isAlimentador() &&
         request.resource.data.companyId == getUserData().companyId
       );
-      
+
       // Admin can update anything. Donos/Alimentadores can only update their own company's items.
+      //
+      // TRAVA DE RESERVA: `reservedQuantity` guarda quantas unidades ja foram
+      // prometidas a outra empresa por uma transferencia aprovada. O saldo do
+      // documento nunca pode terminar abaixo desse numero — e assim que "pneu
+      // reservado nao pode receber baixa" deixa de depender da tela e passa a
+      // ser garantido pelo banco. Documentos sem o campo (todo o estoque antigo)
+      // resolvem para 0 e seguem exatamente como antes.
       allow update: if isAdmin() || (
-        isAlimentador() && 
+        isAlimentador() &&
         resource.data.companyId == getUserData().companyId &&
-        request.resource.data.companyId == getUserData().companyId
+        request.resource.data.companyId == getUserData().companyId &&
+        (
+          request.resource.data.get('reservedQuantity', 0) == 0 ||
+          request.resource.data.get('quantity', 0) >= request.resource.data.get('reservedQuantity', 0)
+        )
       );
-      
+
       // Admin can delete anything. Donos/Alimentadores can only delete their own company's items.
+      // Um item com reserva ativa nao pode ser apagado: o pedido da outra empresa
+      // ficaria apontando para um documento inexistente.
       allow delete: if isAdmin() || (
-        isAlimentador() && 
-        resource.data.companyId == getUserData().companyId
+        isAlimentador() &&
+        resource.data.companyId == getUserData().companyId &&
+        resource.data.get('reservedQuantity', 0) == 0
       );
     }
 
@@ -149,11 +163,19 @@ service cloud.firestore {
         request.resource.data.requestedByUid == request.auth.uid &&
         request.resource.data.delivery == null &&
         request.resource.data.receipt == null &&
+        // Nenhum pedido nasce reservado: a reserva so existe depois que a ORIGEM
+        // aprova (regra e) ou reserva explicitamente (regra g).
+        request.resource.data.get('reservation', null) == null &&
         (
           (request.resource.data.scheduledFor == null && request.resource.data.status == 'PENDENTE') ||
           (request.resource.data.scheduledFor is timestamp &&
            request.resource.data.scheduledFor > request.time &&
-           request.resource.data.status == 'AGENDADO')
+           request.resource.data.status == 'AGENDADO') ||
+          // SOLICITACAO (pull): quem PEDE e a empresa de DESTINO, e o pedido nasce
+          // parado em SOLICITADO ate a origem decidir. Nada de estoque se move nem
+          // se reserva na criacao.
+          (request.resource.data.status == 'SOLICITADO' &&
+           request.resource.data.destinationCompanyId == getUserData().companyId)
         )
       );
 
@@ -202,7 +224,10 @@ service cloud.firestore {
         // motorista nao carrega uid: ele assina por link publico ou em papel,
         // sem login — por isso aqui nao se compara signedByUid com auth.uid.
         resource.data.dispatch.sender.signedByUid is string &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'delivery', 'dispatch', 'updatedAt'])
+        // 'reservation' entra aqui porque o despacho converte a reserva em saida
+        // real: os pneus deixam o estoque e o bloqueio deixa de existir, na mesma
+        // transacao que decrementa quantity/reservedQuantity.
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'delivery', 'dispatch', 'reservation', 'updatedAt'])
       ) || (
         // (c) Receipt signature: only an alimentador of the DESTINATION company, only
         // while EM_TRANSITO, transitioning to CONCLUIDO.
@@ -216,12 +241,49 @@ service cloud.firestore {
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'receipt', 'arrival', 'destinationStockItemId', 'updatedAt'])
       ) || (
         // (d) Pre-dispatch cancellation: an alimentador of the SOURCE or DESTINATION company,
-        // only while AGENDADO or PENDENTE (nothing has physically moved yet).
+        // only while AGENDADO, PENDENTE or SOLICITADO (nothing has physically moved yet).
         isAlimentador() &&
         (resource.data.sourceCompanyId == getUserData().companyId || resource.data.destinationCompanyId == getUserData().companyId) &&
-        (resource.data.status == 'AGENDADO' || resource.data.status == 'PENDENTE') &&
+        (resource.data.status == 'AGENDADO' || resource.data.status == 'PENDENTE' || resource.data.status == 'SOLICITADO') &&
         request.resource.data.status == 'CANCELADO' &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledByUid', 'cancelledByName', 'cancelledAt', 'cancelReason', 'updatedAt'])
+        // Pedido com reserva ativa segura pneus no estoque da ORIGEM, e so a origem
+        // consegue devolve-los (as regras de stock so deixam cada empresa escrever
+        // nos proprios itens). Por isso o DESTINO nao cancela um pedido reservado —
+        // se pudesse, o cancelamento passaria mas a reserva ficaria presa para sempre.
+        (
+          resource.data.get('reservation', null) == null ||
+          resource.data.reservation.get('active', false) != true ||
+          resource.data.sourceCompanyId == getUserData().companyId
+        ) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledByUid', 'cancelledByName', 'cancelledAt', 'cancelReason', 'reservation', 'updatedAt'])
+      ) || (
+        // (e) A ORIGEM aprova uma solicitacao. O app faz isso na mesma transacao
+        // em que soma `reservedQuantity` nos itens do proprio estoque — entre o
+        // aval e a reserva nao existe janela em que o pneu esteja prometido e
+        // ainda vendavel.
+        isAlimentador() &&
+        resource.data.sourceCompanyId == getUserData().companyId &&
+        resource.data.status == 'SOLICITADO' &&
+        (request.resource.data.status == 'PENDENTE' || request.resource.data.status == 'AGENDADO') &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'reservation', 'approvedByUid', 'approvedByName', 'approvedAt', 'updatedAt'])
+      ) || (
+        // (f) A ORIGEM recusa a solicitacao. Nada foi reservado, entao e so status.
+        isAlimentador() &&
+        resource.data.sourceCompanyId == getUserData().companyId &&
+        resource.data.status == 'SOLICITADO' &&
+        request.resource.data.status == 'RECUSADO' &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'rejectedByUid', 'rejectedByName', 'rejectedAt', 'rejectReason', 'updatedAt'])
+      ) || (
+        // (g) A ORIGEM reserva ou libera os itens de um pedido ja pendente/agendado,
+        // sem mexer no status. Serve para segurar mercadoria que ainda vai demorar
+        // a sair, e para desistir da reserva sem cancelar o pedido.
+        isAlimentador() &&
+        resource.data.sourceCompanyId == getUserData().companyId &&
+        (resource.data.status == 'AGENDADO' || resource.data.status == 'PENDENTE') &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservation', 'updatedAt'])
       );
 
       // Only admin can hard-delete a transfer record (e.g. cleaning up test data).

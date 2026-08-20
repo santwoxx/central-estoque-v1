@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company, UserRole } from "../types";
-import { formatBRL, matchesTireSize } from "../utils";
+import { availableQuantity, formatBRL, matchesTireSize, reservedQuantityOf } from "../utils";
 import sajEstoqueData from "../saj_estoque.json";
 import autocarEstoqueData from "../autocar_estoque.json";
 import valencaEstoqueData from "../valenca_estoque.json";
@@ -688,8 +688,13 @@ export default function StockTable({
       setErrorMsg("Item não encontrado.");
       return;
     }
-    if (qty > item.quantity) {
-      setErrorMsg(`Quantidade insuficiente em estoque. Disponível: ${item.quantity}`);
+    const free = availableQuantity(item);
+    const reserved = reservedQuantityOf(item);
+    if (qty > free) {
+      setErrorMsg(
+        `Quantidade insuficiente em estoque. Disponível para baixa: ${free}` +
+        (reserved > 0 ? ` (${reserved} un reservadas para uma transferência aprovada).` : ".")
+      );
       return;
     }
     if (checkoutItems.some(i => i.id === item.id)) {
@@ -788,7 +793,8 @@ export default function StockTable({
   const checkoutStockOptions = useMemo(() => {
     const lower = checkoutSearch.toLowerCase();
     return items
-      .filter(item => item.quantity > 0)
+      // Pneu totalmente reservado para uma transferência não pode ser vendido.
+      .filter(item => availableQuantity(item) > 0)
       .filter(item =>
         !lower ||
         item.sku.toLowerCase().includes(lower) ||
@@ -1226,6 +1232,14 @@ export default function StockTable({
                             }`}>
                               {item.quantity <= 4 && <AlertTriangle size={12} className="text-red-600 shrink-0" />}
                               {item.quantity} un
+                              {reservedQuantityOf(item) > 0 && (
+                                <span
+                                  className="ml-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 py-0.5 uppercase tracking-wider whitespace-nowrap"
+                                  title={`${reservedQuantityOf(item)} un reservadas para uma transferência aprovada — livre: ${availableQuantity(item)} un.`}
+                                >
+                                  {reservedQuantityOf(item)} reserv.
+                                </span>
+                              )}
                             </span>
                           </td>
 
@@ -1262,7 +1276,7 @@ export default function StockTable({
                               <button
                                 onClick={() => {
                                   if (window.confirm(`Tem certeza que deseja DELETAR do estoque o produto ${item.brand} ${item.model} (${item.size})?`)) {
-                                    onDeleteItem(item.id);
+                                    onDeleteItem(item.id).catch((err: any) => alert(err?.message || "Erro ao excluir produto."));
                                   }
                                 }}
                                 className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors border border-transparent hover:border-red-200 cursor-pointer"
@@ -1384,8 +1398,15 @@ export default function StockTable({
                           type="button"
                           title="Remover 1 unidade"
                           onClick={() => {
-                            if (item.quantity > 0) {
-                              onUpdateItem(item.id, { quantity: item.quantity - 1 }, "Baixa rápida via celular", -1);
+                            if (availableQuantity(item) <= 0) {
+                              alert(
+                                reservedQuantityOf(item) > 0
+                                  ? `Todas as ${reservedQuantityOf(item)} un deste pneu estão reservadas para uma transferência aprovada.`
+                                  : "Este pneu está com saldo zerado."
+                              );
+                            } else {
+                              onUpdateItem(item.id, { quantity: item.quantity - 1 }, "Baixa rápida via celular", -1)
+                                .catch((err: any) => alert(err?.message || "Erro ao dar baixa."));
                             }
                           }}
                           className="h-8 w-8 text-red-600 active:bg-slate-200 font-extrabold hover:text-red-700 flex items-center justify-center cursor-pointer select-none rounded text-lg transition-colors border border-transparent"
@@ -1404,7 +1425,8 @@ export default function StockTable({
                           type="button"
                           title="Adicionar 1 unidade"
                           onClick={() => {
-                            onUpdateItem(item.id, { quantity: item.quantity + 1 }, "Entrada rápida via celular", 1);
+                            onUpdateItem(item.id, { quantity: item.quantity + 1 }, "Entrada rápida via celular", 1)
+                              .catch((err: any) => alert(err?.message || "Erro ao lançar entrada."));
                           }}
                           className="h-8 w-8 text-emerald-600 active:bg-slate-200 font-extrabold hover:text-emerald-700 flex items-center justify-center cursor-pointer select-none rounded text-lg transition-colors border border-transparent"
                         >
@@ -1431,7 +1453,7 @@ export default function StockTable({
                       <button
                         onClick={() => {
                           if (window.confirm(`Deseja deletar ${item.brand} ${item.model} permanentemente?`)) {
-                            onDeleteItem(item.id);
+                            onDeleteItem(item.id).catch((err: any) => alert(err?.message || "Erro ao excluir produto."));
                           }
                         }}
                         className="py-1 px-3 text-[10px] font-bold text-red-650 bg-red-50 hover:bg-red-150 rounded border border-red-150 transition-colors flex items-center gap-1 cursor-pointer"
@@ -2103,7 +2125,12 @@ export default function StockTable({
                                 <span className="font-bold text-slate-800">{item.brand} {item.model}</span>{" "}
                                 <span className="text-slate-400 font-mono">({item.size})</span>
                               </span>
-                              <span className="text-[10px] font-mono font-bold text-slate-500 shrink-0">{item.quantity} un</span>
+                              <span className="text-[10px] font-mono font-bold text-slate-500 shrink-0 text-right">
+                                {availableQuantity(item)} un
+                                {reservedQuantityOf(item) > 0 && (
+                                  <span className="block text-[9px] text-amber-700 font-bold">{reservedQuantityOf(item)} reserv.</span>
+                                )}
+                              </span>
                             </button>
                           ))
                         )}

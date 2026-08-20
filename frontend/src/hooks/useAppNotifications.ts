@@ -38,6 +38,9 @@ function getTransferActorUid(transfer: TransferOrder, prevStatus: TransferStatus
   if (transfer.status === "EM_TRANSITO") return transfer.dispatch?.sender?.signedByUid || transfer.delivery?.signedByUid || null;
   if (transfer.status === "CONCLUIDO") return transfer.arrival?.receiver?.signedByUid || transfer.receipt?.signedByUid || null;
   if (transfer.status === "CANCELADO") return transfer.cancelledByUid || null;
+  if (transfer.status === "RECUSADO") return transfer.rejectedByUid || null;
+  if (transfer.status === "PENDENTE" && prevStatus === "SOLICITADO") return transfer.approvedByUid || null;
+  if (transfer.status === "AGENDADO" && prevStatus === "SOLICITADO") return transfer.approvedByUid || null;
   return null;
 }
 
@@ -56,6 +59,18 @@ function describeTransferEvent(
 
   // Brand-new transfer document (this user just saw it appear for the first time).
   if (prevStatus === null) {
+    // Solicitação: quem precisa decidir é a ORIGEM, dona dos pneus.
+    if (status === "SOLICITADO") {
+      return {
+        type: isSource || isGlobal ? "TRANSFER_ACTION_REQUIRED" : "TRANSFER_UPDATE",
+        title: "Nova solicitação de transferência",
+        message: isGlobal
+          ? `${route}: ${transfer.destinationCompanyName} solicitou ${itemsLabel}.`
+          : isSource
+          ? `${transfer.destinationCompanyName} está solicitando ${itemsLabel} do seu estoque — aprove para reservar ou recuse.`
+          : `Solicitação de ${itemsLabel} enviada a ${transfer.sourceCompanyName}, aguardando aprovação.`
+      };
+    }
     if (status === "AGENDADO") {
       return {
         type: "TRANSFER_UPDATE",
@@ -79,6 +94,29 @@ function describeTransferEvent(
       };
     }
     return null;
+  }
+
+  // Aprovada: a origem reservou os pneus. É o evento mais importante do fluxo —
+  // a partir daqui aquele saldo saiu do disponível de quem enviou.
+  if ((status === "PENDENTE" || status === "AGENDADO") && prevStatus === "SOLICITADO") {
+    const reservedNote = transfer.reservation?.active ? " Os itens foram reservados." : "";
+    return {
+      type: isSource || isGlobal ? "TRANSFER_ACTION_REQUIRED" : "TRANSFER_UPDATE",
+      title: "Solicitação aprovada",
+      message: isGlobal
+        ? `${route}: ${transfer.sourceCompanyName} aprovou ${itemsLabel}.${reservedNote}`
+        : isDestination
+        ? `${transfer.sourceCompanyName} aprovou sua solicitação de ${itemsLabel}.${reservedNote}`
+        : `Você aprovou ${itemsLabel} para ${transfer.destinationCompanyName}.${reservedNote} Assine o envio quando os pneus saírem.`
+    };
+  }
+
+  if (status === "RECUSADO" && prevStatus !== "RECUSADO") {
+    return {
+      type: "TRANSFER_CANCELLED",
+      title: "Solicitação recusada",
+      message: `${route}: ${itemsLabel} — ${transfer.rejectReason || "sem motivo informado"}.`
+    };
   }
 
   if (status === "PENDENTE" && prevStatus === "AGENDADO") {

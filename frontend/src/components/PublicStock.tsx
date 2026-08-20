@@ -3,7 +3,7 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { StockItem, Company } from "../types";
 import { Search, Loader2, CircleDashed, Package, Store } from "lucide-react";
-import { matchesTireSize } from "../utils";
+import { availableQuantity, matchesTireSize } from "../utils";
 
 interface ConsolidatedItem {
   sku: string;
@@ -51,6 +51,7 @@ export default function PublicStock() {
           model: data.model || "",
           size: data.size || "",
           quantity: data.quantity ?? 0,
+          reservedQuantity: data.reservedQuantity ?? 0,
           price: data.price ?? 0,
           priceCash: data.priceCash ?? data.price ?? 0,
           priceInstallment: data.priceInstallment ?? data.price ?? 0,
@@ -114,8 +115,10 @@ export default function PublicStock() {
     // Filtra apenas produtos que têm alguma quantidade > 0 em alguma filial
     // Como é um catálogo de vendas, talvez não faça sentido mostrar itens totalmente esgotados
     // Se quiser mostrar tudo, basta remover o filtro abaixo.
+    // "Disponível" aqui é o saldo LIVRE: pneu reservado para uma transferência
+    // aprovada já tem dono, e prometê-lo de novo no catálogo é venda que não fecha.
     const availableItems = Array.from(map.values()).filter(item => {
-      return Object.values(item.docs).some(doc => doc.quantity > 0);
+      return Object.values(item.docs).some(doc => availableQuantity(doc) > 0);
     });
 
     return availableItems.sort((a, b) => a.sku.localeCompare(b.sku));
@@ -230,8 +233,8 @@ export default function PublicStock() {
                       <Store size={12} className="mr-1" /> Disponibilidade
                     </div>
                     {companies.map(comp => {
-                      const qty = item.docs[comp.id]?.quantity || 0;
-                      if (qty === 0) return null; // Só exibe filiais que tem o pneu
+                      const qty = availableQuantity(item.docs[comp.id]);
+                      if (qty === 0) return null; // Só exibe filiais que tem o pneu livre
 
                       return (
                         <div key={comp.id} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">

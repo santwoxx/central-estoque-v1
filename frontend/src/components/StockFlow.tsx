@@ -8,7 +8,7 @@ import {
   StockFlowPayload,
   StockFlowResult
 } from "../types";
-import { exportToCSV, formatBRL, formatDate, matchesTireSize, toMillis } from "../utils";
+import { availableQuantity, exportToCSV, formatBRL, formatDate, matchesTireSize, reservedQuantityOf, toMillis } from "../utils";
 import {
   PackagePlus,
   PackageMinus,
@@ -34,7 +34,8 @@ import {
   ArrowUpRight,
   Keyboard,
   Info,
-  ClipboardList
+  ClipboardList,
+  Lock
 } from "lucide-react";
 
 interface StockFlowProps {
@@ -136,7 +137,9 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
   const pickerItems = useMemo(() => {
     const term = search.trim().toLowerCase();
     return operableStock
-      .filter(item => (mode === "SAIDA" ? item.quantity > 0 : true))
+      // Na saída, o que conta é o saldo LIVRE: pneu inteiramente reservado para
+      // uma transferência aprovada não pode ser baixado, então some da lista.
+      .filter(item => (mode === "SAIDA" ? availableQuantity(item) > 0 : true))
       .filter(item =>
         !term ||
         item.sku.toLowerCase().includes(term) ||
@@ -167,10 +170,22 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
       .map(line => {
         const item = stockById.get(line.stockItemId);
         if (!item) return null;
-        const exceeds = mode === "SAIDA" && line.quantity > item.quantity;
-        return { ...line, item, exceeds };
+        const free = availableQuantity(item);
+        const exceeds = mode === "SAIDA" && line.quantity > free;
+        // Distingue "não tem pneu" de "tem pneu, mas está prometido": a mensagem
+        // de erro muda completamente para quem está no balcão.
+        const blockedByReservation = mode === "SAIDA" && line.quantity > free && line.quantity <= item.quantity;
+        return { ...line, item, exceeds, free, blockedByReservation };
       })
-      .filter(Boolean) as { stockItemId: string; quantity: number; unitPrice: number; item: StockItem; exceeds: boolean }[];
+      .filter(Boolean) as {
+        stockItemId: string;
+        quantity: number;
+        unitPrice: number;
+        item: StockItem;
+        exceeds: boolean;
+        free: number;
+        blockedByReservation: boolean;
+      }[];
   }, [cart, stockById, mode]);
 
   const cartUnits = cartLines.reduce((acc, l) => acc + l.quantity, 0);
@@ -237,8 +252,16 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
 
   const addToCart = (item: StockItem, amount: number = 1) => {
     if (!mode) return;
+    const free = availableQuantity(item);
     if (mode === "SAIDA" && item.quantity <= 0) {
       setError("Este pneu está com saldo zerado — não é possível dar baixa.");
+      return;
+    }
+    if (mode === "SAIDA" && free <= 0) {
+      setError(
+        `Todas as ${reservedQuantityOf(item)} un deste pneu estão reservadas para uma transferência aprovada. ` +
+        `Libere a reserva na aba Transferências para poder dar baixa.`
+      );
       return;
     }
     setError("");
@@ -249,10 +272,10 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
       const existing = prev.find(l => l.stockItemId === item.id);
       if (existing) {
         const nextQty = existing.quantity + amount;
-        const capped = mode === "SAIDA" ? Math.min(nextQty, item.quantity) : nextQty;
+        const capped = mode === "SAIDA" ? Math.min(nextQty, free) : nextQty;
         return prev.map(l => (l.stockItemId === item.id ? { ...l, quantity: capped } : l));
       }
-      const initial = mode === "SAIDA" ? Math.min(amount, item.quantity) : amount;
+      const initial = mode === "SAIDA" ? Math.min(amount, free) : amount;
       return [...prev, { stockItemId: item.id, quantity: initial, unitPrice: defaultPriceFor(item, mode) }];
     });
   };
@@ -1246,7 +1269,10 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
                     ) : (
                       pickerItems.map(item => {
                         const inCart = cart.find(l => l.stockItemId === item.id);
-                        const isLow = item.quantity <= 4;
+                        const itemFree = availableQuantity(item);
+                        const itemReserved = reservedQuantityOf(item);
+                        // Na saída, "baixo" se mede pelo que dá para vender de verdade.
+                        const isLow = (isEntrada ? item.quantity : itemFree) <= 4;
                         return (
                           <div
                             key={item.id}
@@ -1270,9 +1296,19 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
 
                             <div className="text-right shrink-0">
                               <span className={`block text-[11px] font-black font-mono ${isLow ? "text-red-600" : "text-slate-700"}`}>
-                                {item.quantity} un
+                                {isEntrada ? item.quantity : itemFree} un
                               </span>
-                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">em estoque</span>
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+                                {isEntrada ? "em estoque" : "livre"}
+                              </span>
+                              {itemReserved > 0 && (
+                                <span
+                                  className="mt-0.5 inline-flex items-center gap-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 py-0.5 uppercase tracking-wider"
+                                  title={`${itemReserved} un reservadas para uma transferência aprovada — bloqueadas para venda.`}
+                                >
+                                  <Lock size={8} /> {itemReserved} reserv.
+                                </span>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-1 shrink-0">
@@ -1281,7 +1317,7 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
                                   key={q}
                                   type="button"
                                   onClick={e => { e.stopPropagation(); addToCart(item, q); }}
-                                  disabled={mode === "SAIDA" && item.quantity < 1}
+                                  disabled={mode === "SAIDA" && itemFree < 1}
                                   className={`h-7 w-7 rounded-lg text-[10px] font-black transition-all cursor-pointer disabled:opacity-30 ${
                                     isEntrada
                                       ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white border border-emerald-200"
@@ -1351,6 +1387,9 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
                               <div className="text-[10px] text-slate-500 font-bold mt-0.5 truncate">
                                 {line.item.model} • <span className="font-mono">{line.item.size}</span>
                                 <span className="text-slate-400"> • saldo atual {line.item.quantity} un</span>
+                                {reservedQuantityOf(line.item) > 0 && (
+                                  <span className="text-amber-700 font-black"> • {reservedQuantityOf(line.item)} un reservadas (livre: {line.free} un)</span>
+                                )}
                               </div>
                             </div>
                             <button
@@ -1417,7 +1456,9 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
                           {line.exceeds && (
                             <div className="flex items-center gap-1.5 text-[10px] font-black text-red-600 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
                               <AlertTriangle size={12} className="shrink-0" />
-                              Saldo insuficiente: só há {line.item.quantity} un disponíveis.
+                              {line.blockedByReservation
+                                ? `${reservedQuantityOf(line.item)} un estão reservadas para uma transferência aprovada — livre para baixa: ${line.free} un.`
+                                : `Saldo insuficiente: só há ${line.free} un disponíveis.`}
                             </div>
                           )}
                         </div>

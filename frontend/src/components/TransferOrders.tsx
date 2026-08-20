@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord, SignatureMethod } from "../types";
-import { exportToCSV, formatDate, matchesTireSize, toMillis } from "../utils";
+import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord, SignatureMethod, TransferRequestKind } from "../types";
+import { availableQuantity, exportToCSV, formatDate, matchesTireSize, reservedQuantityOf, toMillis } from "../utils";
 import SignaturePad from "./SignaturePad";
 import DriverSignature from "./DriverSignature";
 import {
@@ -23,6 +23,11 @@ import {
   AlertTriangle,
   PenLine,
   Trash2,
+  Lock,
+  LockOpen,
+  Check,
+  Inbox,
+  HandHelping,
 } from "lucide-react";
 
 interface TransferOrdersProps {
@@ -38,8 +43,16 @@ interface TransferOrdersProps {
     destinationCompanyName: string;
     reason: string;
     scheduledFor: Date | null;
+    requestKind?: TransferRequestKind;
   }) => Promise<void>;
   onCancelTransfer: (transferId: string, reason: string) => Promise<void>;
+  // Fluxo de SOLICITACAO: quem recebe o pedido (a empresa de origem, dona dos
+  // pneus) decide. Aprovar ja reserva os itens; recusar encerra o pedido.
+  onApproveRequest?: (transferId: string) => Promise<void>;
+  onRejectRequest?: (transferId: string, reason: string) => Promise<void>;
+  // Reserva avulsa de um envio ja pendente/agendado, e a liberacao dela.
+  onReserveItems?: (transferId: string) => Promise<void>;
+  onReleaseReservation?: (transferId: string) => Promise<void>;
   // A saida e a chegada acontecem em DUAS vias cada: primeiro a assinatura
   // interna (grava na hora), depois a do motorista (link publico ou foto do
   // papel). O estoque so se move na segunda.
@@ -52,6 +65,8 @@ interface TransferOrdersProps {
 }
 
 const STATUS_LABELS: Record<TransferStatus, string> = {
+  SOLICITADO: "Aguardando Aprovação",
+  RECUSADO: "Recusado",
   AGENDADO: "Agendado",
   PENDENTE: "Aguardando Entrega",
   EM_TRANSITO: "Em Trânsito",
@@ -67,6 +82,8 @@ const METHOD_LABELS: Record<string, string> = {
 };
 
 const STATUS_BADGE_STYLES: Record<TransferStatus, string> = {
+  SOLICITADO: "bg-violet-50 text-violet-800 border-violet-200",
+  RECUSADO: "bg-rose-50 text-rose-700 border-rose-200",
   AGENDADO: "bg-slate-100 text-slate-700 border-slate-200",
   PENDENTE: "bg-amber-50 text-amber-800 border-amber-200",
   EM_TRANSITO: "bg-blue-50 text-blue-800 border-blue-200",
@@ -81,6 +98,10 @@ export default function TransferOrders({
   user,
   onCreateTransfer,
   onCancelTransfer,
+  onApproveRequest,
+  onRejectRequest,
+  onReserveItems,
+  onReleaseReservation,
   onSignSenderDispatch,
   onCompleteDispatch,
   onSignReceiverArrival,
@@ -133,6 +154,9 @@ export default function TransferOrders({
 
   // ── Create modal state ──────────────────────────────────────────
   const [showCreateModal, setShowCreateModal] = useState(false);
+  // ENVIO = eu mando os pneus. SOLICITACAO = eu peço os pneus de outra empresa,
+  // e ela decide se aprova (reservando) ou recusa.
+  const [formKind, setFormKind] = useState<TransferRequestKind>("ENVIO");
   const [formSourceCompanyId, setFormSourceCompanyId] = useState(isAlimentador ? user.companyId || "" : "");
   const [formStockSearch, setFormStockSearch] = useState("");
   const [formSelectedStockItemId, setFormSelectedStockItemId] = useState("");
@@ -164,18 +188,39 @@ export default function TransferOrders({
   // "Aguardando minha ação" cobre as quatro etapas.
   const canSignDelivery = (t: TransferOrder) => canSignSender(t) || canCollectDispatchDriver(t);
   const canSignReceipt = (t: TransferOrder) => canSignReceiver(t) || canCollectArrivalDriver(t);
-  const canCancel = (t: TransferOrder) => (t.status === "AGENDADO" || t.status === "PENDENTE") && (isSourceOf(t) || isDestinationOf(t));
+
+  // ── Solicitações e reservas ──────────────────────────────────────
+  // Quem decide sobre uma solicitação é a empresa de ORIGEM: é ela que tem os
+  // pneus no galpão e é o estoque dela que fica preso quando a reserva entra.
+  const isReserved = (t: TransferOrder) => t.reservation?.active === true;
+  const canDecideRequest = (t: TransferOrder) => t.status === "SOLICITADO" && isSourceOf(t);
+  const canReserve = (t: TransferOrder) =>
+    (t.status === "AGENDADO" || t.status === "PENDENTE") && isSourceOf(t) && !isReserved(t);
+  const canRelease = (t: TransferOrder) =>
+    (t.status === "AGENDADO" || t.status === "PENDENTE") && isSourceOf(t) && isReserved(t);
+
+  // Um pedido com reserva ativa segura pneus no estoque da origem, e só a origem
+  // consegue devolvê-los — por isso o destino não cancela um pedido reservado
+  // (o Firestore aplica a mesma regra do lado do banco).
+  const canCancel = (t: TransferOrder) => {
+    if (t.status === "SOLICITADO") return isSourceOf(t) || isDestinationOf(t);
+    if (t.status !== "AGENDADO" && t.status !== "PENDENTE") return false;
+    if (isReserved(t)) return isSourceOf(t);
+    return isSourceOf(t) || isDestinationOf(t);
+  };
   const canReverse = (t: TransferOrder) => t.status === "EM_TRANSITO" && isGlobalAdmin;
 
   // ── Derived: item list available for the create form ───────────
   const effectiveSourceCompanyId = formSourceCompanyId;
   const effectiveSourceCompanyName = companies.find(c => c.id === effectiveSourceCompanyId)?.name || "";
 
+  // O que dá para pedir/enviar é o saldo LIVRE: pneu já reservado para outra
+  // empresa não entra na lista, mesmo estando fisicamente no galpão.
   const sourceStockOptions = useMemo(() => {
     if (!effectiveSourceCompanyId) return [];
     const lower = formStockSearch.toLowerCase();
     return stock
-      .filter(item => item.companyId === effectiveSourceCompanyId && item.quantity > 0)
+      .filter(item => item.companyId === effectiveSourceCompanyId && availableQuantity(item) > 0)
       .filter(item =>
         !lower ||
         item.sku.toLowerCase().includes(lower) ||
@@ -189,7 +234,16 @@ export default function TransferOrders({
   }, [stock, effectiveSourceCompanyId, formStockSearch]);
 
   const selectedStockItem = stock.find(item => item.id === formSelectedStockItemId) || null;
+  const selectedAvailable = availableQuantity(selectedStockItem);
+  const selectedReserved = reservedQuantityOf(selectedStockItem);
   const destinationOptions = companies.filter(c => c.id !== effectiveSourceCompanyId);
+  // Numa solicitação, a empresa que recebe sou eu: o destino fica travado para
+  // operadores (o admin global segue escolhendo os dois lados).
+  const isSolicitacao = formKind === "SOLICITACAO";
+  const lockDestination = isSolicitacao && !isGlobalAdmin;
+  const sourceOptions = lockDestination
+    ? companies.filter(c => c.id !== user.companyId)
+    : companies;
 
   // ── Filtering / sorting the transfer list ───────────────────────
   const filteredTransfers = useMemo(() => {
@@ -205,7 +259,9 @@ export default function TransferOrders({
 
       const matchesStatus =
         statusFilter === "ALL" ||
-        (statusFilter === "ACAO_NECESSARIA" ? canSignDelivery(t) || canSignReceipt(t) : t.status === statusFilter);
+        (statusFilter === "ACAO_NECESSARIA"
+          ? canSignDelivery(t) || canSignReceipt(t) || canDecideRequest(t)
+          : t.status === statusFilter);
 
       // Data do pedido: e a data que o usuario reconhece como "quando isso aconteceu".
       const requestedMillis = toMillis(t.requestedAt);
@@ -224,11 +280,13 @@ export default function TransferOrders({
   }, [transfers, searchTerm, statusFilter, periodFilter, periodRange, companyFilter]);
 
   // ── Reset / open create modal ───────────────────────────────────
-  const openCreateModal = () => {
-    setFormSourceCompanyId(isAlimentador ? user.companyId || "" : "");
+  const openCreateModal = (kind: TransferRequestKind = "ENVIO") => {
+    setFormKind(kind);
+    // No envio eu sou a origem; na solicitação eu sou o destino.
+    setFormSourceCompanyId(kind === "ENVIO" && isAlimentador ? user.companyId || "" : "");
     setFormStockSearch("");
     setFormSelectedStockItemId("");
-    setFormDestinationCompanyId("");
+    setFormDestinationCompanyId(kind === "SOLICITACAO" && !isGlobalAdmin ? user.companyId || "" : "");
     setFormQuantity("");
     setFormItems([]);
     setFormReason("");
@@ -253,9 +311,13 @@ export default function TransferOrders({
       setCreateError("Informe uma quantidade válida.");
       return;
     }
-    const maxQty = Number(selectedStockItem.quantity);
+    const maxQty = availableQuantity(selectedStockItem);
+    const reserved = reservedQuantityOf(selectedStockItem);
     if (qty > maxQty) {
-      setCreateError(`Quantidade indisponível. Saldo atual: ${maxQty} un.`);
+      setCreateError(
+        `Quantidade indisponível. Saldo livre: ${maxQty} un` +
+        (reserved > 0 ? ` (${reserved} un já reservadas para outra transferência).` : ".")
+      );
       return;
     }
     
@@ -299,6 +361,14 @@ export default function TransferOrders({
       setCreateError("Você só pode criar transferências que envolvam a sua própria loja.");
       return;
     }
+    if (isSolicitacao && !isGlobalAdmin && formDestinationCompanyId !== user.companyId) {
+      setCreateError("Numa solicitação, a empresa de destino tem que ser a sua — é você quem vai receber os pneus.");
+      return;
+    }
+    if (isSolicitacao && effectiveSourceCompanyId === formDestinationCompanyId) {
+      setCreateError("Escolha a empresa que tem os pneus — ela precisa ser diferente da sua.");
+      return;
+    }
 
     let scheduledDate: Date | null = null;
     if (formIsScheduled) {
@@ -324,7 +394,8 @@ export default function TransferOrders({
         destinationCompanyId: formDestinationCompanyId,
         destinationCompanyName: destinationCompany?.name || "",
         reason: formReason,
-        scheduledFor: scheduledDate
+        scheduledFor: scheduledDate,
+        requestKind: formKind
       });
       setShowCreateModal(false);
     } catch (err: any) {
@@ -370,6 +441,71 @@ export default function TransferOrders({
       setDriverTarget(null);
     } catch (err: any) {
       throw new Error(err?.message || "Erro ao concluir a operação.");
+    } finally {
+      setProcessingId("");
+    }
+  };
+
+  // Aprovar já reserva: entre o clique e a reserva não existe janela em que o
+  // pneu esteja prometido mas ainda vendável (as duas coisas são uma transação só).
+  const handleApproveClick = async (t: TransferOrder) => {
+    if (!onApproveRequest) return;
+    const units = totalUnitsOf(t);
+    if (!window.confirm(
+      `Aprovar esta solicitação de ${t.destinationCompanyName}?\n\n` +
+      `${units} un serão RESERVADAS no seu estoque e ficarão bloqueadas para venda ` +
+      `até o envio ser assinado.`
+    )) return;
+    setProcessingId(t.id);
+    try {
+      await onApproveRequest(t.id);
+    } catch (err: any) {
+      alert(err.message || "Erro ao aprovar a solicitação.");
+    } finally {
+      setProcessingId("");
+    }
+  };
+
+  const handleRejectClick = async (t: TransferOrder) => {
+    if (!onRejectRequest) return;
+    const reason = window.prompt("Motivo da recusa (será mostrado a quem solicitou):", "") || "";
+    if (!window.confirm("Confirma a recusa desta solicitação?")) return;
+    setProcessingId(t.id);
+    try {
+      await onRejectRequest(t.id, reason);
+    } catch (err: any) {
+      alert(err.message || "Erro ao recusar a solicitação.");
+    } finally {
+      setProcessingId("");
+    }
+  };
+
+  const handleReserveClick = async (t: TransferOrder) => {
+    if (!onReserveItems) return;
+    if (!window.confirm(
+      `Reservar ${totalUnitsOf(t)} un no seu estoque para esta transferência?\n\n` +
+      `Enquanto a reserva estiver ativa, esses pneus não poderão ser vendidos nem baixados.`
+    )) return;
+    setProcessingId(t.id);
+    try {
+      await onReserveItems(t.id);
+    } catch (err: any) {
+      alert(err.message || "Erro ao reservar os itens.");
+    } finally {
+      setProcessingId("");
+    }
+  };
+
+  const handleReleaseClick = async (t: TransferOrder) => {
+    if (!onReleaseReservation) return;
+    if (!window.confirm(
+      "Liberar a reserva destes itens? Eles voltam a ficar disponíveis para venda e o pedido continua aberto."
+    )) return;
+    setProcessingId(t.id);
+    try {
+      await onReleaseReservation(t.id);
+    } catch (err: any) {
+      alert(err.message || "Erro ao liberar a reserva.");
     } finally {
       setProcessingId("");
     }
@@ -646,6 +782,8 @@ export default function TransferOrders({
       { key: "driverDropoffMethod", label: "Entrega - Forma da Assinatura" },
       { key: "receiptSignerName", label: "Assinatura Recebimento - Nome" },
       { key: "receiptSignedAtFormatted", label: "Assinatura Recebimento - Data" },
+      { key: "reservationStatus", label: "Reserva de Estoque" },
+      { key: "requestKindLabel", label: "Tipo do Pedido" },
       { key: "reason", label: "Motivo" }
     ];
 
@@ -667,6 +805,12 @@ export default function TransferOrders({
       driverDropoffMethod: METHOD_LABELS[t.arrival?.driver?.method || ""] || "",
       receiptSignerName: t.arrival?.receiver?.signedByName || t.receipt?.signedByName || "",
       receiptSignedAtFormatted: t.arrival?.receiver ? formatDate(t.arrival.receiver.signedAt) : (t.receipt ? formatDate(t.receipt.signedAt) : ""),
+      reservationStatus: t.reservation?.active
+        ? `Ativa (${totalUnitsOf(t)} un por ${t.reservation.reservedByName || "—"} em ${formatDate(t.reservation.reservedAt)})`
+        : t.reservation
+        ? `Encerrada — ${t.reservation.releasedReason || "liberada"}`
+        : "Sem reserva",
+      requestKindLabel: t.requestKind === "SOLICITACAO" ? "Solicitação do destino" : "Envio da origem",
       reason: t.reason
     }));
 
@@ -698,11 +842,13 @@ export default function TransferOrders({
           >
             <option value="ALL">Todos os Status</option>
             <option value="ACAO_NECESSARIA">Aguardando Minha Ação</option>
+            <option value="SOLICITADO">Solicitações Aguardando Aprovação</option>
             <option value="AGENDADO">Agendados</option>
             <option value="PENDENTE">Aguardando Envio</option>
             <option value="EM_TRANSITO">Em Trânsito</option>
             <option value="CONCLUIDO">Concluídos</option>
             <option value="CANCELADO">Cancelados</option>
+            <option value="RECUSADO">Recusados</option>
           </select>
 
           <button
@@ -724,7 +870,18 @@ export default function TransferOrders({
 
           {canCreate && (
             <button
-              onClick={openCreateModal}
+              onClick={() => openCreateModal("SOLICITACAO")}
+              title="Pedir pneus de outra empresa. Ela decide se aprova — e ao aprovar, reserva os itens para você."
+              className="flex items-center justify-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white font-black rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer"
+            >
+              <HandHelping size={14} className="stroke-[2.5px]" /> Solicitar Pneus
+            </button>
+          )}
+
+          {canCreate && (
+            <button
+              onClick={() => openCreateModal("ENVIO")}
+              title="Enviar pneus da sua empresa para outra"
               className="flex items-center justify-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer"
             >
               <Plus size={14} className="stroke-[3px]" /> Nova Transferência
@@ -821,6 +978,19 @@ export default function TransferOrders({
                       <span className={`inline-block px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider ${STATUS_BADGE_STYLES[t.status]}`}>
                         {STATUS_LABELS[t.status]}
                       </span>
+                      {t.requestKind === "SOLICITACAO" && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-violet-50 text-violet-700 border-violet-200">
+                          <HandHelping size={10} /> Solicitação de {t.destinationCompanyName}
+                        </span>
+                      )}
+                      {isReserved(t) && (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-amber-100 text-amber-900 border-amber-300"
+                          title={`${totalUnitsOf(t)} un bloqueadas no estoque de ${t.sourceCompanyName} — não podem ser vendidas nem baixadas.`}
+                        >
+                          <Lock size={10} /> Estoque Reservado
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex flex-col gap-1.5 w-full">
@@ -870,8 +1040,13 @@ export default function TransferOrders({
                 {/* Signature status strip: mostra as DUAS vias de cada ponta,
                     inclusive o estado intermediario "interna assinada, motorista
                     pendente" — antes esta faixa lia dispatch.driver direto e
-                    quebrava assim que a via interna existia sozinha. */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    quebrava assim que a via interna existia sozinha.
+                    Some enquanto o pedido ainda nao virou transferencia de fato
+                    (solicitacao aguardando aval, ou recusada): quatro caixas
+                    "Aguardando" ali so poluem a decisao de aprovar/recusar. */}
+                <div className={`grid grid-cols-1 sm:grid-cols-2 gap-2.5 ${
+                  t.status === "SOLICITADO" || t.status === "RECUSADO" ? "hidden" : ""
+                }`}>
                   {([
                     {
                       key: "dispatch",
@@ -938,6 +1113,36 @@ export default function TransferOrders({
                   })}
                 </div>
 
+                {isReserved(t) && (
+                  <div className="flex items-start gap-1.5 text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+                    <Lock size={13} className="shrink-0 mt-0.5" />
+                    <span>
+                      <strong>{totalUnitsOf(t)} un reservadas</strong> no estoque de {t.sourceCompanyName} para {t.destinationCompanyName}
+                      {t.reservation?.reservedByName ? ` — por ${t.reservation.reservedByName}` : ""}
+                      {t.reservation?.reservedAt ? ` em ${formatDate(t.reservation.reservedAt)}` : ""}.
+                      {" "}Enquanto a reserva estiver ativa, esses pneus não podem ser vendidos nem baixados.
+                    </span>
+                  </div>
+                )}
+
+                {t.status === "SOLICITADO" && (
+                  <div className="flex items-start gap-1.5 text-[11px] text-violet-800 bg-violet-50 border border-violet-200 rounded-xl p-2.5">
+                    <Inbox size={13} className="shrink-0 mt-0.5" />
+                    <span>
+                      {isSourceOf(t)
+                        ? <><strong>{t.destinationCompanyName}</strong> está pedindo estes pneus. Ao aprovar, eles ficam reservados no seu estoque e bloqueados para venda.</>
+                        : <>Aguardando <strong>{t.sourceCompanyName}</strong> aprovar e reservar os pneus.</>}
+                    </span>
+                  </div>
+                )}
+
+                {t.status === "RECUSADO" && (
+                  <div className="flex items-start gap-1.5 text-[11px] text-rose-700 bg-rose-50 border border-rose-100 rounded-xl p-2.5">
+                    <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                    <span><strong>{t.rejectedByName || t.sourceCompanyName}</strong> recusou: {t.rejectReason || "sem motivo informado"}</span>
+                  </div>
+                )}
+
                 {t.status === "CANCELADO" && t.cancelReason && (
                   <div className="flex items-start gap-1.5 text-[11px] text-red-700 bg-red-50 border border-red-100 rounded-xl p-2.5">
                     <AlertTriangle size={13} className="shrink-0 mt-0.5" />
@@ -948,6 +1153,45 @@ export default function TransferOrders({
                 {/* Action buttons */}
                 {!isVendedor && (
                   <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                    {canDecideRequest(t) && onApproveRequest && (
+                      <button
+                        disabled={isProcessing}
+                        onClick={() => handleApproveClick(t)}
+                        title="Aprovar a solicitação e reservar os pneus no seu estoque"
+                        className="flex items-center gap-1.5 px-3.5 py-2 bg-violet-600 hover:bg-violet-700 text-white font-black rounded-xl text-[11px] shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Aprovar e Reservar
+                      </button>
+                    )}
+                    {canDecideRequest(t) && onRejectRequest && (
+                      <button
+                        disabled={isProcessing}
+                        onClick={() => handleRejectClick(t)}
+                        className="flex items-center gap-1.5 px-3.5 py-2 border border-rose-200 text-rose-600 hover:bg-rose-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <Ban size={13} /> Recusar
+                      </button>
+                    )}
+                    {canReserve(t) && onReserveItems && (
+                      <button
+                        disabled={isProcessing}
+                        onClick={() => handleReserveClick(t)}
+                        title="Bloquear estes pneus no seu estoque até o envio"
+                        className="flex items-center gap-1.5 px-3.5 py-2 border border-amber-300 text-amber-800 bg-amber-50 hover:bg-amber-100 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Lock size={13} />} Reservar Itens
+                      </button>
+                    )}
+                    {canRelease(t) && onReleaseReservation && (
+                      <button
+                        disabled={isProcessing}
+                        onClick={() => handleReleaseClick(t)}
+                        title="Devolver estes pneus ao saldo disponível sem cancelar o pedido"
+                        className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <LockOpen size={13} />} Liberar Reserva
+                      </button>
+                    )}
                     {canSignSender(t) && (
                       <button
                         disabled={isProcessing}
@@ -1068,7 +1312,9 @@ export default function TransferOrders({
           <div className="bg-white rounded-3xl p-6 max-w-lg w-full border border-slate-200 shadow-2xl space-y-4 my-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                <ArrowLeftRight size={16} className="text-gold-600" /> Nova Transferência entre Empresas
+                {isSolicitacao
+                  ? <><HandHelping size={16} className="text-violet-600" /> Solicitar Pneus de Outra Empresa</>
+                  : <><ArrowLeftRight size={16} className="text-gold-600" /> Nova Transferência entre Empresas</>}
               </h3>
               <button
                 onClick={() => setShowCreateModal(false)}
@@ -1077,6 +1323,39 @@ export default function TransferOrders({
                 <X size={16} />
               </button>
             </div>
+
+            {/* Os dois sentidos do fluxo. Mudar aqui zera as empresas, porque a
+                origem de um vira o destino do outro. */}
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                { value: "ENVIO", label: "Vou enviar", hint: "Saio do meu estoque" },
+                { value: "SOLICITACAO", label: "Vou solicitar", hint: "Peço de outra empresa" }
+              ] as const).map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => { if (formKind !== opt.value) openCreateModal(opt.value); }}
+                  className={`px-3 py-2 rounded-xl border text-left transition-colors cursor-pointer ${
+                    formKind === opt.value
+                      ? "bg-slate-900 text-white border-slate-900"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="text-[11px] font-black uppercase tracking-wider">{opt.label}</div>
+                  <div className={`text-[9px] font-bold ${formKind === opt.value ? "text-slate-300" : "text-slate-400"}`}>
+                    {opt.hint}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {isSolicitacao && (
+              <div className="bg-violet-50 border border-violet-200 text-violet-800 p-2.5 rounded-xl text-[11px] font-semibold leading-relaxed">
+                A empresa escolhida recebe o pedido e decide. Se aprovar, os pneus ficam
+                <strong> reservados no estoque dela</strong> — bloqueados para venda — até a
+                assinatura do envio.
+              </div>
+            )}
 
             {createError && (
               <div className="bg-red-50 text-red-700 p-3 rounded-xl text-xs font-semibold border-l-4 border-red-500">
@@ -1088,7 +1367,7 @@ export default function TransferOrders({
               {/* Source company */}
               <div>
                 <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
-                  Empresa de Origem *
+                  {isSolicitacao ? "Empresa que tem os pneus *" : "Empresa de Origem *"}
                 </label>
                 <select
                   required
@@ -1100,8 +1379,10 @@ export default function TransferOrders({
                   }}
                   className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
                 >
-                  <option value="">Selecione a empresa que vai enviar o item</option>
-                  {companies.map(c => (
+                  <option value="">
+                    {isSolicitacao ? "Selecione de qual empresa você quer os pneus" : "Selecione a empresa que vai enviar o item"}
+                  </option>
+                  {sourceOptions.map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
@@ -1119,7 +1400,12 @@ export default function TransferOrders({
                           <span className="font-mono font-extrabold text-gold-700">{selectedStockItem.sku}</span>{" "}
                           <span className="font-bold text-slate-800">{selectedStockItem.brand} {selectedStockItem.model}</span>{" "}
                           <span className="text-slate-400 font-mono">({selectedStockItem.size})</span>
-                          <div className="text-[10px] text-slate-500 font-semibold mt-0.5">Saldo disponível: {selectedStockItem.quantity} un</div>
+                          <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
+                            Saldo livre: {selectedAvailable} un
+                            {selectedReserved > 0 && (
+                              <span className="text-amber-700"> • {selectedReserved} un reservadas para outra transferência</span>
+                            )}
+                          </div>
                         </div>
                         <button
                           type="button"
@@ -1144,10 +1430,10 @@ export default function TransferOrders({
                           <input
                             type="number"
                             min={1}
-                            max={selectedStockItem.quantity}
+                            max={selectedAvailable}
                             value={formQuantity}
                             onChange={e => setFormQuantity(e.target.value)}
-                            placeholder={`Máx. ${selectedStockItem.quantity}`}
+                            placeholder={`Máx. ${selectedAvailable}`}
                             className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
                           />
                         </div>
@@ -1181,7 +1467,7 @@ export default function TransferOrders({
                     {effectiveSourceCompanyId && (
                       <div className="max-h-44 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
                         {sourceStockOptions.length === 0 ? (
-                          <div className="p-3 text-xs text-slate-400 font-semibold text-center">Nenhum item com saldo disponível encontrado.</div>
+                          <div className="p-3 text-xs text-slate-400 font-semibold text-center">Nenhum item com saldo livre encontrado (itens reservados não aparecem aqui).</div>
                         ) : (
                           sourceStockOptions.map(item => (
                             <button
@@ -1198,7 +1484,12 @@ export default function TransferOrders({
                                 <span className="font-bold text-slate-800">{item.brand} {item.model}</span>{" "}
                                 <span className="text-slate-400 font-mono">({item.size})</span>
                               </span>
-                              <span className="text-[10px] font-mono font-bold text-slate-500 shrink-0">{item.quantity} un</span>
+                              <span className="text-[10px] font-mono font-bold text-slate-500 shrink-0 text-right">
+                                {availableQuantity(item)} un
+                                {reservedQuantityOf(item) > 0 && (
+                                  <span className="block text-[9px] text-amber-700 font-bold">{reservedQuantityOf(item)} reserv.</span>
+                                )}
+                              </span>
                             </button>
                           ))
                         )}
@@ -1245,19 +1536,27 @@ export default function TransferOrders({
 
                 <div>
                   <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5 mt-2">
-                    Empresa de Destino *
+                    {isSolicitacao ? "Empresa que vai receber *" : "Empresa de Destino *"}
                   </label>
-                  <select
-                    required
-                    value={formDestinationCompanyId}
-                    onChange={e => setFormDestinationCompanyId(e.target.value)}
-                    className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
-                  >
-                    <option value="">Selecione</option>
-                    {destinationOptions.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
+                  {lockDestination ? (
+                    <div className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 flex items-center gap-1.5">
+                      <Building2 size={13} className="text-slate-400" />
+                      {user.companyName || "Sua empresa"}
+                      <span className="ml-auto text-[9px] font-black uppercase tracking-wider text-slate-400">Você</span>
+                    </div>
+                  ) : (
+                    <select
+                      required
+                      value={formDestinationCompanyId}
+                      onChange={e => setFormDestinationCompanyId(e.target.value)}
+                      className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
+                    >
+                      <option value="">Selecione</option>
+                      {destinationOptions.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               </div>
 
@@ -1274,7 +1573,7 @@ export default function TransferOrders({
                 />
               </div>
 
-              <div className="border-t border-slate-100 pt-3 space-y-2.5">
+              <div className={`border-t border-slate-100 pt-3 space-y-2.5 ${isSolicitacao ? "hidden" : ""}`}>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -1314,7 +1613,9 @@ export default function TransferOrders({
                   className="px-4 py-2 bg-gradient-to-r from-gold-600 to-amber-550 text-white rounded-xl text-xs font-extrabold shadow-md hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-60"
                 >
                   {createLoading && <Loader2 size={12} className="animate-spin" />}
-                  {formIsScheduled ? "Agendar Transferência" : "Criar Pedido de Transferência"}
+                  {isSolicitacao
+                    ? "Enviar Solicitação"
+                    : formIsScheduled ? "Agendar Transferência" : "Criar Pedido de Transferência"}
                 </button>
               </div>
             </form>

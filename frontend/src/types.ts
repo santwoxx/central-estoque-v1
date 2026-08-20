@@ -36,6 +36,11 @@ export interface StockItem {
   model: string;
   size: string;
   quantity: number;
+  // Quantidade presa por reservas de transferencia (pedidos aprovados que ainda
+  // nao sairam fisicamente). Nunca sai daqui por venda/baixa: o saldo LIVRE do
+  // pneu e `quantity - reservedQuantity` (ver `availableQuantity` em utils.ts).
+  // Ausente nos documentos antigos — sempre leia com `?? 0`.
+  reservedQuantity?: number;
   price: number; // Legacy or base price
   priceCash?: number;
   priceInstallment?: number;
@@ -139,7 +144,37 @@ export interface StockFlowResult {
 // ─────────────────────────────────────────────────────────────────
 // Inter-company Stock Transfer (dual signature + scheduling)
 // ─────────────────────────────────────────────────────────────────
-export type TransferStatus = "AGENDADO" | "PENDENTE" | "EM_TRANSITO" | "CONCLUIDO" | "CANCELADO";
+// SOLICITADO/RECUSADO pertencem ao fluxo de PEDIDO (pull): a empresa que PRECISA
+// dos pneus abre a solicitacao e a empresa que os TEM decide. Os demais status
+// pertencem ao fluxo de ENVIO (push), em que a origem ja despacha por conta propria.
+export type TransferStatus =
+  | "SOLICITADO"
+  | "RECUSADO"
+  | "AGENDADO"
+  | "PENDENTE"
+  | "EM_TRANSITO"
+  | "CONCLUIDO"
+  | "CANCELADO";
+
+// Como o pedido nasceu:
+//  ENVIO       — a ORIGEM decidiu mandar (fluxo historico, ja vira PENDENTE/AGENDADO).
+//  SOLICITACAO — o DESTINO pediu; nasce SOLICITADO e depende do aval da origem.
+export type TransferRequestKind = "ENVIO" | "SOLICITACAO";
+
+// Reserva de estoque presa por um pedido de transferencia.
+//
+// Enquanto `active` for true, a quantidade de cada item esta somada em
+// `reservedQuantity` no documento de estoque da ORIGEM, e portanto indisponivel
+// para venda/baixa. A reserva e liberada em exatamente tres momentos: o despacho
+// (o pneu sai de verdade), o cancelamento e a liberacao manual pela origem.
+export interface TransferReservation {
+  active: boolean;
+  reservedByUid: string;
+  reservedByName: string;
+  reservedAt: any;
+  releasedAt?: any;
+  releasedReason?: string;
+}
 
 export interface SignatureRecord {
   signedByUid: string;
@@ -217,6 +252,23 @@ export interface TransferOrder {
   reason: string;
   status: TransferStatus;
   scheduledFor: any | null; // Timestamp, or null for immediate transfers
+
+  // Ausente nos pedidos criados antes do fluxo de solicitacao: trate como "ENVIO".
+  requestKind?: TransferRequestKind;
+
+  // Reserva de estoque na origem. null/ausente = nada preso.
+  reservation?: TransferReservation | null;
+
+  // Quem deu o aval na solicitacao (fluxo SOLICITACAO -> PENDENTE/AGENDADO)
+  approvedByUid?: string;
+  approvedByName?: string;
+  approvedAt?: any;
+
+  // Quem recusou a solicitacao
+  rejectedByUid?: string;
+  rejectedByName?: string;
+  rejectedAt?: any;
+  rejectReason?: string;
 
   // Who requested it
   requestedByUid: string;

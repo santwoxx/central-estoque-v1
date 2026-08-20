@@ -57,9 +57,11 @@ import {
   StockFlowResult,
   StockFlowResultItem,
   StockFlowItemInput,
-  SignatureMethod
+  SignatureMethod,
+  TransferStatus,
+  TransferRequestKind
 } from "./types";
-import { toMillis, formatDate } from "./utils";
+import { toMillis, formatDate, availableQuantity, reservedQuantityOf } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
 // Components
@@ -128,6 +130,16 @@ function mapTransferDoc(docSnap: any): TransferOrder {
     reason: data.reason || "",
     status: data.status || "PENDENTE",
     scheduledFor: data.scheduledFor || null,
+    // Pedidos criados antes do fluxo de solicitacao nao tem requestKind: sao envios.
+    requestKind: data.requestKind || "ENVIO",
+    reservation: data.reservation || null,
+    approvedByUid: data.approvedByUid || "",
+    approvedByName: data.approvedByName || "",
+    approvedAt: data.approvedAt,
+    rejectedByUid: data.rejectedByUid || "",
+    rejectedByName: data.rejectedByName || "",
+    rejectedAt: data.rejectedAt,
+    rejectReason: data.rejectReason || "",
     requestedByUid: data.requestedByUid || "",
     requestedByEmail: data.requestedByEmail || "",
     requestedByName: data.requestedByName || "",
@@ -296,6 +308,7 @@ export default function App() {
           model: data.model || "",
           size: data.size || "",
           quantity: data.quantity ?? 0,
+          reservedQuantity: data.reservedQuantity ?? 0,
           price: data.price ?? 0,
           notes: data.notes || "",
           description: data.description || "",
@@ -890,6 +903,21 @@ export default function App() {
   ) => {
     if (!user) return;
 
+    // Trava de reserva: um pneu prometido a outra empresa nao pode ser baixado.
+    // Vale para qualquer caminho que reduza o saldo por aqui (edicao do cadastro,
+    // baixa rapida do celular, checkout de venda do StockTable).
+    if (updatedFields.quantity !== undefined) {
+      const current = stock.find(item => item.id === itemId);
+      const reserved = reservedQuantityOf(current);
+      const nextQuantity = Number(updatedFields.quantity) || 0;
+      if (reserved > 0 && nextQuantity < reserved) {
+        throw new Error(
+          `Este pneu tem ${reserved} un reservadas para uma transferência já aprovada. ` +
+          `O saldo não pode ficar abaixo disso — libere a reserva na aba Transferências antes de dar baixa.`
+        );
+      }
+    }
+
     try {
       const batch = writeBatch(db);
       const itemDocRef = doc(db, "stock", itemId);
@@ -961,6 +989,14 @@ export default function App() {
       const itemToDrop = stock.find(item => item.id === itemId);
       if (!itemToDrop) return;
 
+      const reserved = reservedQuantityOf(itemToDrop);
+      if (reserved > 0) {
+        throw new Error(
+          `Não é possível excluir: ${reserved} un deste pneu estão reservadas para uma transferência aprovada. ` +
+          `Libere a reserva na aba Transferências primeiro.`
+        );
+      }
+
       const batch = writeBatch(db);
       const itemDocRef = doc(db, "stock", itemId);
       const movementRef = doc(collection(db, "movements"));
@@ -984,8 +1020,9 @@ export default function App() {
       });
 
       await batch.commit();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro ao excluir item:", err);
+      throw new Error(err?.message || "Erro ao excluir produto.");
     }
   };
 
@@ -1026,12 +1063,23 @@ export default function App() {
       throw new Error("Apenas administradores ou donos de empresa podem apagar o estoque.");
     }
 
-    const itemsToClear = user.role === "admin"
+    const scopedItems = user.role === "admin"
       ? (companyId ? stock.filter(item => item.companyId === companyId) : stock)
       : stock.filter(item => item.companyId === user.companyId);
 
-    if (itemsToClear.length === 0) {
+    // Pneu reservado para uma transferencia aprovada fica de fora da limpeza:
+    // apaga-lo deixaria o pedido da outra empresa apontando para o vazio.
+    const reservedItems = scopedItems.filter(item => reservedQuantityOf(item) > 0);
+    const itemsToClear = scopedItems.filter(item => reservedQuantityOf(item) === 0);
+
+    if (scopedItems.length === 0) {
       throw new Error("Nenhum item localizado no estoque para apagar.");
+    }
+    if (itemsToClear.length === 0) {
+      throw new Error(
+        `Todos os ${reservedItems.length} produtos deste escopo estão reservados para transferências aprovadas. ` +
+        `Libere as reservas na aba Transferências antes de apagar o estoque.`
+      );
     }
 
     // Delete in chunks of 400 documents to avoid the 500 document batch limit in Firestore
@@ -1064,6 +1112,16 @@ export default function App() {
         });
       });
       await batch.commit();
+    }
+
+    if (reservedItems.length > 0) {
+      console.warn(
+        `[ESTOQUE] ${reservedItems.length} produto(s) preservado(s) na limpeza por terem reserva de transferência ativa.`
+      );
+      alert(
+        `Estoque apagado. ${reservedItems.length} produto(s) foram preservados porque estão reservados ` +
+        `para transferências já aprovadas.`
+      );
     }
   };
 
@@ -1206,10 +1264,23 @@ export default function App() {
         const before = Number(data.quantity) || 0;
         const after = isEntry ? before + input.quantity : before - input.quantity;
 
+        // Saldo LIVRE = saldo total menos o que esta reservado para transferencias
+        // ja aprovadas. A leitura vem de dentro da transacao, entao duas baixas
+        // simultaneas nao conseguem furar a mesma reserva.
+        const reserved = reservedQuantityOf(data);
+
         if (!isEntry && after < 0) {
           throw new Error(
             `Saldo insuficiente para ${data.sku || "o item"} (${data.brand || ""} ${data.size || ""}). ` +
-            `Disponível: ${before} un, solicitado: ${input.quantity} un.`
+            `Disponível: ${Math.max(0, before - reserved)} un, solicitado: ${input.quantity} un.`
+          );
+        }
+
+        if (!isEntry && reserved > 0 && after < reserved) {
+          throw new Error(
+            `${reserved} un de ${data.sku || "este pneu"} (${data.brand || ""} ${data.size || ""}) estão ` +
+            `RESERVADAS para uma transferência já aprovada e não podem ser baixadas. ` +
+            `Livre para saída: ${Math.max(0, before - reserved)} un, solicitado: ${input.quantity} un.`
           );
         }
 
@@ -1411,6 +1482,9 @@ export default function App() {
     destinationCompanyName: string;
     reason: string;
     scheduledFor: Date | null;
+    // "ENVIO" (a origem despacha, fluxo historico) ou "SOLICITACAO" (o destino
+    // pede e a origem decide). Ausente = ENVIO, para nao mexer em chamadas antigas.
+    requestKind?: TransferRequestKind;
   }) => {
     if (!user) return;
 
@@ -1438,6 +1512,19 @@ export default function App() {
     }
 
     const isScheduled = !!data.scheduledFor && data.scheduledFor.getTime() > Date.now();
+    const requestKind: TransferRequestKind = data.requestKind === "SOLICITACAO" ? "SOLICITACAO" : "ENVIO";
+
+    // Uma SOLICITACAO so pode partir de quem vai RECEBER — e o pedido "me manda
+    // esses pneus". Quem envia por conta propria usa o fluxo de ENVIO.
+    if (requestKind === "SOLICITACAO" && user.role !== "admin" && data.destinationCompanyId !== user.companyId) {
+      throw new Error("Uma solicitação só pode ser aberta pela empresa que vai receber os pneus.");
+    }
+
+    // Solicitacao nasce parada, aguardando o aval da origem. Nada e reservado
+    // aqui: a reserva so existe depois que a origem aprova.
+    const initialStatus = requestKind === "SOLICITACAO"
+      ? "SOLICITADO"
+      : (isScheduled ? "AGENDADO" : "PENDENTE");
 
     try {
       await addDoc(collection(db, "transfers"), {
@@ -1447,7 +1534,9 @@ export default function App() {
         destinationCompanyId: data.destinationCompanyId,
         destinationCompanyName: data.destinationCompanyName,
         reason: data.reason?.trim() || "",
-        status: isScheduled ? "AGENDADO" : "PENDENTE",
+        requestKind,
+        reservation: null,
+        status: initialStatus,
         scheduledFor: isScheduled ? data.scheduledFor : null,
         requestedByUid: user.uid,
         requestedByEmail: user.email,
@@ -1473,22 +1562,246 @@ export default function App() {
     }
   };
 
-  // Cancel a transfer that hasn't been dispatched yet (nothing physically moved,
-  // so this is a plain status update — no stock/movements writes needed).
-  const handleCancelTransfer = async (transferId: string, reason: string) => {
+  // ─────────────────────────────────────────────────────────────────
+  // Reserva de estoque
+  //
+  // Reservar e o unico jeito de a empresa de ORIGEM garantir um pneu para outra
+  // empresa antes de ele sair fisicamente. A quantidade reservada vive em
+  // reservedQuantity no documento de estoque e e somada/subtraida SEMPRE aqui,
+  // dentro de uma transacao junto com a mudanca de status do pedido — nunca em
+  // duas escritas separadas, senao uma falha no meio deixaria pneu preso para
+  // sempre ou pedido aprovado sem lastro.
+  //
+  // Sao exatamente quatro os momentos em que este saldo muda:
+  //   RESERVE  — a origem aprova a solicitacao, ou reserva um envio ja pendente;
+  //   RELEASE  — a origem libera manualmente, ou o pedido e cancelado.
+  // O quarto e o despacho, quando o pneu sai de verdade: esse mora em
+  // handleCompleteDispatch, que ja mexe em `quantity` na mesma transacao.
+  // ─────────────────────────────────────────────────────────────────
+  const applyTransferReservation = async (
+    transferId: string,
+    direction: "RESERVE" | "RELEASE",
+    options: {
+      expectedStatuses: TransferStatus[];
+      nextStatus?: TransferStatus;
+      extraTransferFields?: Record<string, any>;
+      releaseReason?: string;
+      // Quando true, um pedido sem reserva ativa nao e erro: apenas segue com a
+      // mudanca de status (usado pelo cancelamento, que vale reservado ou nao).
+      allowNoReservation?: boolean;
+    }
+  ) => {
+    if (!user) throw new Error("Sessão expirada. Entre novamente no sistema.");
+
+    await runTransaction(db, async (transaction) => {
+      const transferRef = doc(db, "transfers", transferId);
+      const transferSnap = await transaction.get(transferRef);
+      if (!transferSnap.exists()) throw new Error("Pedido de transferência não encontrado.");
+      const transferData: any = transferSnap.data();
+
+      if (!options.expectedStatuses.includes(transferData.status)) {
+        throw new Error(
+          `Este pedido não está mais no estado esperado (situação atual: ${transferData.status}). ` +
+          `Atualize a tela e tente novamente.`
+        );
+      }
+
+      const isReserved = transferData.reservation?.active === true;
+      if (direction === "RESERVE" && isReserved) {
+        throw new Error("Os itens deste pedido já estão reservados.");
+      }
+      if (direction === "RELEASE" && !isReserved && !options.allowNoReservation) {
+        throw new Error("Este pedido não tem reserva ativa para liberar.");
+      }
+
+      const items = transferData.items || [];
+      if (items.length === 0) throw new Error("Pedido não contém itens.");
+
+      const mustTouchStock = direction === "RESERVE" || isReserved;
+
+      // --- TODAS AS LEITURAS PRIMEIRO (exigência do Firestore) ---
+      const pending: { ref: any; nextReserved: number }[] = [];
+      if (mustTouchStock) {
+        for (const item of items) {
+          const stockRef = doc(db, "stock", item.sourceStockItemId);
+          const stockSnap = await transaction.get(stockRef);
+
+          if (!stockSnap.exists()) {
+            // Na liberacao um produto sumido nao pode travar o cancelamento —
+            // nao ha o que devolver. Na reserva, e erro de verdade.
+            if (direction === "RELEASE") continue;
+            throw new Error(`O produto ${item.sku || ""} não existe mais no estoque da origem.`);
+          }
+
+          const data: any = stockSnap.data();
+          const total = Number(data.quantity) || 0;
+          const reserved = reservedQuantityOf(data);
+          const qty = Number(item.quantity) || 0;
+
+          if (direction === "RESERVE") {
+            const free = Math.max(0, total - reserved);
+            if (qty > free) {
+              throw new Error(
+                `Não há saldo livre suficiente de ${data.sku || item.sku} ` +
+                `(${data.brand || ""} ${data.size || ""}). Livre: ${free} un` +
+                `${reserved > 0 ? ` (${reserved} un já reservadas em outros pedidos)` : ""}, ` +
+                `necessário: ${qty} un.`
+              );
+            }
+            pending.push({ ref: stockRef, nextReserved: reserved + qty });
+          } else {
+            pending.push({ ref: stockRef, nextReserved: Math.max(0, reserved - qty) });
+          }
+        }
+      }
+
+      // --- DEPOIS TODAS AS ESCRITAS ---
+      for (const entry of pending) {
+        transaction.update(entry.ref, {
+          reservedQuantity: entry.nextReserved,
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      const reservationField = direction === "RESERVE"
+        ? {
+            active: true,
+            reservedByUid: user.uid,
+            reservedByName: user.displayName,
+            reservedAt: serverTimestamp()
+          }
+        : isReserved
+        ? {
+            ...transferData.reservation,
+            active: false,
+            releasedAt: serverTimestamp(),
+            releasedReason: options.releaseReason || "Reserva liberada"
+          }
+        : (transferData.reservation || null);
+
+      transaction.update(transferRef, {
+        ...(options.nextStatus ? { status: options.nextStatus } : {}),
+        ...(options.extraTransferFields || {}),
+        reservation: reservationField,
+        updatedAt: serverTimestamp()
+      });
+    });
+  };
+
+  // Mensagem util no lugar do "Missing or insufficient permissions" seco.
+  const describeTransferWriteError = (err: any, fallback: string) => {
+    if (err?.code === "permission-denied") {
+      return new Error(
+        "O banco recusou a operação por permissão. Só a empresa de ORIGEM (ou um administrador) " +
+        "pode aprovar, recusar ou mexer na reserva de um pedido. Se sua credencial mudou de empresa " +
+        "recentemente, saia e entre novamente no sistema."
+      );
+    }
+    return new Error(err?.message || fallback);
+  };
+
+  // A origem aprova a solicitacao: os pneus ficam reservados na hora e o pedido
+  // entra no fluxo normal de assinaturas. A partir daqui ninguem consegue vender
+  // ou baixar essa quantidade.
+  const handleApproveTransferRequest = async (transferId: string) => {
+    if (!user) return;
+    const transfer = transfers.find(t => t.id === transferId);
+    // Uma solicitacao agendada para o futuro volta para a fila de agendados;
+    // as demais ja ficam prontas para assinatura de envio.
+    const scheduledMillis = toMillis(transfer?.scheduledFor);
+    const nextStatus: TransferStatus = scheduledMillis > Date.now() ? "AGENDADO" : "PENDENTE";
+
+    try {
+      await applyTransferReservation(transferId, "RESERVE", {
+        expectedStatuses: ["SOLICITADO"],
+        nextStatus,
+        extraTransferFields: {
+          approvedByUid: user.uid,
+          approvedByName: user.displayName,
+          approvedAt: serverTimestamp()
+        }
+      });
+    } catch (err: any) {
+      console.error("Erro ao aprovar solicitação de transferência:", err);
+      throw describeTransferWriteError(err, "Erro ao aprovar a solicitação de transferência.");
+    }
+  };
+
+  // A origem recusa a solicitacao. Nada foi reservado, entao e so status.
+  const handleRejectTransferRequest = async (transferId: string, reason: string) => {
     if (!user) return;
     try {
       await updateDoc(doc(db, "transfers", transferId), {
-        status: "CANCELADO",
-        cancelledByUid: user.uid,
-        cancelledByName: user.displayName,
-        cancelledAt: serverTimestamp(),
-        cancelReason: reason?.trim() || "Cancelado pelo solicitante",
+        status: "RECUSADO",
+        rejectedByUid: user.uid,
+        rejectedByName: user.displayName,
+        rejectedAt: serverTimestamp(),
+        rejectReason: reason?.trim() || "Solicitação recusada pela empresa de origem",
         updatedAt: serverTimestamp()
       });
-    } catch (err) {
+    } catch (err: any) {
+      console.error("Erro ao recusar solicitação de transferência:", err);
+      throw describeTransferWriteError(err, "Erro ao recusar a solicitação de transferência.");
+    }
+  };
+
+  // Reserva avulsa: a origem prende os pneus de um ENVIO que ja estava pendente
+  // ou agendado, sem esperar a assinatura. Serve para segurar mercadoria que
+  // ainda vai demorar a sair.
+  const handleReserveTransferItems = async (transferId: string) => {
+    if (!user) return;
+    try {
+      await applyTransferReservation(transferId, "RESERVE", {
+        expectedStatuses: ["AGENDADO", "PENDENTE"]
+      });
+    } catch (err: any) {
+      console.error("Erro ao reservar itens da transferência:", err);
+      throw describeTransferWriteError(err, "Erro ao reservar os itens da transferência.");
+    }
+  };
+
+  // Libera a reserva sem cancelar o pedido — o pneu volta a ficar vendavel.
+  const handleReleaseTransferReservation = async (transferId: string) => {
+    if (!user) return;
+    try {
+      await applyTransferReservation(transferId, "RELEASE", {
+        expectedStatuses: ["AGENDADO", "PENDENTE"],
+        releaseReason: `Reserva liberada manualmente por ${user.displayName}`
+      });
+    } catch (err: any) {
+      console.error("Erro ao liberar reserva da transferência:", err);
+      throw describeTransferWriteError(err, "Erro ao liberar a reserva da transferência.");
+    }
+  };
+
+  // Cancel a transfer that hasn't been dispatched yet. Nothing physically moved,
+  // mas se o pedido estava com reserva ativa ela precisa voltar ao estoque na
+  // MESMA transacao do cancelamento — senao o pneu ficaria preso para sempre.
+  const handleCancelTransfer = async (transferId: string, reason: string) => {
+    if (!user) return;
+
+    try {
+      await applyTransferReservation(transferId, "RELEASE", {
+        expectedStatuses: ["AGENDADO", "PENDENTE", "SOLICITADO"],
+        nextStatus: "CANCELADO",
+        extraTransferFields: {
+          cancelledByUid: user.uid,
+          cancelledByName: user.displayName,
+          cancelledAt: serverTimestamp(),
+          cancelReason: reason?.trim() || "Cancelado pelo solicitante"
+        },
+        releaseReason: `Pedido cancelado por ${user.displayName}`,
+        allowNoReservation: true
+      });
+    } catch (err: any) {
       console.error("Erro ao cancelar transferência:", err);
-      throw new Error("Erro ao cancelar o pedido de transferência.");
+      if (err?.code === "permission-denied") {
+        throw new Error(
+          "O banco recusou o cancelamento. Um pedido com reserva ativa só pode ser cancelado pela " +
+          "empresa de ORIGEM (que é quem consegue liberar os pneus) ou por um administrador."
+        );
+      }
+      throw new Error(err?.message || "Erro ao cancelar o pedido de transferência.");
     }
   };
 
@@ -1597,24 +1910,48 @@ export default function App() {
           throw new Error("Pedido não contém itens.");
         }
 
+        // Se este pedido tinha reserva ativa, o despacho e o momento em que ela
+        // deixa de existir: o pneu sai fisicamente, entao a quantidade some do
+        // saldo total E do saldo reservado na mesma transacao.
+        const wasReserved = transferData.reservation?.active === true;
+
         // --- ALL READS ---
         const stockDataToUpdate = [];
         for (const item of items) {
           const sourceStockRef = doc(db, "stock", item.sourceStockItemId);
           const sourceStockSnap = await transaction.get(sourceStockRef);
-          
+
           if (!sourceStockSnap.exists()) {
             throw new Error(`O item de estoque ${item.sku} não foi encontrado (pode ter sido excluído).`);
           }
-          const currentQty = sourceStockSnap.data().quantity ?? 0;
+          const sourceData: any = sourceStockSnap.data();
+          const currentQty = sourceData.quantity ?? 0;
+          const currentReserved = reservedQuantityOf(sourceData);
 
           if (currentQty < item.quantity) {
             throw new Error(`Estoque insuficiente para ${item.sku}. Saldo atual: ${currentQty} un, necessário: ${item.quantity} un.`);
           }
 
+          const newQty = currentQty - item.quantity;
+          // A reserva DESTE pedido sai do contador; a de outros pedidos permanece.
+          const newReserved = wasReserved
+            ? Math.max(0, currentReserved - item.quantity)
+            : currentReserved;
+
+          // Um envio sem reserva propria nao pode comer o que outro pedido ja
+          // prendeu — esse saldo esta prometido a outra empresa.
+          if (newQty < newReserved) {
+            throw new Error(
+              `${newReserved} un de ${item.sku} estão reservadas para outra transferência aprovada. ` +
+              `Livre para envio: ${Math.max(0, currentQty - currentReserved)} un, necessário: ${item.quantity} un.`
+            );
+          }
+
           stockDataToUpdate.push({
             ref: sourceStockRef,
-            newQty: currentQty - item.quantity,
+            newQty,
+            newReserved,
+            reservedChanged: newReserved !== currentReserved,
             item: item
           });
         }
@@ -1623,6 +1960,7 @@ export default function App() {
         for (const updateData of stockDataToUpdate) {
           transaction.update(updateData.ref, {
             quantity: updateData.newQty,
+            ...(updateData.reservedChanged ? { reservedQuantity: updateData.newReserved } : {}),
             updatedAt: serverTimestamp()
           });
 
@@ -1663,6 +2001,18 @@ export default function App() {
             }
           },
           delivery: senderRecord,
+          // A reserva se converte em saida real: fica registrada como encerrada,
+          // preservando quem reservou e quando (auditoria nao se apaga).
+          ...(wasReserved
+            ? {
+                reservation: {
+                  ...transferData.reservation,
+                  active: false,
+                  releasedAt: serverTimestamp(),
+                  releasedReason: "Reserva convertida em envio (pneus despachados)"
+                }
+              }
+            : {}),
           updatedAt: serverTimestamp()
         });
       });
@@ -2498,6 +2848,10 @@ export default function App() {
               user={user}
               onCreateTransfer={handleCreateTransfer}
               onCancelTransfer={handleCancelTransfer}
+              onApproveRequest={handleApproveTransferRequest}
+              onRejectRequest={handleRejectTransferRequest}
+              onReserveItems={handleReserveTransferItems}
+              onReleaseReservation={handleReleaseTransferReservation}
               onSignSenderDispatch={handleSignSenderDispatch}
               onCompleteDispatch={handleCompleteDispatch}
               onSignReceiverArrival={handleSignReceiverArrival}

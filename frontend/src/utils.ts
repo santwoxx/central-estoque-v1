@@ -13,6 +13,28 @@ export function matchesTireSize(itemSize: string, query: string): boolean {
   return normalizeTireSize(itemSize).includes(normalizedQuery);
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Saldo reservado x saldo livre
+//
+// Um pneu pode estar fisicamente no galpao e mesmo assim nao poder ser vendido:
+// se uma transferencia aprovada o reservou para outra empresa, aquela quantidade
+// fica presa em `reservedQuantity` ate o despacho (ou ate a reserva ser liberada).
+// Todo lugar que da baixa/vende tem que raciocinar sobre o LIVRE, nunca sobre o
+// total. Os documentos antigos nao tem o campo — por isso o `?? 0` aqui e nao
+// espalhado por cada tela.
+// ─────────────────────────────────────────────────────────────────
+export function reservedQuantityOf(item: { reservedQuantity?: number } | null | undefined): number {
+  const reserved = Number(item?.reservedQuantity) || 0;
+  return reserved > 0 ? reserved : 0;
+}
+
+export function availableQuantity(
+  item: { quantity?: number; reservedQuantity?: number } | null | undefined
+): number {
+  const total = Number(item?.quantity) || 0;
+  return Math.max(0, total - reservedQuantityOf(item));
+}
+
 export function formatBRL(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",

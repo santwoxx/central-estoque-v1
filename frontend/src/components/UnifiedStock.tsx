@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company } from "../types";
 import { Search, Plus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon } from "lucide-react";
-import { matchesTireSize, toMillis } from "../utils";
+import { matchesTireSize, reservedQuantityOf, toMillis } from "../utils";
 import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
 
 interface UnifiedStockProps {
@@ -395,6 +395,16 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
         if (existingDoc) {
           const diff = numValue - existingDoc.quantity;
           if (diff !== 0) {
+            // Baixar abaixo do que está reservado para uma transferência aprovada
+            // é recusado em App.tsx (e pelas regras do Firestore). Avisa antes de
+            // gastar uma ida ao banco, com a conta já feita.
+            const reserved = reservedQuantityOf(existingDoc);
+            if (reserved > 0 && numValue < reserved) {
+              throw new Error(
+                `${reserved} un deste pneu estão reservadas para uma transferência aprovada em ` +
+                `${targetCompany.name}. O saldo não pode ficar abaixo disso — libere a reserva na aba Transferências.`
+              );
+            }
             const reason = diff > 0 ? "Ajuste manual de entrada" : "Baixa manual";
             await onUpdateItem(existingDoc.id, { quantity: numValue }, reason, diff);
           }
@@ -445,8 +455,10 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
           }
         }
       }
-    } catch (err) {
-      alert("Erro ao salvar alteração.");
+    } catch (err: any) {
+      // A trava de reserva explica exatamente por que a baixa foi recusada:
+      // engolir a mensagem aqui deixaria o operador sem saber o que fazer.
+      alert(err?.message || "Erro ao salvar alteração.");
     }
 
     setEditingCell(null);
