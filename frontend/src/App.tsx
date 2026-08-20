@@ -59,7 +59,8 @@ import {
   StockFlowItemInput,
   SignatureMethod,
   TransferStatus,
-  TransferRequestKind
+  TransferRequestKind,
+  TransferSyncResult
 } from "./types";
 import { toMillis, formatDate, availableQuantity, reservedQuantityOf } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
@@ -370,7 +371,8 @@ export default function App() {
           unitPrice: data.unitPrice ?? 0,
           totalAmount: data.totalAmount ?? 0,
           reversalOf: data.reversalOf || "",
-          transferId: data.transferId || ""
+          transferId: data.transferId || "",
+          rebuilt: data.rebuilt === true
         });
       });
 
@@ -2242,6 +2244,145 @@ export default function App() {
     }
   };
 
+  // ─────────────────────────────────────────────────────────────────
+  // Regularização do histórico de transferências
+  //
+  // Toda transferência assinada grava o seu movimento na MESMA transação que
+  // muda o status do pedido — despacho grava TRANSFERENCIA_SAIDA na origem,
+  // recebimento grava TRANSFERENCIA_ENTRADA no destino. Ainda assim o registro
+  // pode não existir mais: pedidos concluídos por versões antigas do app (antes
+  // do movimento passar a ser gravado), histórico limpo em Relatórios, ou
+  // exclusão manual de movimentos por um admin.
+  //
+  // Esta rotina recria SÓ O REGISTRO que falta, com a data real da assinatura.
+  // Nunca mexe em saldo: o pneu já saiu e já entrou fisicamente — mexer no
+  // estoque aqui contaria a mesma transferência duas vezes. É idempotente:
+  // confere no servidor o que já existe (por pedido, lado e SKU) antes de
+  // gravar, então rodar de novo não duplica nada.
+  // ─────────────────────────────────────────────────────────────────
+  const handleSyncTransferMovements = async (): Promise<TransferSyncResult> => {
+    if (!user) throw new Error("Sessão expirada. Entre novamente.");
+    if (user.role !== "admin" && user.role !== "alimentador") {
+      throw new Error("Somente o administrador ou o responsável da filial pode regularizar o histórico.");
+    }
+
+    // Alimentador só enxerga e só pode gravar movimentos da própria empresa
+    // (ver a regra de movements em firestore.rules). Admin regulariza os dois lados.
+    const scopedCompanyId = user.role === "alimentador" ? (user.companyId || "") : "";
+    if (user.role === "alimentador" && !scopedCompanyId) {
+      throw new Error("Seu usuário não está vinculado a uma empresa.");
+    }
+
+    const result: TransferSyncResult = { scanned: 0, alreadyOk: 0, repaired: 0, created: 0, blocked: 0 };
+    const movementsRef = collection(db, "movements");
+
+    // Só pedidos que já movimentaram estoque de verdade. EM_TRANSITO tem apenas
+    // a saída; CONCLUIDO tem os dois lados. Os demais status não movimentam nada.
+    const relevant = transfers.filter(t => t.status === "EM_TRANSITO" || t.status === "CONCLUIDO");
+
+    for (const t of relevant) {
+      const items = (t.items || []).filter((item: any) => item && item.sku);
+      if (items.length === 0) continue;
+
+      const sides = [
+        {
+          type: "TRANSFERENCIA_SAIDA" as const,
+          companyId: t.sourceCompanyId || "",
+          companyName: t.sourceCompanyName || "",
+          signedAt: t.dispatch?.driver?.signedAt || t.dispatch?.sender?.signedAt || t.delivery?.signedAt || t.updatedAt,
+          signedByName: t.dispatch?.sender?.signedByName || t.delivery?.signedByName || "",
+          reason: `Transferência para ${t.destinationCompanyName || "outra filial"}`
+        },
+        ...(t.status === "CONCLUIDO" ? [{
+          type: "TRANSFERENCIA_ENTRADA" as const,
+          companyId: t.destinationCompanyId || "",
+          companyName: t.destinationCompanyName || "",
+          signedAt: t.arrival?.driver?.signedAt || t.arrival?.receiver?.signedAt || t.receipt?.signedAt || t.updatedAt,
+          signedByName: t.arrival?.receiver?.signedByName || t.receipt?.signedByName || "",
+          reason: `Recebido de ${t.sourceCompanyName || "outra filial"}`
+        }] : [])
+      ];
+
+      const mySides = sides.filter(s => s.companyId && (!scopedCompanyId || s.companyId === scopedCompanyId));
+      if (mySides.length === 0) {
+        result.blocked += 1;
+        continue;
+      }
+
+      // A verdade é a do servidor, não a da lista em memória (que é uma janela
+      // das últimas movimentações e pode não alcançar pedidos antigos).
+      const existingSnap = await getDocs(
+        scopedCompanyId
+          ? query(movementsRef, where("transferId", "==", t.id), where("companyId", "==", scopedCompanyId))
+          : query(movementsRef, where("transferId", "==", t.id))
+      );
+
+      // Conta por lado+SKU: assim uma gravação parcial também é completada, e
+      // um pedido com o mesmo SKU repetido não perde a segunda linha.
+      const existingCount = new Map<string, number>();
+      existingSnap.forEach(docSnap => {
+        const data: any = docSnap.data();
+        const key = `${data.type}|${data.sku}`;
+        existingCount.set(key, (existingCount.get(key) || 0) + 1);
+      });
+
+      result.scanned += 1;
+      const batch = writeBatch(db);
+      let createdHere = 0;
+
+      for (const side of mySides) {
+        for (const item of items) {
+          const key = `${side.type}|${item.sku}`;
+          const remaining = existingCount.get(key) || 0;
+          if (remaining > 0) {
+            existingCount.set(key, remaining - 1);
+            continue;
+          }
+
+          const quantity = Number(item.quantity) || 0;
+          const isEntry = side.type === "TRANSFERENCIA_ENTRADA";
+          // Saldo do momento da regularização — o saldo da época da assinatura
+          // não existe mais em lugar nenhum. O selo `rebuilt` avisa a tela.
+          const currentBalance = stock.find(
+            s => s.companyId === side.companyId && s.sku === item.sku
+          )?.quantity ?? 0;
+
+          batch.set(doc(movementsRef), {
+            sku: item.sku,
+            brand: item.brand || "",
+            model: item.model || "",
+            size: item.size || "",
+            type: side.type,
+            quantity: isEntry ? quantity : -quantity,
+            balanceAfter: currentBalance,
+            companyId: side.companyId,
+            companyName: side.companyName,
+            userId: user.uid,
+            userEmail: user.email,
+            timestamp: side.signedAt || serverTimestamp(),
+            reason: side.signedByName
+              ? `${side.reason} — assinado por ${side.signedByName}`
+              : side.reason,
+            transferId: t.id,
+            rebuilt: true
+          });
+          createdHere += 1;
+        }
+      }
+
+      if (createdHere === 0) {
+        result.alreadyOk += 1;
+        continue;
+      }
+
+      await batch.commit();
+      result.repaired += 1;
+      result.created += createdHere;
+    }
+
+    return result;
+  };
+
   // Admin-only recovery path: reverses a transfer stuck "in transit" (delivery signed,
   // receipt never confirmed — e.g. goods lost, or created by mistake after dispatch).
   // Restores the source stock and closes the transfer out as cancelled.
@@ -2879,8 +3020,14 @@ export default function App() {
               movements={movements}
               companies={companies}
               user={user}
+              transfers={transfers}
               onRegister={handleRegisterStockFlow}
               onReverse={user.role === "admin" ? handleReverseStockFlowOperation : undefined}
+              onSyncTransfers={
+                user.role === "admin" || user.role === "alimentador"
+                  ? handleSyncTransferMovements
+                  : undefined
+              }
             />
           )}
 

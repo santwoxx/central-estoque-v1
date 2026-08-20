@@ -86,6 +86,11 @@ export interface MovementLog {
   unitPrice?: number;       // Custo/preço unitário praticado na operação
   totalAmount?: number;     // unitPrice * quantidade do item
   reversalOf?: string;      // operationId estornado por este registro
+
+  // Registro recriado depois dos fatos pela regularização de transferências
+  // (o pneu já tinha sido movimentado; só a linha do histórico faltava). O
+  // saldo gravado é o do momento da regularização, não o da assinatura.
+  rebuilt?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -139,6 +144,17 @@ export interface StockFlowResult {
   companyName: string;
   userName: string;
   date: string;
+}
+
+// Resultado da regularização do histórico: recria em `movements` as linhas de
+// transferência que faltam, sem tocar em saldo (o estoque já foi movimentado
+// quando o pedido foi assinado).
+export interface TransferSyncResult {
+  scanned: number;     // pedidos verificados no servidor
+  alreadyOk: number;   // pedidos que já tinham o registro completo
+  repaired: number;    // pedidos que ganharam registros de volta
+  created: number;     // linhas de movimento recriadas
+  blocked: number;     // pedidos de outra empresa (sem permissão para gravar)
 }
 
 // ─────────────────────────────────────────────────────────────────

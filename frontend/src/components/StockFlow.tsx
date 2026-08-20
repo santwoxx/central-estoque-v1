@@ -6,7 +6,9 @@ import {
   UserRole,
   StockFlowType,
   StockFlowPayload,
-  StockFlowResult
+  StockFlowResult,
+  TransferOrder,
+  TransferSyncResult
 } from "../types";
 import { availableQuantity, exportToCSV, formatBRL, formatDate, matchesTireSize, reservedQuantityOf, toMillis } from "../utils";
 import {
@@ -33,6 +35,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   ArrowLeftRight,
+  RefreshCw,
   Keyboard,
   Info,
   ClipboardList,
@@ -44,8 +47,12 @@ interface StockFlowProps {
   movements: MovementLog[];
   companies: Company[];
   user: { uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string };
+  // Pedidos de transferência já assinados — usados só para conferir se cada um
+  // deixou a sua linha no histórico (saída na origem, entrada no destino).
+  transfers?: TransferOrder[];
   onRegister: (payload: StockFlowPayload) => Promise<StockFlowResult>;
   onReverse?: (operationId: string) => Promise<void>;
+  onSyncTransfers?: () => Promise<TransferSyncResult>;
 }
 
 // Motivos sugeridos por tipo de operação. O último ("Outro") libera o campo livre.
@@ -123,9 +130,12 @@ interface FlowOperation {
   // pode ser estornada por aqui — o estorno vive na tela de Transferencias).
   isTransfer: boolean;
   transferId: string;
+  // Registro recriado pela regularização: o saldo mostrado é o do momento do
+  // reparo, não o da assinatura.
+  rebuilt: boolean;
 }
 
-export default function StockFlow({ stock, movements, companies, user, onRegister, onReverse }: StockFlowProps) {
+export default function StockFlow({ stock, movements, companies, user, transfers = [], onRegister, onReverse, onSyncTransfers }: StockFlowProps) {
   const isAdmin = user.role === "admin";
   const canOperate = isAdmin || user.role === "alimentador";
 
@@ -147,6 +157,11 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
   const [receipt, setReceipt] = useState<StockFlowResult | null>(null);
 
   // ── Estado do histórico ──────────────────────────────────────────
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  // Conferência já rodou contra o servidor e não achou nada faltando: o aviso
+  // some mesmo que a janela de movimentos carregada continue parecendo incompleta.
+  const [syncCleared, setSyncCleared] = useState(false);
   const [histSearch, setHistSearch] = useState("");
   const [histType, setHistType] = useState<"ALL" | StockFlowType>("ALL");
   const [histPeriod, setHistPeriod] = useState<"TODAY" | "7D" | "30D" | "ALL">("7D");
@@ -419,6 +434,7 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
         existing.totalUnits += Math.abs(log.quantity);
         existing.totalAmount += Number(log.totalAmount) || 0;
         existing.timestamp = Math.max(existing.timestamp, millis);
+        existing.rebuilt = existing.rebuilt || log.rebuilt === true;
       } else {
         map.set(key, {
           key,
@@ -438,13 +454,96 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
           reversalOf: log.reversalOf || "",
           isModuleOperation: !!opId,
           isTransfer,
-          transferId
+          transferId,
+          rebuilt: log.rebuilt === true
         });
       }
     }
 
     return Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
   }, [movements]);
+
+  // ── Conferência das transferências ───────────────────────────────
+  // Toda transferência assinada tem que ter deixado a sua linha aqui: saída na
+  // filial de origem, entrada na de destino. Quando não deixou (pedido fechado
+  // por uma versão antiga do app, histórico limpo em Relatórios, movimento
+  // apagado à mão), o saldo está certo mas o histórico está mudo — e é isso que
+  // esta conferência acusa, com o botão para regularizar.
+  //
+  // A lista de movimentos carregada é uma janela das últimas movimentações, então
+  // só dá para afirmar que falta algo em pedidos mais novos que o movimento mais
+  // antigo já carregado. Antes disso a ausência pode ser só o corte da janela —
+  // acusar ali seria alarme falso. (A regularização confere tudo no servidor.)
+  const missingTransferSides = useMemo(() => {
+    if (!onSyncTransfers || transfers.length === 0) return [];
+
+    const seesEveryCompany = user.role === "admin" || user.role === "vendedor" || !user.companyId;
+    const logged = new Set<string>();
+    let oldestLoaded = Infinity;
+
+    for (const log of movements) {
+      const millis = toMillis(log.timestamp);
+      if (millis) oldestLoaded = Math.min(oldestLoaded, millis);
+      if (log.transferId) logged.add(`${log.transferId}|${log.type}`);
+    }
+    // Histórico vazio: não há janela nenhuma, então tudo é conferível.
+    const cutoff = movements.length > 0 && oldestLoaded !== Infinity ? oldestLoaded : 0;
+
+    const missing: { transferId: string; type: string; companyName: string; when: number }[] = [];
+
+    for (const t of transfers) {
+      if (t.status !== "EM_TRANSITO" && t.status !== "CONCLUIDO") continue;
+
+      const sides = [
+        {
+          type: "TRANSFERENCIA_SAIDA",
+          companyId: t.sourceCompanyId || "",
+          companyName: t.sourceCompanyName || "",
+          when: toMillis(t.dispatch?.driver?.signedAt || t.dispatch?.sender?.signedAt || t.delivery?.signedAt)
+        },
+        ...(t.status === "CONCLUIDO" ? [{
+          type: "TRANSFERENCIA_ENTRADA",
+          companyId: t.destinationCompanyId || "",
+          companyName: t.destinationCompanyName || "",
+          when: toMillis(t.arrival?.driver?.signedAt || t.arrival?.receiver?.signedAt || t.receipt?.signedAt)
+        }] : [])
+      ];
+
+      for (const side of sides) {
+        if (!side.companyId) continue;
+        if (!seesEveryCompany && side.companyId !== user.companyId) continue;
+        const when = side.when || toMillis(t.updatedAt);
+        if (when && when < cutoff) continue;
+        if (logged.has(`${t.id}|${side.type}`)) continue;
+        missing.push({ transferId: t.id, type: side.type, companyName: side.companyName, when });
+      }
+    }
+
+    return missing;
+  }, [transfers, movements, user.role, user.companyId, onSyncTransfers]);
+
+  // O aviso some assim que a conferência no servidor confirma que está tudo lá.
+  const showMissingTransfers = missingTransferSides.length > 0 && !syncCleared;
+
+  const handleSyncTransfers = async () => {
+    if (!onSyncTransfers || syncing) return;
+    setSyncing(true);
+    setSyncMessage("");
+    try {
+      const res = await onSyncTransfers();
+      setSyncCleared(res.created === 0);
+      setSyncMessage(
+        res.created > 0
+          ? `${res.created} ${res.created === 1 ? "registro recriado" : "registros recriados"} em ${res.repaired} ${res.repaired === 1 ? "pedido" : "pedidos"}. O histórico já está atualizado.`
+          : `Nenhum registro faltando: ${res.scanned} ${res.scanned === 1 ? "pedido conferido já estava" : "pedidos conferidos já estavam"} no histórico.`
+      );
+    } catch (err: any) {
+      setSyncCleared(false);
+      setSyncMessage(err?.message || "Erro ao regularizar o histórico de transferências.");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // operationIds que já foram estornados — bloqueia estorno duplicado na UI.
   const reversedOperationIds = useMemo(() => {
@@ -904,6 +1003,57 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
         </div>
       </div>
 
+      {/* ═══════════ CONFERÊNCIA DAS TRANSFERÊNCIAS ═══════════ */}
+      {onSyncTransfers && (showMissingTransfers || syncMessage) && (
+        <div className={`rounded-2xl border p-4 flex flex-col sm:flex-row sm:items-center gap-3 ${
+          showMissingTransfers ? "bg-amber-50/70 border-amber-200" : "bg-emerald-50/70 border-emerald-200"
+        }`}>
+          <div className={`h-10 w-10 shrink-0 rounded-xl flex items-center justify-center border ${
+            showMissingTransfers
+              ? "bg-amber-100 text-amber-700 border-amber-200"
+              : "bg-emerald-100 text-emerald-700 border-emerald-200"
+          }`}>
+            {showMissingTransfers
+              ? <AlertTriangle size={19} className="stroke-[2.2px]" />
+              : <CheckCircle2 size={19} className="stroke-[2.2px]" />}
+          </div>
+
+          <div className="min-w-0 flex-1">
+            {showMissingTransfers ? (
+              <>
+                <p className="text-xs font-black text-amber-900 uppercase tracking-wider">
+                  {missingTransferSides.length} {missingTransferSides.length === 1
+                    ? "movimentação de transferência sem registro"
+                    : "movimentações de transferência sem registro"}
+                </p>
+                <p className="text-[11px] font-bold text-amber-800/80 mt-1">
+                  Transferências assinadas que não deixaram a linha de entrada/saída neste histórico.
+                  O estoque está certo — falta só o registro. Regularizar recria as linhas com a data
+                  da assinatura, sem alterar nenhum saldo.
+                </p>
+                {syncMessage && (
+                  <p className="text-[11px] font-black text-amber-900 mt-1.5">{syncMessage}</p>
+                )}
+              </>
+            ) : (
+              <p className="text-[11px] font-bold text-emerald-800">{syncMessage}</p>
+            )}
+          </div>
+
+          {showMissingTransfers && (
+            <button
+              type="button"
+              onClick={handleSyncTransfers}
+              disabled={syncing}
+              className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {syncing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} className="stroke-[2.5px]" />}
+              {syncing ? "Regularizando..." : "Regularizar histórico"}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* ═══════════ HISTÓRICO DE MOVIMENTAÇÕES ═══════════ */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-[0_4px_25px_rgba(0,0,0,0.015)] overflow-hidden">
 
@@ -1140,6 +1290,12 @@ export default function StockFlow({ stock, movements, companies, user, onRegiste
                                 <div className="text-blue-700/80 italic">
                                   Movimentação do módulo de Transferências — assinaturas e estorno ficam naquela tela.
                                 </div>
+                                {op.rebuilt && (
+                                  <div className="text-amber-700 italic">
+                                    Registro regularizado depois da assinatura — a coluna "Saldo Após" traz o saldo do
+                                    momento do reparo, não o da época.
+                                  </div>
+                                )}
                               </>
                             ) : !op.isModuleOperation && (
                               <div className="text-slate-400 italic">Registro avulso — gerado por outra tela do sistema.</div>

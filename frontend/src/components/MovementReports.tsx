@@ -210,7 +210,16 @@ export default function MovementReports({ logs, isAdmin, onDeleteLog, onClearLog
           {isAdmin && (
             <button
               onClick={() => {
-                if (window.confirm("Tem certeza que deseja limpar todo o histórico de auditoria? Esta ação não pode ser desfeita.")) {
+                // Aviso explicito: este botao tambem apaga as linhas de
+                // TRANSFERENCIA, que sao a unica prova de que o pneu saiu de uma
+                // filial e entrou na outra. Sem elas a tela de Entradas e Saidas
+                // fica muda mesmo com o saldo correto.
+                if (window.confirm(
+                  `Apagar TODO o histórico de movimentações (${logs.length} ${logs.length === 1 ? "registro" : "registros"})?\n\n`
+                  + "Isto apaga também as entradas e saídas de TRANSFERÊNCIA entre filiais: "
+                  + "a tela de Entradas e Saídas fica vazia e os pedidos já concluídos deixam de ter registro." + "\n\n"
+                  + "O saldo do estoque não muda. Esta ação não pode ser desfeita."
+                )) {
                   onClearLogs?.();
                 }
               }}
