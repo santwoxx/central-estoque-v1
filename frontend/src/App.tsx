@@ -1615,7 +1615,12 @@ export default function App() {
       }
 
       const items = transferData.items || [];
-      if (items.length === 0) throw new Error("Pedido não contém itens.");
+      // Só a RESERVA precisa de itens: é ela que vai prender saldo. Liberar/cancelar
+      // um pedido malformado (sem itens) tem que continuar funcionando — antes desta
+      // feature o cancelamento era um updateDoc cego e nunca falhava por isso.
+      if (direction === "RESERVE" && items.length === 0) {
+        throw new Error("Pedido não contém itens.");
+      }
 
       const mustTouchStock = direction === "RESERVE" || isReserved;
 
@@ -1623,6 +1628,14 @@ export default function App() {
       const pending: { ref: any; nextReserved: number }[] = [];
       if (mustTouchStock) {
         for (const item of items) {
+          // Item sem referência de estoque: doc(db,"stock",undefined) derrubaria a
+          // transação inteira, e num cancelamento isso deixaria o pedido impossível
+          // de fechar. Na reserva é erro; na liberação, não há o que devolver.
+          if (!item?.sourceStockItemId) {
+            if (direction === "RELEASE") continue;
+            throw new Error(`O item ${item?.sku || ""} do pedido não aponta para nenhum produto do estoque.`);
+          }
+
           const stockRef = doc(db, "stock", item.sourceStockItemId);
           const stockSnap = await transaction.get(stockRef);
 
@@ -1810,10 +1823,44 @@ export default function App() {
   const handleDeleteTransfer = async (transferId: string) => {
     if (!user || user.role !== "admin") return;
     try {
-      await deleteDoc(doc(db, "transfers", transferId));
-    } catch (err) {
+      await runTransaction(db, async (transaction) => {
+        const transferRef = doc(db, "transfers", transferId);
+        const transferSnap = await transaction.get(transferRef);
+        // Já sumiu (outra aba apagou): nada a fazer, e nada a devolver.
+        if (!transferSnap.exists()) return;
+
+        const transferData: any = transferSnap.data();
+        const wasReserved = transferData.reservation?.active === true;
+        const items = transferData.items || [];
+
+        // --- TODAS AS LEITURAS PRIMEIRO ---
+        const pending: { ref: any; nextReserved: number }[] = [];
+        if (wasReserved) {
+          for (const item of items) {
+            if (!item?.sourceStockItemId) continue;
+            const stockRef = doc(db, "stock", item.sourceStockItemId);
+            const stockSnap = await transaction.get(stockRef);
+            if (!stockSnap.exists()) continue;
+            const reserved = reservedQuantityOf(stockSnap.data());
+            pending.push({
+              ref: stockRef,
+              nextReserved: Math.max(0, reserved - (Number(item.quantity) || 0))
+            });
+          }
+        }
+
+        // --- DEPOIS AS ESCRITAS ---
+        for (const entry of pending) {
+          transaction.update(entry.ref, {
+            reservedQuantity: entry.nextReserved,
+            updatedAt: serverTimestamp()
+          });
+        }
+        transaction.delete(transferRef);
+      });
+    } catch (err: any) {
       console.error("Erro ao excluir transferência:", err);
-      throw new Error("Erro ao excluir o pedido de transferência.");
+      throw new Error(err?.message || "Erro ao excluir o pedido de transferência.");
     }
   };
 

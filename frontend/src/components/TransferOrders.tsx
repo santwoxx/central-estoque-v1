@@ -539,7 +539,15 @@ export default function TransferOrders({
 
   const handleDeleteClick = async (t: TransferOrder) => {
     if (!onDeleteTransfer) return;
-    if (!window.confirm("Excluir permanentemente este pedido de transferência? Esta ação não pode ser desfeita.")) return;
+    const reservedWarning = isReserved(t)
+      ? `
+
+Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
+        `Elas serão devolvidas ao saldo disponível.`
+      : "";
+    if (!window.confirm(
+      "Excluir permanentemente este pedido de transferência? Esta ação não pode ser desfeita." + reservedWarning
+    )) return;
     setProcessingId(t.id);
     try {
       await onDeleteTransfer(t.id);
@@ -1121,6 +1129,9 @@ export default function TransferOrders({
                       {t.reservation?.reservedByName ? ` — por ${t.reservation.reservedByName}` : ""}
                       {t.reservation?.reservedAt ? ` em ${formatDate(t.reservation.reservedAt)}` : ""}.
                       {" "}Enquanto a reserva estiver ativa, esses pneus não podem ser vendidos nem baixados.
+                      {!isSourceOf(t) && isDestinationOf(t) && (
+                        <> Só {t.sourceCompanyName} pode liberar ou cancelar este pedido — é o estoque dela que está preso.</>
+                      )}
                     </span>
                   </div>
                 )}
