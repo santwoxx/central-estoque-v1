@@ -2389,7 +2389,7 @@ export default function App() {
               onMarkAllAsRead={markAllAsRead}
               onNotificationClick={handleNotificationClick}
               theme="dark"
-              align="right"
+              align="left"
             />
           </div>
 
