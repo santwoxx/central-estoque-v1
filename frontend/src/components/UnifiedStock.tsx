@@ -1,7 +1,10 @@
 import React, { useState, useMemo } from "react";
-import { StockItem, Company } from "../types";
-import { Search, Plus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon } from "lucide-react";
-import { matchesTireSize, reservedQuantityOf, toMillis } from "../utils";
+import { StockItem, Company, StockFlowType, StockFlowPayload, StockFlowResult } from "../types";
+import {
+  Search, Plus, Minus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon,
+  PackagePlus, PackageMinus, AlertTriangle, CheckCircle2, ArrowRight, ArrowRightLeft, Lock
+} from "lucide-react";
+import { availableQuantity, formatBRL, matchesTireSize, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
 import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
 
 interface UnifiedStockProps {
@@ -11,6 +14,10 @@ interface UnifiedStockProps {
   onUpdateItem: (itemId: string, updatedFields: Partial<StockItem>, reason: string, quantityDiff?: number) => Promise<void>;
   onAddItem: (itemData: Omit<StockItem, "id" | "userId" | "userEmail" | "createdAt" | "updatedAt">) => Promise<void>;
   onAddCompany?: (name: string, description?: string) => Promise<void>;
+  // Mesma gravacao transacional usada pela aba Entradas e Saidas. Ausente
+  // (undefined) para quem nao pode movimentar estoque: sem ela os botoes de
+  // entrada/saida nem chegam a ser renderizados.
+  onRegisterFlow?: (payload: StockFlowPayload) => Promise<StockFlowResult>;
 }
 
 interface ConsolidatedItem {
@@ -24,7 +31,7 @@ interface ConsolidatedItem {
   docs: Record<string, StockItem>; // Keyed by companyId
 }
 
-export default function UnifiedStock({ items, user, companies, onUpdateItem, onAddItem, onAddCompany }: UnifiedStockProps) {
+export default function UnifiedStock({ items, user, companies: companiesProp, onUpdateItem, onAddItem, onAddCompany, onRegisterFlow }: UnifiedStockProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [editingCell, setEditingCell] = useState<{ sku: string; field: string } | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -52,6 +59,15 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
 
   const isAdmin = user.role === "admin";
   const isVendedor = user.role === "vendedor";
+
+  // A empresa do usuario aparece sempre como primeira coluna; as demais seguem
+  // a ordem alfabetica vinda do App. Admin global (sem companyId) ve a ordem padrao.
+  const companies = useMemo(() => {
+    if (!user.companyId) return companiesProp;
+    const own = companiesProp.find(c => c.id === user.companyId);
+    if (!own) return companiesProp;
+    return [own, ...companiesProp.filter(c => c.id !== own.id)];
+  }, [companiesProp, user.companyId]);
 
   const consolidatedItems = useMemo(() => {
     const map = new Map<string, ConsolidatedItem>();
@@ -417,6 +433,7 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
               size: item.size,
               description: `${item.size} ${item.brand} ${item.model}`.trim(),
               imageUrl: "",
+              price: item.priceCash,
               priceCash: item.priceCash,
               priceInstallment: item.priceInstallment,
               quantity: numValue,
@@ -581,6 +598,260 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
     }
   };
 
+
+  // ─────────────────────────────────────────────────────────────────
+  // Entrada e Saída direto da planilha unificada
+  //
+  // Atalho para o caso mais comum do balcão: o operador está olhando esta tela,
+  // vê o saldo da filial e precisa dar entrada/baixa de UM pneu naquele momento.
+  // A gravação passa pelo mesmo caminho transacional da aba Entradas e Saídas
+  // (`onRegisterFlow`), então a operação nasce com operationId, aparece no
+  // histórico e pode ser estornada de lá — não é um ajuste de saldo solto.
+  // Operação com vários pneus continua sendo trabalho da aba dedicada.
+  //
+  // Editar a célula direto continua existindo e é outra coisa: aquilo é
+  // CORREÇÃO de saldo (vira "Ajuste manual"); isto aqui é a operação real.
+  // ─────────────────────────────────────────────────────────────────
+
+  // O backend recusa quem não for admin/alimentador (handleRegisterStockFlow);
+  // repetimos a regra aqui para nem oferecer o botão a quem não pode usá-lo.
+  const canOperateFlow = !!onRegisterFlow && (isAdmin || user.role === "alimentador");
+
+  const [showFlowModal, setShowFlowModal] = useState(false);
+  const [flowSku, setFlowSku] = useState("");
+  const [flowType, setFlowType] = useState<StockFlowType>("ENTRADA");
+  const [flowCompanyId, setFlowCompanyId] = useState("");
+  const [flowQty, setFlowQty] = useState("1");
+  const [flowReasonChoice, setFlowReasonChoice] = useState("");
+  const [flowCustomReason, setFlowCustomReason] = useState("");
+  const [flowDocNumber, setFlowDocNumber] = useState("");
+  const [flowPartyName, setFlowPartyName] = useState("");
+  const [flowPartyDoc, setFlowPartyDoc] = useState("");
+  const [flowPlate, setFlowPlate] = useState("");
+  const [flowUnitPrice, setFlowUnitPrice] = useState("");
+  const [flowObservation, setFlowObservation] = useState("");
+  const [flowSubmitting, setFlowSubmitting] = useState(false);
+  const [flowError, setFlowError] = useState("");
+  const [flowSuccess, setFlowSuccess] = useState<{
+    type: StockFlowType;
+    quantity: number;
+    balanceBefore: number;
+    balanceAfter: number;
+    companyName: string;
+    operationId: string;
+    created: boolean;
+  } | null>(null);
+
+  // O produto é relido da lista consolidada a cada render — assim o saldo
+  // mostrado dentro do modal acompanha o Firestore em tempo real, inclusive
+  // logo depois de gravar a própria operação.
+  const flowItem = useMemo(
+    () => (flowSku ? consolidatedItems.find(i => i.sku === flowSku) || null : null),
+    [consolidatedItems, flowSku]
+  );
+
+  const flowCompanies = useMemo(
+    () => (canOperateFlow ? companies.filter(c => canEditCompany(c.id)) : []),
+    [companies, canOperateFlow, isAdmin, isVendedor, user.companyId]
+  );
+
+  const isEntrada = flowType === "ENTRADA";
+  const flowDoc = flowItem && flowCompanyId ? flowItem.docs[flowCompanyId] : undefined;
+  const flowBalance = flowDoc ? Number(flowDoc.quantity) || 0 : 0;
+  const flowReserved = reservedQuantityOf(flowDoc);
+  const flowFree = flowDoc ? availableQuantity(flowDoc) : 0;
+  const flowQtyNumber = Math.max(0, Math.floor(Number(flowQty) || 0));
+  const flowBalanceAfter = isEntrada ? flowBalance + flowQtyNumber : flowBalance - flowQtyNumber;
+  const flowEffectiveReason = flowReasonChoice === "Outro" ? flowCustomReason.trim() : flowReasonChoice;
+
+  // Entrada numa filial que ainda não tem este pneu cadastrado: em vez de
+  // recusar, a operação CRIA a linha daquela empresa — o mesmo que já acontece
+  // ao digitar um número numa célula vazia da planilha.
+  const flowWillCreateItem = isEntrada && !!flowItem && !!flowCompanyId && !flowDoc;
+
+  const flowCompanyName = companies.find(c => c.id === flowCompanyId)?.name || "";
+
+  // Motivo pelo qual o botão de confirmar está travado (vazio = pode gravar).
+  const flowBlockReason = useMemo(() => {
+    if (!flowItem) return "Produto não encontrado.";
+    if (!flowCompanyId) return "Selecione a empresa da movimentação.";
+    if (flowQtyNumber < 1) return "Informe uma quantidade maior que zero.";
+    if (!flowEffectiveReason) return "Descreva o motivo da operação.";
+    if (!isEntrada) {
+      if (!flowDoc) return "Este pneu não existe nesta empresa — não há saldo para dar baixa.";
+      if (flowQtyNumber > flowFree) {
+        // Distingue "não tem pneu" de "tem pneu, mas está prometido para uma
+        // transferência": a saída para o operador é completamente diferente.
+        return flowReserved > 0 && flowQtyNumber <= flowBalance
+          ? `${flowReserved} un deste pneu estão RESERVADAS para uma transferência aprovada em ${flowCompanyName}. Livre para saída: ${flowFree} un.`
+          : `Saldo insuficiente: disponível ${flowFree} un, solicitado ${flowQtyNumber} un.`;
+      }
+    }
+    return "";
+  }, [flowItem, flowCompanyId, flowCompanyName, flowQtyNumber, flowEffectiveReason, isEntrada, flowDoc, flowFree, flowReserved, flowBalance]);
+
+  // Entrada é custo de compra (só quem tem a nota na mão sabe); saída sai pelo
+  // preço de venda à vista já cadastrado, que é o palpite certo no balcão.
+  const defaultFlowPrice = (item: ConsolidatedItem, type: StockFlowType) =>
+    type === "SAIDA" && item.priceCash > 0 ? String(item.priceCash) : "";
+
+  const openFlowModal = (item: ConsolidatedItem, type: StockFlowType, companyId?: string) => {
+    if (!canOperateFlow) return;
+
+    // Empresa de partida: a coluna clicada, senão a do próprio usuário, senão a
+    // primeira que realmente tem o pneu (na saída, com saldo livre para baixar).
+    const preferred =
+      (companyId ? flowCompanies.find(c => c.id === companyId) : undefined) ||
+      flowCompanies.find(c => c.id === user.companyId) ||
+      flowCompanies.find(c => (type === "SAIDA" ? availableQuantity(item.docs[c.id]) > 0 : !!item.docs[c.id])) ||
+      flowCompanies[0];
+
+    setFlowSku(item.sku);
+    setFlowType(type);
+    setFlowCompanyId(preferred ? preferred.id : "");
+    setFlowQty("1");
+    setFlowReasonChoice(STOCK_FLOW_REASONS[type][0]);
+    setFlowCustomReason("");
+    setFlowDocNumber("");
+    setFlowPartyName("");
+    setFlowPartyDoc("");
+    setFlowPlate("");
+    setFlowUnitPrice(defaultFlowPrice(item, type));
+    setFlowObservation("");
+    setFlowError("");
+    setFlowSuccess(null);
+    setShowFlowModal(true);
+  };
+
+  const switchFlowType = (type: StockFlowType) => {
+    if (type === flowType) return;
+    setFlowType(type);
+    setFlowReasonChoice(STOCK_FLOW_REASONS[type][0]);
+    setFlowCustomReason("");
+    setFlowError("");
+    if (flowItem) setFlowUnitPrice(defaultFlowPrice(flowItem, type));
+  };
+
+  // Volta do comprovante para o formulário mantendo produto e empresa: quem dá
+  // baixa de um pneu costuma repetir a operação logo em seguida.
+  const resetFlowForm = () => {
+    setFlowSuccess(null);
+    setFlowError("");
+    setFlowQty("1");
+    setFlowReasonChoice(STOCK_FLOW_REASONS[flowType][0]);
+    setFlowCustomReason("");
+    if (flowItem) setFlowUnitPrice(defaultFlowPrice(flowItem, flowType));
+  };
+
+  const closeFlowModal = () => {
+    if (flowSubmitting) return;
+    setShowFlowModal(false);
+    setFlowSuccess(null);
+    setFlowError("");
+    setFlowSku("");
+  };
+
+  // Esc fecha o modal (menos no meio da gravacao, para nao dar a impressao de
+  // ter cancelado uma operacao que ja esta a caminho do servidor).
+  React.useEffect(() => {
+    if (!showFlowModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !flowSubmitting) closeFlowModal();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showFlowModal, flowSubmitting]);
+
+  const handleSubmitFlow = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (flowSubmitting || !flowItem) return;
+    if (flowBlockReason) {
+      setFlowError(flowBlockReason);
+      return;
+    }
+
+    const company = companies.find(c => c.id === flowCompanyId);
+    if (!company) {
+      setFlowError("Empresa inválida para esta movimentação.");
+      return;
+    }
+
+    setFlowSubmitting(true);
+    setFlowError("");
+
+    try {
+      const unitPrice = parseFloat(flowUnitPrice.replace(",", ".")) || 0;
+
+      if (flowWillCreateItem) {
+        await onAddItem({
+          sku: flowItem.sku,
+          brand: flowItem.brand,
+          model: flowItem.model,
+          size: flowItem.size,
+          quantity: flowQtyNumber,
+          price: unitPrice || flowItem.priceCash,
+          priceCash: flowItem.priceCash,
+          priceInstallment: flowItem.priceInstallment,
+          description: `${flowItem.size} ${flowItem.brand} ${flowItem.model}`.trim(),
+          imageUrl: "",
+          notes: `Entrada pela planilha unificada — ${flowEffectiveReason}`,
+          companyId: company.id,
+          companyName: company.name
+        });
+
+        setFlowSuccess({
+          type: "ENTRADA",
+          quantity: flowQtyNumber,
+          balanceBefore: 0,
+          balanceAfter: flowQtyNumber,
+          companyName: company.name,
+          operationId: "",
+          created: true
+        });
+      } else {
+        const result = await onRegisterFlow!({
+          type: flowType,
+          items: [{ stockItemId: flowDoc!.id, quantity: flowQtyNumber, unitPrice }],
+          reason: flowEffectiveReason,
+          docNumber: flowDocNumber.trim(),
+          partyName: flowPartyName.trim(),
+          partyDoc: flowPartyDoc.trim(),
+          vehiclePlate: flowPlate.trim().toUpperCase(),
+          observation: flowObservation.trim()
+        });
+
+        const line = result.items[0];
+        setFlowSuccess({
+          type: result.type,
+          quantity: line ? line.quantity : flowQtyNumber,
+          balanceBefore: line ? line.balanceBefore : flowBalance,
+          balanceAfter: line ? line.balanceAfter : flowBalanceAfter,
+          companyName: company.name,
+          operationId: result.operationId,
+          created: false
+        });
+      }
+    } catch (err: any) {
+      setFlowError(err?.message || "Não foi possível registrar a movimentação.");
+    } finally {
+      setFlowSubmitting(false);
+    }
+  };
+
+  const flowAccent = isEntrada
+    ? {
+        text: "text-emerald-700",
+        solid: "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20",
+        soft: "bg-emerald-50 text-emerald-700 border-emerald-200",
+        ring: "focus:ring-emerald-500/10 focus:border-emerald-500"
+      }
+    : {
+        text: "text-red-700",
+        solid: "bg-red-600 hover:bg-red-700 shadow-red-600/20",
+        soft: "bg-red-50 text-red-700 border-red-200",
+        ring: "focus:ring-red-500/10 focus:border-red-500"
+      };
+
   return (
     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
       
@@ -683,6 +954,9 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
               <th className="border-r border-slate-200 px-2 py-3 text-center" colSpan={companies.length}>QUANTIDADE</th>
               <th className="border-r border-slate-200 px-2 py-3 text-center" rowSpan={2}>P/ A VISTA</th>
               <th className="px-2 py-3 text-center" rowSpan={2}>P/PRAZO</th>
+              {canOperateFlow && (
+                <th className="border-l border-slate-200 px-2 py-3 text-center" rowSpan={2}>MOVIMENTAR</th>
+              )}
             </tr>
             <tr className="border-t border-slate-200">
               {companies.map(comp => (
@@ -785,11 +1059,29 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                     const editable = canEditCompany(comp.id);
 
                     return (
-                      <td 
-                        key={comp.id} 
-                        className={`border-r border-slate-200 px-1 py-3 text-center ${editable ? "cursor-pointer hover:bg-gold-400/10" : "bg-slate-50/30"}`}
+                      <td
+                        key={comp.id}
+                        className={`group relative border-r border-slate-200 px-1 py-3 text-center ${editable ? "cursor-pointer hover:bg-gold-400/10" : "bg-slate-50/30"}`}
                         onClick={() => editable && startEdit(item, comp.id, qty.toString())}
                       >
+                        {/* Atalho de movimentação DESTA empresa: aparece ao passar o
+                            mouse na célula, para não poluir a planilha inteira. Abre
+                            já em saída quando há saldo livre (o caso do balcão) e em
+                            entrada quando não há — o tipo continua a um clique de
+                            distância dentro do modal. */}
+                        {editable && canOperateFlow && !isEditing && (
+                          <button
+                            type="button"
+                            title={`Entrada / saída deste pneu em ${comp.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openFlowModal(item, availableQuantity(docItem) > 0 ? "SAIDA" : "ENTRADA", comp.id);
+                            }}
+                            className="absolute top-1 right-1 h-4 w-4 rounded bg-white border border-slate-200 text-slate-400 hover:text-gold-700 hover:border-gold-400 items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hidden lg:inline-flex"
+                          >
+                            <ArrowRightLeft size={9} className="stroke-[2.5px]" />
+                          </button>
+                        )}
                         {isEditing ? (
                           <input 
                             autoFocus
@@ -854,13 +1146,37 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                       item.priceInstallment > 0 ? `R$ ${item.priceInstallment.toFixed(2).replace(".", ",")}` : <span className="text-slate-300">—</span>
                     )}
                   </td>
+
+                  {/* Entrada / Saída da linha inteira */}
+                  {canOperateFlow && (
+                    <td className="border-l border-slate-200 px-2 py-3 text-center whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          title={`Registrar ENTRADA de ${item.sku}`}
+                          onClick={() => openFlowModal(item, "ENTRADA")}
+                          className="h-7 w-7 inline-flex items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 transition-all cursor-pointer"
+                        >
+                          <PackagePlus size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          title={`Registrar SAÍDA de ${item.sku}`}
+                          onClick={() => openFlowModal(item, "SAIDA")}
+                          className="h-7 w-7 inline-flex items-center justify-center rounded-lg bg-red-50 text-red-700 border border-red-200 hover:bg-red-600 hover:text-white hover:border-red-600 transition-all cursor-pointer"
+                        >
+                          <PackageMinus size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               );
             })}
             
             {filteredItems.length === 0 && (
               <tr>
-                <td colSpan={6 + companies.length} className="p-8 text-center text-slate-400 font-semibold">
+                <td colSpan={6 + companies.length + (canOperateFlow ? 1 : 0)} className="p-8 text-center text-slate-400 font-semibold">
                   Nenhum registro encontrado.
                 </td>
               </tr>
@@ -1061,6 +1377,26 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
                   )}
                 </div>
               </div>
+
+              {/* Entrada / Saída direto do card */}
+              {canOperateFlow && (
+                <div className="border-t border-slate-150/60 pt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openFlowModal(item, "ENTRADA")}
+                    className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-black uppercase tracking-wider active:scale-[0.98] transition-all cursor-pointer"
+                  >
+                    <PackagePlus size={13} /> Entrada
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openFlowModal(item, "SAIDA")}
+                    className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-red-50 text-red-700 border border-red-200 text-[11px] font-black uppercase tracking-wider active:scale-[0.98] transition-all cursor-pointer"
+                  >
+                    <PackageMinus size={13} /> Saída
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}
@@ -1071,9 +1407,394 @@ export default function UnifiedStock({ items, user, companies, onUpdateItem, onA
         )}
       </div>
       
-      <div className="text-[10px] text-slate-400 font-semibold leading-relaxed">
-        💡 Dica: Clique em qualquer célula de quantidade ou preço para editar o valor diretamente na planilha e pressione <kbd className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">Enter</kbd> para salvar (Alimentadores e Administradores).
+      <div className="text-[10px] text-slate-400 font-semibold leading-relaxed space-y-1">
+        <p>
+          💡 Dica: Clique em qualquer célula de quantidade ou preço para <strong className="text-slate-500">corrigir</strong> o valor diretamente na planilha e pressione <kbd className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">Enter</kbd> para salvar (Alimentadores e Administradores).
+        </p>
+        {canOperateFlow && (
+          <p>
+            📦 Para a <strong className="text-slate-500">operação de verdade</strong> (compra, venda, garantia, perda), use os botões
+            <span className="mx-1 inline-flex items-center gap-1 align-middle">
+              <PackagePlus size={11} className="text-emerald-600" /> / <PackageMinus size={11} className="text-red-600" />
+            </span>
+            no fim de cada linha: o registro vai para o histórico da aba <strong className="text-slate-500">Entradas e Saídas</strong> com motivo, nota e responsável, e pode ser estornado de lá.
+          </p>
+        )}
       </div>
+
+      {/* ═══════════ MOVIMENTAÇÃO RÁPIDA: ENTRADA / SAÍDA ═══════════ */}
+      {showFlowModal && flowItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto animate-fadeIn print:hidden">
+          <div className="bg-white rounded-3xl max-w-lg w-full border border-slate-200 shadow-2xl my-8 flex flex-col max-h-[92vh]">
+
+            {/* Cabeçalho: o que está sendo movimentado */}
+            <div className="flex items-start justify-between border-b border-slate-100 p-5 shrink-0 gap-3">
+              <div className="min-w-0">
+                <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  {isEntrada
+                    ? <PackagePlus size={16} className="text-emerald-600 shrink-0" />
+                    : <PackageMinus size={16} className="text-red-600 shrink-0" />}
+                  {isEntrada ? "Entrada de pneu" : "Saída de pneu"}
+                </h3>
+                <p className="text-[11px] font-bold text-slate-500 mt-1 truncate">
+                  <span className="font-mono text-gold-700">{flowItem.sku}</span>
+                  <span className="mx-1.5 text-slate-300">•</span>
+                  <span className="font-mono">{flowItem.size}</span> {flowItem.brand} {flowItem.model}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeFlowModal}
+                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer shrink-0"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {flowSuccess ? (
+              /* ─── Comprovante da operação gravada ─── */
+              <div className="p-6 space-y-4 overflow-y-auto">
+                <div className={`rounded-2xl border p-5 text-center ${flowSuccess.type === "ENTRADA" ? "bg-emerald-50 border-emerald-200" : "bg-red-50 border-red-200"}`}>
+                  <CheckCircle2 size={34} className={`mx-auto mb-2 ${flowSuccess.type === "ENTRADA" ? "text-emerald-600" : "text-red-600"}`} />
+                  <p className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    {flowSuccess.type === "ENTRADA" ? "Entrada registrada" : "Saída registrada"}
+                  </p>
+                  <p className="text-[11px] font-bold text-slate-500 mt-1">
+                    {flowSuccess.quantity} un • {flowItem.sku} • {flowSuccess.companyName}
+                  </p>
+                  <div className="mt-3 flex items-center justify-center gap-2 text-base font-black font-mono">
+                    <span className="text-slate-400">{flowSuccess.balanceBefore} un</span>
+                    <ArrowRight size={15} className="text-slate-300" />
+                    <span className={flowSuccess.type === "ENTRADA" ? "text-emerald-600" : "text-red-600"}>
+                      {flowSuccess.balanceAfter} un
+                    </span>
+                  </div>
+                  {flowSuccess.operationId && (
+                    <p className="mt-2 text-[10px] font-mono font-bold text-slate-400">{flowSuccess.operationId}</p>
+                  )}
+                </div>
+
+                <p className="text-[10px] text-slate-400 font-semibold text-center leading-relaxed">
+                  {flowSuccess.created
+                    ? "O pneu não existia nesta empresa e foi cadastrado com o saldo desta entrada."
+                    : "A operação está no histórico da aba Entradas e Saídas — é lá que ela pode ser conferida, impressa ou estornada."}
+                </p>
+
+                <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+                  <button
+                    type="button"
+                    onClick={closeFlowModal}
+                    className="px-4 py-2.5 border border-slate-200 text-slate-500 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-slate-50 cursor-pointer"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetFlowForm}
+                    className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black uppercase tracking-wider shadow-md transition-all cursor-pointer hover:scale-[1.01]"
+                  >
+                    Nova movimentação
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmitFlow} className="flex flex-col min-h-0">
+                <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+                  {/* Tipo da operação */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => switchFlowType("ENTRADA")}
+                      className={`flex items-center justify-center gap-2 py-3 rounded-2xl border text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        isEntrada
+                          ? "bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                          : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      <PackagePlus size={15} /> Entrada
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => switchFlowType("SAIDA")}
+                      className={`flex items-center justify-center gap-2 py-3 rounded-2xl border text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        !isEntrada
+                          ? "bg-red-600 border-red-600 text-white shadow-md shadow-red-600/20"
+                          : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      <PackageMinus size={15} /> Saída
+                    </button>
+                  </div>
+
+                  {/* Empresa: cada opção já mostra o saldo de lá, para não errar de filial */}
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
+                      Empresa / Filial *
+                    </label>
+                    {flowCompanies.length === 0 ? (
+                      <p className="text-xs font-bold text-slate-400 py-2">Nenhuma empresa disponível para o seu perfil.</p>
+                    ) : flowCompanies.length === 1 ? (
+                      <div className="px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50/60 flex items-center justify-between gap-2">
+                        <span className="text-xs font-black text-slate-800 truncate">{flowCompanies[0].name}</span>
+                        <span className="text-[11px] font-black font-mono text-slate-500 shrink-0">
+                          {flowItem.docs[flowCompanies[0].id] ? `${flowBalance} un` : "sem cadastro"}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-0.5">
+                        {flowCompanies.map(comp => {
+                          const compDoc = flowItem.docs[comp.id];
+                          const compQty = compDoc ? Number(compDoc.quantity) || 0 : 0;
+                          const compReserved = reservedQuantityOf(compDoc);
+                          const selected = comp.id === flowCompanyId;
+                          return (
+                            <button
+                              type="button"
+                              key={comp.id}
+                              onClick={() => { setFlowCompanyId(comp.id); setFlowError(""); }}
+                              className={`px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
+                                selected ? "border-gold-500 bg-gold-50/60 shadow-xs" : "border-slate-200 bg-white hover:bg-slate-50"
+                              }`}
+                            >
+                              <span className="block text-[11px] font-black text-slate-800 truncate">{comp.name}</span>
+                              <span className="block text-[10px] font-bold text-slate-500 font-mono">
+                                {compDoc ? `${compQty} un` : "sem cadastro"}
+                                {compReserved > 0 && <span className="text-amber-700"> • {compReserved} reserv.</span>}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Quantidade + prévia do saldo */}
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
+                          Quantidade *
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setFlowQty(String(Math.max(1, flowQtyNumber - 1)))}
+                            className="h-9 w-9 inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                          >
+                            <Minus size={14} className="stroke-[3px]" />
+                          </button>
+                          <input
+                            type="number"
+                            min={1}
+                            value={flowQty}
+                            onChange={e => { setFlowQty(e.target.value); setFlowError(""); }}
+                            className={`w-20 h-9 px-2 text-center text-sm font-black font-mono text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all ${flowAccent.ring}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setFlowQty(String(flowQtyNumber + 1))}
+                            className="h-9 w-9 inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                          >
+                            <Plus size={14} className="stroke-[3px]" />
+                          </button>
+                          <div className="flex items-center gap-1 ml-1">
+                            {QUICK_QTY.map(q => (
+                              <button
+                                key={q}
+                                type="button"
+                                onClick={() => { setFlowQty(String(q)); setFlowError(""); }}
+                                className={`h-9 w-9 rounded-xl border text-[11px] font-black transition-all cursor-pointer ${
+                                  flowQtyNumber === q ? `${flowAccent.soft}` : "bg-white border-slate-200 text-slate-500 hover:bg-slate-100"
+                                }`}
+                                title={`${q} un`}
+                              >
+                                {q}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">
+                          Saldo em {flowCompanyName || "—"}
+                        </span>
+                        <div className="flex items-center justify-end gap-2 text-base font-black font-mono">
+                          <span className="text-slate-400">{flowBalance} un</span>
+                          <ArrowRight size={15} className="text-slate-300" />
+                          <span className={isEntrada ? "text-emerald-600" : "text-red-600"}>
+                            {Math.max(0, flowBalanceAfter)} un
+                          </span>
+                        </div>
+                        {flowReserved > 0 && (
+                          <span
+                            className="mt-1.5 inline-flex items-center gap-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 uppercase tracking-wider"
+                            title="Presas por uma transferência aprovada — não entram na saída."
+                          >
+                            <Lock size={9} /> {flowReserved} un reservadas • {flowFree} livres
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {flowWillCreateItem && (
+                    <div className="bg-blue-50 text-blue-800 p-3 rounded-xl text-[11px] font-bold border-l-4 border-blue-500 leading-relaxed">
+                      Este pneu ainda não existe em <strong>{flowCompanyName}</strong>. A entrada vai
+                      cadastrá-lo nesta empresa com {flowQtyNumber} un e o registro sai no histórico
+                      como cadastro inicial.
+                    </div>
+                  )}
+
+                  {/* Dados da operação */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+                        Motivo *
+                      </label>
+                      <select
+                        value={flowReasonChoice}
+                        onChange={e => { setFlowReasonChoice(e.target.value); setFlowError(""); }}
+                        className={`w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all font-bold cursor-pointer ${flowAccent.ring}`}
+                      >
+                        {STOCK_FLOW_REASONS[flowType].map(r => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+                        {isEntrada ? "Nota fiscal / Pedido" : "OS / Cupom"}
+                      </label>
+                      <input
+                        type="text"
+                        value={flowDocNumber}
+                        onChange={e => setFlowDocNumber(e.target.value)}
+                        placeholder="Opcional"
+                        className={`w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all font-semibold ${flowAccent.ring}`}
+                      />
+                    </div>
+                  </div>
+
+                  {flowReasonChoice === "Outro" && (
+                    <input
+                      type="text"
+                      value={flowCustomReason}
+                      onChange={e => { setFlowCustomReason(e.target.value); setFlowError(""); }}
+                      placeholder="Descreva o motivo da operação *"
+                      className={`w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all font-semibold ${flowAccent.ring}`}
+                    />
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+                        {isEntrada ? "Fornecedor" : "Cliente"}
+                      </label>
+                      <input
+                        type="text"
+                        value={flowPartyName}
+                        onChange={e => setFlowPartyName(e.target.value)}
+                        placeholder="Opcional"
+                        className={`w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all font-semibold ${flowAccent.ring}`}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+                        {isEntrada ? "CNPJ / CPF" : "Placa"}
+                      </label>
+                      <input
+                        type="text"
+                        value={isEntrada ? flowPartyDoc : flowPlate}
+                        onChange={e => (isEntrada ? setFlowPartyDoc(e.target.value) : setFlowPlate(e.target.value.toUpperCase()))}
+                        placeholder="Opcional"
+                        className={`w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all font-semibold font-mono ${flowAccent.ring}`}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+                        {isEntrada ? "Custo unitário (R$)" : "Preço unitário (R$)"}
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={flowUnitPrice}
+                        onChange={e => setFlowUnitPrice(e.target.value)}
+                        placeholder="Opcional"
+                        className={`w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all font-semibold font-mono ${flowAccent.ring}`}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+                        Observação
+                      </label>
+                      <input
+                        type="text"
+                        value={flowObservation}
+                        onChange={e => setFlowObservation(e.target.value)}
+                        placeholder="Opcional"
+                        className={`w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all font-semibold ${flowAccent.ring}`}
+                      />
+                    </div>
+                  </div>
+
+                  {flowError && (
+                    <div className="bg-red-50 text-red-700 p-3 rounded-xl text-xs font-bold border-l-4 border-red-500 flex items-start gap-2">
+                      <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                      {flowError}
+                    </div>
+                  )}
+                </div>
+
+                {/* Rodapé: total + confirmar */}
+                <div className="border-t border-slate-100 p-5 shrink-0 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-baseline gap-1.5">
+                      <span className={`text-xl font-black font-mono leading-none ${isEntrada ? "text-emerald-600" : "text-red-600"}`}>
+                        {isEntrada ? "+" : "-"}{flowQtyNumber}
+                      </span>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">un</span>
+                    </div>
+                    {flowQtyNumber > 0 && (parseFloat(flowUnitPrice.replace(",", ".")) || 0) > 0 && (
+                      <span className="text-[10px] font-bold text-slate-500 font-mono">
+                        {formatBRL(flowQtyNumber * (parseFloat(flowUnitPrice.replace(",", ".")) || 0))}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={closeFlowModal}
+                      disabled={flowSubmitting}
+                      className="px-4 py-2.5 border border-slate-200 text-slate-500 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-slate-50 cursor-pointer disabled:opacity-40"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={flowSubmitting || !!flowBlockReason}
+                      title={flowBlockReason || ""}
+                      className={`px-5 py-2.5 rounded-xl text-white text-xs font-black uppercase tracking-wider shadow-md transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:hover:scale-100 flex items-center gap-2 ${flowAccent.solid}`}
+                    >
+                      {flowSubmitting
+                        ? <Loader2 size={14} className="animate-spin" />
+                        : isEntrada ? <PackagePlus size={14} /> : <PackageMinus size={14} />}
+                      {flowSubmitting ? "Gravando..." : isEntrada ? "Confirmar entrada" : "Confirmar saída"}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ADD COMPANY MODAL */}
       {showAddCompanyModal && (

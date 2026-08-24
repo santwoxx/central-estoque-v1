@@ -10,7 +10,7 @@ import {
   TransferOrder,
   TransferSyncResult
 } from "../types";
-import { availableQuantity, exportToCSV, formatBRL, formatDate, matchesTireSize, reservedQuantityOf, toMillis } from "../utils";
+import { availableQuantity, exportToCSV, formatBRL, formatDate, matchesTireSize, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
 import {
   PackagePlus,
   PackageMinus,
@@ -54,28 +54,6 @@ interface StockFlowProps {
   onReverse?: (operationId: string) => Promise<void>;
   onSyncTransfers?: () => Promise<TransferSyncResult>;
 }
-
-// Motivos sugeridos por tipo de operação. O último ("Outro") libera o campo livre.
-const REASONS: Record<StockFlowType, string[]> = {
-  ENTRADA: [
-    "Compra / Reposição",
-    "Devolução de cliente",
-    "Retorno de garantia",
-    "Sobra de inventário",
-    "Outro"
-  ],
-  SAIDA: [
-    "Venda",
-    "Garantia / Troca",
-    "Uso interno / Frota",
-    "Perda / Avaria",
-    "Falta de inventário",
-    "Outro"
-  ]
-};
-
-// Atalhos de quantidade — pneu quase sempre entra/sai em par ou jogo completo.
-const QUICK_QTY = [1, 2, 4];
 
 // Quais movimentos representam entrada/saida FISICA de pneu e, por isso,
 // aparecem no historico desta tela. A transferencia entre filiais conta: o pneu
@@ -243,7 +221,7 @@ export default function StockFlow({ stock, movements, companies, user, transfers
     setMode(type);
     setSearch("");
     setCart([]);
-    setReasonChoice(REASONS[type][0]);
+    setReasonChoice(STOCK_FLOW_REASONS[type][0]);
     setCustomReason("");
     setDocNumber("");
     setPartyName("");
@@ -1704,7 +1682,7 @@ export default function StockFlow({ stock, movements, companies, user, transfers
                           onChange={e => setReasonChoice(e.target.value)}
                           className={`w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 transition-all font-bold cursor-pointer ${accent.ring}`}
                         >
-                          {REASONS[mode].map(r => (
+                          {STOCK_FLOW_REASONS[mode].map(r => (
                             <option key={r} value={r}>{r}</option>
                           ))}
                         </select>

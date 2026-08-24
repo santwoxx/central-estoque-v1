@@ -2988,6 +2988,11 @@ export default function App() {
                 onUpdateItem={handleUpdateItem} 
                 onAddItem={handleAddItem} 
                 onAddCompany={handleAddCompany}
+                onRegisterFlow={
+                  user.role === "admin" || user.role === "alimentador"
+                    ? handleRegisterStockFlow
+                    : undefined
+                }
               />
             </div>
           )}

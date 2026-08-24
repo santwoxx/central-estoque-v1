@@ -1,3 +1,35 @@
+import { StockFlowType } from "./types";
+
+// ──────────────────────────────────────────────────────────────
+// Motivos sugeridos para movimentação de pneus, por tipo de operação.
+//
+// Vive aqui porque DUAS telas gravam entrada/saída: o módulo completo (aba
+// Entradas e Saídas, operação com vários pneus) e o atalho por linha do
+// Estoque Unificado. As duas precisam oferecer exatamente os mesmos motivos,
+// senão o histórico fica com rótulos diferentes para a mesma coisa.
+// O último item ("Outro") libera o campo de texto livre.
+// ──────────────────────────────────────────────────────────────
+export const STOCK_FLOW_REASONS: Record<StockFlowType, string[]> = {
+  ENTRADA: [
+    "Compra / Reposição",
+    "Devolução de cliente",
+    "Retorno de garantia",
+    "Sobra de inventário",
+    "Outro"
+  ],
+  SAIDA: [
+    "Venda",
+    "Garantia / Troca",
+    "Uso interno / Frota",
+    "Perda / Avaria",
+    "Falta de inventário",
+    "Outro"
+  ]
+};
+
+// Atalhos de quantidade — pneu quase sempre entra/sai em par ou jogo completo.
+export const QUICK_QTY = [1, 2, 4];
+
 // Strips everything except digits, so "225/65 R17", "225 65 17" and
 // "22565r17" all normalize to the same "2256517" — lets users search tire
 // sizes without worrying about slashes, spaces, the "R", or case.
