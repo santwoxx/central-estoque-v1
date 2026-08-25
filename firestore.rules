@@ -7,16 +7,32 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Check if the current user profile is marked as admin or is an authorized admin email
-    function isAdmin() {
+    // Contas de administracao reconhecidas pelo proprio e-mail do token. O
+    // e-mail vem assinado pelo Firebase Auth: o cliente nao consegue forjar,
+    // ao contrario do papel gravado em users/{uid}.
+    function isAdminEmail() {
       return isAuth() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
         request.auth.token.email == 'brisasofc@gmail.com' ||
         request.auth.token.email == 'natandsantosmarinho10@gmail.com' ||
         request.auth.token.email == 'isaacbomfim.te@gmail.com' ||
         request.auth.token.email == 'isaacbomfim.00@gmail.com'
       );
+    }
+
+    // Check if the current user profile is marked as admin or is an authorized admin email
+    function isAdmin() {
+      return isAuth() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        isAdminEmail()
+      );
+    }
+
+    // Credencial de operador referenciada por um perfil. Usada para conferir,
+    // no servidor, que o papel que alguem gravou em users/{uid} e mesmo o da
+    // credencial com que essa pessoa entrou.
+    function credentialOf(credId) {
+      return get(/databases/$(database)/documents/custom_credentials/$(credId)).data;
     }
 
     // Helper to get user profile data
@@ -37,9 +53,46 @@ service cloud.firestore {
         (getUserData().role == 'alimentador' || getUserData().role == 'user');
     }
 
+    // ─────────────────────────────────────────────────────────────
     // Users Collection rules
+    //
+    // Este documento e a base de TODA a autorizacao do sistema: isAdmin(),
+    // isVendedor() e isAlimentador() leem users/{uid}.role, e as regras de
+    // stock, movements e transfers dependem dos tres.
+    //
+    // ANTES: 'allow read, write: if isAuth()'. Qualquer sessao autenticada
+    // podia escrever qualquer perfil — o proprio, para se declarar admin, ou o
+    // dos outros. E autenticar era trivial: a tela de login abre uma sessao
+    // anonima antes de validar a senha. Na pratica, qualquer visitante virava
+    // administrador do banco inteiro.
+    //
+    // AGORA cada um so escreve o PROPRIO perfil, e o papel e a empresa
+    // gravados tem que bater com os de uma credencial que existe de verdade:
+    // o login manda em 'credentialId' qual credencial usou (AuthScreen), e a
+    // regra confere no servidor. Ninguem escolhe o proprio papel.
+    // ─────────────────────────────────────────────────────────────
     match /users/{userId} {
-      allow read, write: if isAuth(); // Allow profile creation and read on signup/login
+      // Nenhuma tela le esta colecao (as regras leem por get(), que ignora
+      // estas linhas). Fica legivel para o proprio dono e para o admin.
+      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+
+      allow write: if isAdmin() || (
+        isAuth() &&
+        request.auth.uid == userId &&
+        (
+          // Os e-mails de administracao entram por credenciais de emergencia
+          // embutidas no proprio AuthScreen, que nao existem no banco — nao ha
+          // documento para conferir, e o e-mail do token ja e prova suficiente.
+          isAdminEmail() ||
+          (
+            request.resource.data.credentialId is string &&
+            request.resource.data.credentialId != '' &&
+            exists(/databases/$(database)/documents/custom_credentials/$(request.resource.data.credentialId)) &&
+            request.resource.data.role == credentialOf(request.resource.data.credentialId).get('role', 'user') &&
+            request.resource.data.get('companyId', '') == credentialOf(request.resource.data.credentialId).get('companyId', '')
+          )
+        )
+      );
     }
 
     // Companies Collection rules
@@ -48,10 +101,29 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ─────────────────────────────────────────────────────────────
     // Custom Credentials Collection rules
+    //
+    // ATENCAO: a senha ainda e gravada em texto puro e conferida no navegador.
+    // Enquanto for assim, quem consegue LER um documento daqui le a senha dele.
+    // A correcao definitiva e tirar a conferencia do cliente (Firebase Auth
+    // e-mail/senha ou um endpoint no backend); ate la, estas regras reduzem a
+    // exposicao ao minimo possivel sem quebrar o login.
+    //
+    // ANTES: 'allow read: if isAuth()' — e read inclui LIST. Qualquer sessao
+    // autenticada, inclusive a anonima aberta pela tela de login, baixava a
+    // colecao INTEIRA numa requisicao: usuario, senha e empresa de todo mundo.
+    // ─────────────────────────────────────────────────────────────
     match /custom_credentials/{credId} {
-      // Users need to read credentials to verify login (frontend compares password)
-      allow read: if isAuth();
+      // GET de um documento por id: e assim que a troca de senha le a propria
+      // credencial (App.tsx) e como as regras de users conferem o papel.
+      allow get: if isAuth();
+
+      // LIST: so o admin varre a colecao (tela de Operadores e Senhas). O
+      // login continua consultando por usuario, mas agora obrigatoriamente com
+      // limite pequeno (AuthScreen usa limit(5)) — o que derruba o despejo da
+      // colecao de uma vez. Consulta sem limite por quem nao e admin: negada.
+      allow list: if isAdmin() || (isAuth() && request.query.limit <= 5);
       allow create: if isAuth() && (
         isAdmin() ||
         (request.resource.data.associatedEmail == 'brisasofc@gmail.com' && (request.resource.data.username == 'brisas' || request.resource.data.username == 'central')) ||

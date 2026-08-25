@@ -10,6 +10,7 @@ import {
   getDocs, 
   query, 
   where, 
+  limit,
   addDoc,
   doc,
   setDoc
@@ -108,7 +109,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       try {
         const usernameSeed = targetEmail === "brisasofc@gmail.com" ? "central" : "isaac";
         const passwordSeed = targetEmail === "brisasofc@gmail.com" ? "@#central@#" : "123";
-        const qRef = query(collection(db, "custom_credentials"), where("username", "==", usernameSeed));
+        const qRef = query(collection(db, "custom_credentials"), where("username", "==", usernameSeed), limit(5));
         const qSnap = await getDocs(qRef);
         
         if (qSnap.empty) {
@@ -176,7 +177,8 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         // Look up credentials in the Firestore collection
         const q = query(
           collection(db, "custom_credentials"),
-          where("username", "==", username.trim())
+          where("username", "==", username.trim()),
+          limit(5)
         );
         const querySnapshot = await getDocs(q);
 
@@ -213,6 +215,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       sessionStorage.setItem(secAuthKey, "true");
       sessionStorage.setItem(`${secAuthKey}_user`, JSON.stringify(matchedCred));
       localStorage.setItem(secAuthKey, "true"); // Persist local too for better session experience
+      // O perfil precisa ir para o localStorage junto com a flag. Sem isso,
+      // ao reabrir o navegador a flag voltava mas o perfil nao, e o App caia
+      // no padrao "alimentador sem empresa" — App.tsx le dos dois lugares e o
+      // logout limpa os dois; so a gravacao estava faltando.
+      localStorage.setItem(`${secAuthKey}_user`, JSON.stringify(matchedCred));
 
       // Update the user's role in Firebase Firestore "users" collection so Firestore rules recognize them
       try {
@@ -222,6 +229,11 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           email: googleUser.email,
           companyId: matchedCred.companyId || "",
           companyName: matchedCred.companyName || "",
+          // Prova de origem do papel: a regra do Firestore confere que o papel e
+          // a empresa gravados aqui sao mesmo os da credencial usada no login.
+          // Sem isso ninguem consegue mais se declarar admin escrevendo o
+          // proprio perfil (ver match /users em firestore.rules).
+          credentialId: matchedCred.id || "",
           updatedAt: new Date()
         });
       } catch (syncErr) {
@@ -261,7 +273,8 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
       const q = query(
         collection(db, "custom_credentials"),
-        where("username", "==", username.trim().toLowerCase())
+        where("username", "==", username.trim().toLowerCase()),
+        limit(5)
       );
       const querySnapshot = await getDocs(q);
 
@@ -294,6 +307,9 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       sessionStorage.setItem(secAuthKey, "true");
       sessionStorage.setItem(`${secAuthKey}_user`, JSON.stringify(matchedCred));
       localStorage.setItem(secAuthKey, "true");
+      // Mesma correcao do caminho do Google: o perfil tem que persistir junto
+      // com a flag, senao a proxima sessao do navegador entra sem papel.
+      localStorage.setItem(`${secAuthKey}_user`, JSON.stringify(matchedCred));
 
       try {
         await setDoc(doc(db, "users", uid), {
@@ -302,6 +318,8 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           email: "anonimo@sistema.local",
           companyId: matchedCred.companyId || "",
           companyName: matchedCred.companyName || "",
+          // Ver comentario no caminho do Google: a regra confere este id.
+          credentialId: matchedCred.id || "",
           updatedAt: new Date()
         });
       } catch (syncErr) {
@@ -319,6 +337,13 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Erro de login direto.");
+      // Desfaz a sessao anonima aberta no inicio deste fluxo. Sem isso um
+      // login recusado ainda deixava o visitante autenticado no Firestore.
+      try {
+        if (auth.currentUser?.isAnonymous) await signOut(auth);
+      } catch (signOutErr) {
+        console.warn("Não foi possível encerrar a sessão anônima:", signOutErr);
+      }
     } finally {
       setLoading(false);
     }
