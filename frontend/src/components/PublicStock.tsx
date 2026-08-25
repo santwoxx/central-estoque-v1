@@ -246,29 +246,29 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
     <div className="min-h-screen bg-slate-100 font-sans pb-16">
       
       {/* HEADER DE LOJA VIRTUAL */}
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-12 shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-8 md:py-10 shadow-xl relative overflow-hidden">
         {/* Detalhe de fundo */}
         <div className="absolute top-0 right-0 -mt-16 -mr-16 opacity-10">
           <CircleDashed size={256} className="text-white animate-spin-slow" />
         </div>
         
         <div className="max-w-6xl mx-auto relative z-10 flex flex-col items-center text-center">
-          <h1 className="text-3xl md:text-5xl font-black text-white uppercase tracking-tight mb-3">
+          <h1 className="text-2xl md:text-4xl font-black text-white uppercase tracking-tight mb-2">
             Catálogo de Pneus
           </h1>
-          <p className="text-slate-300 font-medium text-sm md:text-base max-w-xl mb-8">
+          <p className="text-slate-300 font-medium text-xs md:text-sm max-w-xl mb-6">
             Consulte nossa disponibilidade em tempo real e encontre a medida perfeita.
           </p>
           
           {/* BARRA DE PESQUISA GRANDE */}
-          <div className="w-full max-w-2xl bg-white rounded-2xl shadow-lg p-2 flex items-center border border-transparent focus-within:border-gold-500 focus-within:ring-4 focus-within:ring-gold-500/20 transition-all">
-            <Search size={24} className="text-slate-400 mx-3" />
+          <div className="w-full max-w-2xl bg-white rounded-xl shadow-lg p-1.5 flex items-center border border-transparent focus-within:border-gold-500 focus-within:ring-4 focus-within:ring-gold-500/20 transition-all">
+            <Search size={20} className="text-slate-400 mx-2.5" />
             <input 
               type="text" 
               placeholder="Digite a medida, marca ou modelo..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full outline-none text-base md:text-lg text-slate-800 bg-transparent font-semibold py-2"
+              className="w-full outline-none text-sm md:text-base text-slate-800 bg-transparent font-semibold py-1.5"
             />
             {searchTerm && (
               <button onClick={() => setSearchTerm("")} className="px-4 text-xs font-bold text-slate-400 hover:text-slate-700">
@@ -280,10 +280,10 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       </div>
 
       {/* RESULTADOS / GRID DE PRODUTOS */}
-      <div className="max-w-6xl mx-auto px-4 md:px-6 mt-10">
+      <div className="max-w-7xl mx-auto px-4 md:px-6 mt-6">
         
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-slate-700">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-slate-600">
             {filteredItems.length} {filteredItems.length === 1 ? 'Produto Encontrado' : 'Produtos Encontrados'}
           </h2>
         </div>
@@ -295,38 +295,48 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
             <p className="text-slate-500 font-medium">Não temos essa medida ou modelo disponível no momento.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
             
             {filteredItems.map((item) => (
-              <div key={item.sku} className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl border border-slate-200 transition-all duration-300 group flex flex-col h-full">
-                
-                {/* Imagem / Topo do Card */}
-                <div className="bg-slate-50 h-32 flex items-center justify-center border-b border-slate-100 relative overflow-hidden">
-                  <div className="absolute top-3 left-3 bg-white px-2 py-1 rounded-lg text-[10px] font-mono font-bold text-slate-400 border border-slate-200 shadow-sm">
-                    {item.sku}
+              // Cartão compacto: sem foto (o estoque não tem imagem de pneu, e o
+              // placeholder só ocupava 128px de altura em cada cartão). A hierarquia
+              // é a que o vendedor usa para achar o pneu: medida > marca > modelo.
+              <div
+                key={item.sku}
+                className="bg-white rounded-2xl border border-slate-200 shadow-xs hover:shadow-md hover:border-slate-300 transition-all flex flex-col"
+              >
+                {/* Cabeçalho: marca, SKU e a medida em destaque */}
+                <div className="px-4 pt-3.5 pb-3">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 truncate">
+                      {item.brand}
+                    </span>
+                    <span
+                      title={item.sku}
+                      className="shrink-0 max-w-[45%] truncate font-mono text-[9px] text-slate-400 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5"
+                    >
+                      {item.sku}
+                    </span>
                   </div>
-                  <CircleDashed size={64} className="text-slate-200 group-hover:text-gold-300 transition-colors duration-500" />
-                </div>
 
-                {/* Info do Produto */}
-                <div className="p-5 flex-grow flex flex-col">
-                  {/* Marca e Modelo */}
-                  <div className="mb-1 text-xs font-black text-slate-400 uppercase tracking-widest truncate">
-                    {item.brand}
-                  </div>
-                  {/* Tamanho Gigante */}
-                  <h3 className="text-2xl font-black text-slate-900 tracking-tight leading-none mb-1">
+                  <h3 className="text-xl font-black text-slate-900 tracking-tight leading-none">
                     {item.size}
                   </h3>
-                  <div className="text-sm font-semibold text-slate-600 mb-5 truncate">
-                    {item.model}
+
+                  {item.model && item.model.trim().toLowerCase() !== item.brand.trim().toLowerCase() && (
+                    <div className="mt-1 text-[11px] font-semibold text-slate-500 truncate" title={item.model}>
+                      {item.model}
+                    </div>
+                  )}
+                </div>
+
+                {/* Disponibilidade por loja */}
+                <div className="px-4 pb-3 flex-grow">
+                  <div className="flex items-center text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1.5">
+                    <Store size={11} className="mr-1" /> Disponibilidade
                   </div>
 
-                  {/* Etiquetas de Estoque (Lojas) */}
-                  <div className="space-y-2 mt-auto">
-                    <div className="flex items-center text-[10px] font-black uppercase text-slate-400 tracking-wider mb-2">
-                      <Store size={12} className="mr-1" /> Disponibilidade
-                    </div>
+                  <div className="space-y-1">
                     {orderedCompanies.map(comp => {
                       const stockDoc = item.docs[comp.id];
                       const qty = stockDoc ? availableQuantity(stockDoc) : 0;
@@ -341,23 +351,28 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                       return (
                         <div
                           key={comp.id}
-                          className={`flex items-center justify-between px-3 py-2 rounded-xl border ${
+                          className={`flex items-center gap-1.5 pl-2 pr-1.5 py-1.5 rounded-lg border ${
                             own
                               ? "bg-gold-50/70 border-gold-200"
                               : "bg-slate-50 border-slate-100"
                           }`}
                         >
-                          <div className="flex items-center min-w-0">
-                            <span className="text-xs font-bold text-slate-600 truncate mr-2">{comp.name}</span>
-                            {own && (
-                              <span className="mr-2 shrink-0 bg-gold-100 text-gold-800 border border-gold-200 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider">
-                                Sua loja
-                              </span>
-                            )}
-                            <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10px] font-black whitespace-nowrap">
-                              {qty} UN
-                            </span>
-                          </div>
+                          {/* min-w-0 + flex-1: o nome fica com todo o espaço que
+                              sobrar e só corta quando não há mesmo como caber —
+                              o title garante o nome inteiro ao passar o mouse. */}
+                          <span
+                            title={own ? `${comp.name} — sua loja` : comp.name}
+                            className={`flex-1 min-w-0 truncate text-[11px] font-bold ${
+                              own ? "text-gold-800" : "text-slate-600"
+                            }`}
+                          >
+                            {comp.name}
+                          </span>
+
+                          <span className="shrink-0 bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded text-[10px] font-black whitespace-nowrap">
+                            {qty} un
+                          </span>
+
                           {canReserve && (
                             <button
                               type="button"
@@ -374,13 +389,14 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                                   ? `Reservar este pneu na sua loja para um cliente — o dono de ${comp.name} confirma`
                                   : `Solicitar este pneu a ${comp.name} — o dono daquela loja precisa confirmar`
                               }
-                              className={`ml-2 shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black transition-colors cursor-pointer ${
+                              className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-1 rounded-md text-[10px] font-black transition-colors cursor-pointer ${
                                 own
                                   ? "bg-gold-600 text-white hover:bg-gold-700"
-                                  : "bg-white text-slate-700 border border-slate-300 hover:bg-slate-100"
+                                  : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-100 hover:text-slate-900"
                               }`}
                             >
-                              {own ? <><ShoppingBag size={11} /> Reservar</> : <><Send size={11} /> Solicitar</>}
+                              {own ? <ShoppingBag size={11} /> : <Send size={11} />}
+                              {own ? "Reservar" : "Solicitar"}
                             </button>
                           )}
                         </div>
@@ -389,28 +405,26 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                   </div>
                 </div>
 
-                {/* Rodapé: Preços */}
+                {/* Rodapé: preços */}
                 {(item.priceCash > 0 || item.priceInstallment > 0) && (
-                  <div className="bg-gradient-to-r from-gold-50/50 to-amber-50/50 p-5 border-t border-gold-100">
-                    <div className="flex justify-between items-end">
-                      {item.priceCash > 0 && (
-                        <div>
-                          <div className="text-[10px] font-bold uppercase text-gold-700 tracking-wider">À Vista</div>
-                          <div className="text-lg font-black text-emerald-700 leading-none mt-1">
-                            R$ {item.priceCash.toFixed(2).replace(".", ",")}
-                          </div>
+                  <div className="flex items-end justify-between gap-2 px-4 py-2.5 border-t border-gold-100 bg-gradient-to-r from-gold-50/60 to-amber-50/40 rounded-b-2xl">
+                    {item.priceCash > 0 && (
+                      <div className="min-w-0">
+                        <div className="text-[9px] font-bold uppercase text-gold-700 tracking-wider leading-none">À Vista</div>
+                        <div className="text-base font-black text-emerald-700 leading-none mt-1 truncate">
+                          R$ {item.priceCash.toFixed(2).replace(".", ",")}
                         </div>
-                      )}
-                      
-                      {item.priceInstallment > 0 && (
-                        <div className="text-right">
-                          <div className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">A Prazo</div>
-                          <div className="text-base font-black text-slate-800 leading-none mt-1">
-                            R$ {item.priceInstallment.toFixed(2).replace(".", ",")}
-                          </div>
+                      </div>
+                    )}
+
+                    {item.priceInstallment > 0 && (
+                      <div className="text-right min-w-0">
+                        <div className="text-[9px] font-bold uppercase text-slate-500 tracking-wider leading-none">A Prazo</div>
+                        <div className="text-sm font-black text-slate-800 leading-none mt-1 truncate">
+                          R$ {item.priceInstallment.toFixed(2).replace(".", ",")}
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -497,7 +511,7 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
             </div>
 
             {reserveTarget.own ? (
-              <p className="mt-4 text-[11px] bg-gold-50 border border-gold-200 text-gold-900 rounded-xl p-2.5">
+              <p className="mt-4 text-[11px] bg-gold-50 border border-gold-200 text-gold-800 rounded-xl p-2.5">
                 O pedido fica <strong>em análise</strong> com o dono de {reserveTarget.companyName}. O pneu
                 só sai do saldo disponível depois que ele confirmar — até lá, não prometa a data ao cliente.
               </p>
