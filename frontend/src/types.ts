@@ -303,6 +303,13 @@ export interface TransferOrder {
   // pelo vendedor. Vira o `partyName` do movimento de saida quando a venda fecha.
   customerName?: string;
 
+  // Loja a que o vendedor esta vinculado no momento do pedido. Guardado no
+  // documento porque a loja que recebe a solicitacao precisa saber se quem pediu
+  // e da casa ou de outra filial — e o perfil do vendedor pode mudar depois.
+  // Vazio quando o vendedor nao tem empresa vinculada ("Todas as Empresas").
+  requestedByCompanyId?: string;
+  requestedByCompanyName?: string;
+
   // Quem fechou a venda de uma reserva de cliente (a loja de origem).
   saleCompletedByUid?: string;
   saleCompletedByName?: string;

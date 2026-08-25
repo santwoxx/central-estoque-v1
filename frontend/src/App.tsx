@@ -1579,7 +1579,16 @@ export default function App() {
         destinationCompanyId: data.destinationCompanyId,
         destinationCompanyName: data.destinationCompanyName,
         reason: data.reason?.trim() || "",
-        ...(isCustomerOrder ? { customerName } : {}),
+        // Na reserva de cliente fica registrado de qual loja o vendedor veio: a
+        // loja que recebe o pedido precisa distinguir "vendedor da casa" de
+        // "vendedor de outra filial pedindo meu pneu".
+        ...(isCustomerOrder
+          ? {
+              customerName,
+              requestedByCompanyId: user.companyId || "",
+              requestedByCompanyName: user.companyName || ""
+            }
+          : {}),
         requestKind,
         reservation: null,
         status: initialStatus,

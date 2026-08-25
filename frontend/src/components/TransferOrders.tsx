@@ -29,6 +29,7 @@ import {
   Inbox,
   HandHelping,
   ShoppingBag,
+  Send,
 } from "lucide-react";
 
 interface TransferOrdersProps {
@@ -188,6 +189,22 @@ export default function TransferOrders({
   // lado de destino (ninguém pertence à empresa sentinela CLIENTE), logo nenhuma
   // das quatro assinaturas se aplica — o pedido é encerrado com "Concluir Venda".
   const isCustomerOrder = (t: TransferOrder) => isCustomerReservation(t);
+
+  // Uma reserva de cliente nasce de duas formas, e a diferença importa para as
+  // duas pontas: o vendedor pediu um pneu da PRÓPRIA loja (fica em análise com o
+  // dono da casa) ou pediu um pneu de OUTRA filial (aquela loja é que decide).
+  // Vendedor sem empresa vinculada não tem loja "da casa": tudo é solicitação.
+  const isCrossStoreRequest = (t: TransferOrder) =>
+    isCustomerOrder(t) &&
+    !!t.requestedByCompanyId &&
+    t.requestedByCompanyId !== t.sourceCompanyId;
+
+  // O que o VENDEDOR lê no lugar de "Aguardando Aprovação": o pedido dele está
+  // em análise com a loja dona do pneu.
+  const statusLabelFor = (t: TransferOrder) => {
+    if (isVendedor && isCustomerOrder(t) && t.status === "SOLICITADO") return "Em Análise";
+    return STATUS_LABELS[t.status];
+  };
 
   // Cada ponta tem duas etapas: assinar (interna) e coletar a via do motorista.
   const canSignSender = (t: TransferOrder) =>
@@ -1022,12 +1039,22 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                   <div className="space-y-1 min-w-0 w-full">
                     <div className="flex items-center gap-2 flex-wrap mb-2">
                       <span className={`inline-block px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider ${STATUS_BADGE_STYLES[t.status]}`}>
-                        {STATUS_LABELS[t.status]}
+                        {statusLabelFor(t)}
                       </span>
                       {isCustomerOrder(t) ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-blue-50 text-blue-700 border-blue-200">
-                          <ShoppingBag size={10} /> Reserva de cliente{t.customerName ? `: ${t.customerName}` : ""}
-                        </span>
+                        <>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-blue-50 text-blue-700 border-blue-200">
+                            <ShoppingBag size={10} /> Reserva de cliente{t.customerName ? `: ${t.customerName}` : ""}
+                          </span>
+                          {isCrossStoreRequest(t) && (
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-300"
+                              title={`Pedido aberto por um vendedor de ${t.requestedByCompanyName || "outra filial"}`}
+                            >
+                              <Send size={10} /> De outra filial
+                            </span>
+                          )}
+                        </>
                       ) : t.requestKind === "SOLICITACAO" ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-violet-50 text-violet-700 border-violet-200">
                           <HandHelping size={10} /> Solicitação de {t.destinationCompanyName}
@@ -1192,9 +1219,15 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                     <Inbox size={13} className="shrink-0 mt-0.5" />
                     <span>
                       {isCustomerOrder(t) ? (
-                        isSourceOf(t)
-                          ? <><strong>{t.requestedByName}</strong> reservou estes pneus para <strong>{t.customerName || "um cliente"}</strong>. Ao aprovar, eles ficam bloqueados no seu estoque até a venda ser concluída.</>
-                          : <>Aguardando <strong>{t.sourceCompanyName}</strong> aprovar a reserva. Até lá o pneu continua disponível para outras vendas.</>
+                        isSourceOf(t) ? (
+                          isCrossStoreRequest(t)
+                            ? <><strong>{t.requestedByName}</strong>, vendedor de <strong>{t.requestedByCompanyName || "outra filial"}</strong>, está pedindo um pneu do SEU estoque para <strong>{t.customerName || "um cliente"}</strong>. Ao aprovar, ele fica bloqueado aqui até a venda ser concluída.</>
+                            : <><strong>{t.requestedByName}</strong> reservou estes pneus para <strong>{t.customerName || "um cliente"}</strong>. Ao aprovar, eles ficam bloqueados no seu estoque até a venda ser concluída.</>
+                        ) : isCrossStoreRequest(t) ? (
+                          <>Solicitação <strong>em análise</strong> com <strong>{t.sourceCompanyName}</strong> — o pneu é daquela filial e o dono dela decide. Até confirmar, o pneu segue disponível para outras vendas.</>
+                        ) : (
+                          <>Reserva <strong>em análise</strong> com o dono de <strong>{t.sourceCompanyName}</strong>. Até ele confirmar, o pneu segue disponível para outras vendas.</>
+                        )
                       ) : isSourceOf(t) ? (
                         <><strong>{t.destinationCompanyName}</strong> está pedindo estes pneus. Ao aprovar, eles ficam reservados no seu estoque e bloqueados para venda.</>
                       ) : (
@@ -1210,9 +1243,25 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                   <div className="flex items-start gap-1.5 text-[11px] text-blue-800 bg-blue-50 border border-blue-200 rounded-xl p-2.5">
                     <ShoppingBag size={13} className="shrink-0 mt-0.5" />
                     <span>
-                      {isSourceOf(t)
-                        ? <>Reserva aprovada{isReserved(t) ? " e bloqueada no seu estoque" : ""}. Quando entregar o pneu a <strong>{t.customerName || "o cliente"}</strong>, use <strong>Concluir Venda</strong> — é isso que dá a baixa definitiva no estoque.</>
-                        : <><strong>{t.sourceCompanyName}</strong> aprovou e separou os pneus para <strong>{t.customerName || "o cliente"}</strong>. A baixa acontece quando a loja entregar.</>}
+                      {isSourceOf(t) ? (
+                        <>
+                          Reserva confirmada{isReserved(t) ? " e bloqueada no seu estoque" : ""}
+                          {isCrossStoreRequest(t) && <> para um cliente de <strong>{t.requestedByCompanyName || "outra filial"}</strong></>}.
+                          {" "}Quando o pneu sair para <strong>{t.customerName || "o cliente"}</strong>, use{" "}
+                          <strong>Concluir Venda</strong> — é isso que dá a baixa definitiva no estoque.
+                        </>
+                      ) : isCrossStoreRequest(t) ? (
+                        <>
+                          <strong>{t.sourceCompanyName}</strong> confirmou e separou o pneu para{" "}
+                          <strong>{t.customerName || "o cliente"}</strong>. Ele está no estoque daquela filial:
+                          combine a retirada com eles. Quem dá a baixa é a loja, na entrega.
+                        </>
+                      ) : (
+                        <>
+                          <strong>{t.sourceCompanyName}</strong> confirmou e separou os pneus para{" "}
+                          <strong>{t.customerName || "o cliente"}</strong>. A baixa acontece quando a loja entregar.
+                        </>
+                      )}
                     </span>
                   </div>
                 )}

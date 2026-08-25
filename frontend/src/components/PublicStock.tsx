@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { StockItem, Company, CLIENTE_COMPANY_ID } from "../types";
-import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, X } from "lucide-react";
+import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X } from "lucide-react";
 import { availableQuantity, matchesTireSize } from "../utils";
 
 interface ConsolidatedItem {
@@ -29,7 +29,7 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   
-  const [reserveTarget, setReserveTarget] = useState<{ item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number } | null>(null);
+  const [reserveTarget, setReserveTarget] = useState<{ item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number, own: boolean } | null>(null);
   const [reserveQty, setReserveQty] = useState(1);
   const [reserveCustomer, setReserveCustomer] = useState("");
   const [reserveNote, setReserveNote] = useState("");
@@ -42,7 +42,22 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
   // Firestore o autorizam a criar o pedido).
   const canReserve = !!onCreateTransfer && (user?.role === "vendedor" || user?.role === "admin");
 
-  const openReserveModal = (target: { item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number }) => {
+  // A loja do vendedor. Vazio quando a credencial foi criada com "Todas as
+  // Empresas" — aí não existe loja "da casa" e todo pedido é uma solicitação.
+  const ownCompanyId = user?.companyId || "";
+  const isOwnStore = (companyId: string) => !!ownCompanyId && companyId === ownCompanyId;
+
+  // A loja do vendedor aparece no topo da disponibilidade: é lá que ele vende no
+  // dia a dia, e é o único lugar onde o pedido não depende de outra filial.
+  const orderedCompanies = useMemo(() => {
+    if (!ownCompanyId) return companies;
+    return [...companies].sort((a, b) => {
+      const rank = (id: string) => (isOwnStore(id) ? 0 : 1);
+      return rank(a.id) - rank(b.id) || a.name.localeCompare(b.name);
+    });
+  }, [companies, ownCompanyId]);
+
+  const openReserveModal = (target: { item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number, own: boolean }) => {
     setReserveTarget(target);
     setReserveQty(1);
     setReserveCustomer("");
@@ -88,8 +103,11 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
         requestKind: "SOLICITACAO"
       });
       setReserveDone(
-        `Reserva enviada para ${reserveTarget.companyName}. Ela aparece em "Minhas Reservas" e ` +
-        `só bloqueia o pneu depois que a loja aprovar.`
+        reserveTarget.own
+          ? `Reserva aberta em ${reserveTarget.companyName}. Ela fica EM ANÁLISE com o dono da sua ` +
+            `loja e só bloqueia o pneu depois que ele confirmar.`
+          : `Solicitação enviada para ${reserveTarget.companyName}. O pneu é daquela loja, então o ` +
+            `dono dela precisa confirmar antes de o pneu ficar reservado.`
       );
       setReserveTarget(null);
     } catch (err: any) {
@@ -309,15 +327,33 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                     <div className="flex items-center text-[10px] font-black uppercase text-slate-400 tracking-wider mb-2">
                       <Store size={12} className="mr-1" /> Disponibilidade
                     </div>
-                    {companies.map(comp => {
+                    {orderedCompanies.map(comp => {
                       const stockDoc = item.docs[comp.id];
                       const qty = stockDoc ? availableQuantity(stockDoc) : 0;
                       if (qty === 0) return null; // Só exibe filiais que tem o pneu livre
 
+                      // Pneu da própria loja: o pedido vai para o dono da casa.
+                      // Pneu de outra filial: vira uma solicitação que depende do
+                      // dono DAQUELA loja. Nos dois casos alguém confirma antes de
+                      // o pneu ser bloqueado — muda quem confirma.
+                      const own = isOwnStore(comp.id);
+
                       return (
-                        <div key={comp.id} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
-                          <div className="flex items-center">
+                        <div
+                          key={comp.id}
+                          className={`flex items-center justify-between px-3 py-2 rounded-xl border ${
+                            own
+                              ? "bg-gold-50/70 border-gold-200"
+                              : "bg-slate-50 border-slate-100"
+                          }`}
+                        >
+                          <div className="flex items-center min-w-0">
                             <span className="text-xs font-bold text-slate-600 truncate mr-2">{comp.name}</span>
+                            {own && (
+                              <span className="mr-2 shrink-0 bg-gold-100 text-gold-800 border border-gold-200 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider">
+                                Sua loja
+                              </span>
+                            )}
                             <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10px] font-black whitespace-nowrap">
                               {qty} UN
                             </span>
@@ -330,12 +366,21 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                                 companyId: comp.id,
                                 companyName: comp.name,
                                 sourceStockItemId: stockDoc.id,
-                                maxQty: qty
+                                maxQty: qty,
+                                own
                               })}
-                              title={`Separar este pneu em ${comp.name} para um cliente`}
-                              className="ml-2 shrink-0 inline-flex items-center gap-1 px-2 py-1 bg-gold-600 text-white rounded-lg text-[10px] font-black hover:bg-gold-700 transition-colors cursor-pointer"
+                              title={
+                                own
+                                  ? `Reservar este pneu na sua loja para um cliente — o dono de ${comp.name} confirma`
+                                  : `Solicitar este pneu a ${comp.name} — o dono daquela loja precisa confirmar`
+                              }
+                              className={`ml-2 shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black transition-colors cursor-pointer ${
+                                own
+                                  ? "bg-gold-600 text-white hover:bg-gold-700"
+                                  : "bg-white text-slate-700 border border-slate-300 hover:bg-slate-100"
+                              }`}
                             >
-                              <ShoppingBag size={11} /> Reservar
+                              {own ? <><ShoppingBag size={11} /> Reservar</> : <><Send size={11} /> Solicitar</>}
                             </button>
                           )}
                         </div>
@@ -384,7 +429,11 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl">
             <div className="flex items-start justify-between gap-3 mb-4">
               <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                <ShoppingBag size={18} className="text-gold-600" /> Reservar para cliente
+                {reserveTarget.own ? (
+                  <><ShoppingBag size={18} className="text-gold-600" /> Reservar para cliente</>
+                ) : (
+                  <><Send size={18} className="text-slate-500" /> Solicitar a outra loja</>
+                )}
               </h3>
               <button
                 type="button"
@@ -400,7 +449,14 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                 {reserveTarget.item.brand} {reserveTarget.item.model}{" "}
                 <span className="font-mono text-slate-500">({reserveTarget.item.size})</span>
               </p>
-              <p className="text-xs"><strong>Loja:</strong> {reserveTarget.companyName}</p>
+              <p className="text-xs">
+                <strong>Loja:</strong> {reserveTarget.companyName}{" "}
+                {reserveTarget.own ? (
+                  <span className="text-gold-700 font-bold">(sua loja)</span>
+                ) : (
+                  <span className="text-slate-500 font-bold">(outra filial)</span>
+                )}
+              </p>
               <p className="text-xs"><strong>Livre agora:</strong> {reserveTarget.maxQty} un</p>
             </div>
 
@@ -440,10 +496,18 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
               </div>
             </div>
 
-            <p className="mt-4 text-[11px] text-slate-500 bg-blue-50 border border-blue-100 text-blue-800 rounded-xl p-2.5">
-              A reserva vai para {reserveTarget.companyName} como pedido. O pneu só fica bloqueado
-              depois que a loja aprovar — até lá ele continua disponível para outras vendas.
-            </p>
+            {reserveTarget.own ? (
+              <p className="mt-4 text-[11px] bg-gold-50 border border-gold-200 text-gold-900 rounded-xl p-2.5">
+                O pedido fica <strong>em análise</strong> com o dono de {reserveTarget.companyName}. O pneu
+                só sai do saldo disponível depois que ele confirmar — até lá, não prometa a data ao cliente.
+              </p>
+            ) : (
+              <p className="mt-4 text-[11px] bg-blue-50 border border-blue-200 text-blue-900 rounded-xl p-2.5">
+                Este pneu é de <strong>outra filial</strong>. A solicitação vai para o dono de{" "}
+                {reserveTarget.companyName}, e é ele quem decide — pode recusar, e a combinação da
+                retirada fica entre você e aquela loja.
+              </p>
+            )}
 
             {reserveError && (
               <p className="mt-3 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2.5">
@@ -467,7 +531,11 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                 className="px-4 py-2 bg-gold-600 text-white rounded-xl font-bold hover:bg-gold-700 disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
               >
                 {reserveLoading && <Loader2 size={14} className="animate-spin" />}
-                {reserveLoading ? "Enviando..." : "Confirmar reserva"}
+                {reserveLoading
+                  ? "Enviando..."
+                  : reserveTarget.own
+                  ? "Confirmar reserva"
+                  : "Enviar solicitação"}
               </button>
             </div>
           </div>
@@ -481,7 +549,7 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
             <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center">
               <ShoppingBag size={22} className="text-emerald-600" />
             </div>
-            <h3 className="text-base font-black text-slate-900 mb-2">Reserva enviada</h3>
+            <h3 className="text-base font-black text-slate-900 mb-2">Pedido enviado</h3>
             <p className="text-sm text-slate-600">{reserveDone}</p>
             <button
               type="button"
