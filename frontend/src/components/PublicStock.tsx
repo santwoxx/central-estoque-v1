@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
-import { StockItem, Company } from "../types";
-import { Search, Loader2, CircleDashed, Package, Store } from "lucide-react";
+import { StockItem, Company, CLIENTE_COMPANY_ID } from "../types";
+import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, X } from "lucide-react";
 import { availableQuantity, matchesTireSize } from "../utils";
 
 interface ConsolidatedItem {
@@ -16,11 +16,88 @@ interface ConsolidatedItem {
   docs: Record<string, StockItem>;
 }
 
-export default function PublicStock() {
+interface PublicStockProps {
+  // Ausente na rota pública (consulta sem login): sem usuário, a tela é só
+  // catálogo. Com um vendedor logado, cada loja ganha o botão de reservar.
+  user?: { uid: string; displayName: string; role: string; companyId?: string };
+  onCreateTransfer?: (data: any) => Promise<void>;
+}
+
+export default function PublicStock({ user, onCreateTransfer }: PublicStockProps = {}) {
   const [stock, setStock] = useState<StockItem[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  
+  const [reserveTarget, setReserveTarget] = useState<{ item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number } | null>(null);
+  const [reserveQty, setReserveQty] = useState(1);
+  const [reserveCustomer, setReserveCustomer] = useState("");
+  const [reserveNote, setReserveNote] = useState("");
+  const [reserveLoading, setReserveLoading] = useState(false);
+  const [reserveError, setReserveError] = useState("");
+  const [reserveDone, setReserveDone] = useState("");
+
+  // Quem pode separar um pneu para um cliente. O vendedor é o caso normal; o
+  // admin entra junto porque ele também enxerga esta aba (e as regras do
+  // Firestore o autorizam a criar o pedido).
+  const canReserve = !!onCreateTransfer && (user?.role === "vendedor" || user?.role === "admin");
+
+  const openReserveModal = (target: { item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number }) => {
+    setReserveTarget(target);
+    setReserveQty(1);
+    setReserveCustomer("");
+    setReserveNote("");
+    setReserveError("");
+  };
+
+  const submitReserve = async () => {
+    if (!onCreateTransfer || !reserveTarget) return;
+    const qty = Number(reserveQty);
+    if (!Number.isInteger(qty) || qty < 1) {
+      setReserveError("Informe uma quantidade de pelo menos 1 un.");
+      return;
+    }
+    if (qty > reserveTarget.maxQty) {
+      setReserveError(`${reserveTarget.companyName} tem só ${reserveTarget.maxQty} un livres deste pneu.`);
+      return;
+    }
+    if (!reserveCustomer.trim()) {
+      setReserveError("Informe o nome do cliente — é ele que aparece no pedido da loja.");
+      return;
+    }
+
+    setReserveLoading(true);
+    setReserveError("");
+    try {
+      await onCreateTransfer({
+        items: [{
+          sourceStockItemId: reserveTarget.sourceStockItemId,
+          sku: reserveTarget.item.sku,
+          brand: reserveTarget.item.brand,
+          model: reserveTarget.item.model,
+          size: reserveTarget.item.size,
+          quantity: qty
+        }],
+        sourceCompanyId: reserveTarget.companyId,
+        sourceCompanyName: reserveTarget.companyName,
+        destinationCompanyId: CLIENTE_COMPANY_ID,
+        destinationCompanyName: "Cliente final",
+        customerName: reserveCustomer.trim(),
+        reason: reserveNote.trim(),
+        scheduledFor: null,
+        requestKind: "SOLICITACAO"
+      });
+      setReserveDone(
+        `Reserva enviada para ${reserveTarget.companyName}. Ela aparece em "Minhas Reservas" e ` +
+        `só bloqueia o pneu depois que a loja aprovar.`
+      );
+      setReserveTarget(null);
+    } catch (err: any) {
+      setReserveError(err?.message || "Erro ao enviar a reserva.");
+    } finally {
+      setReserveLoading(false);
+    }
+  };
 
   useEffect(() => {
     const unsubCompanies = onSnapshot(collection(db, "companies"), (snapshot) => {
@@ -233,15 +310,34 @@ export default function PublicStock() {
                       <Store size={12} className="mr-1" /> Disponibilidade
                     </div>
                     {companies.map(comp => {
-                      const qty = availableQuantity(item.docs[comp.id]);
+                      const stockDoc = item.docs[comp.id];
+                      const qty = stockDoc ? availableQuantity(stockDoc) : 0;
                       if (qty === 0) return null; // Só exibe filiais que tem o pneu livre
 
                       return (
                         <div key={comp.id} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
-                          <span className="text-xs font-bold text-slate-600 truncate mr-2">{comp.name}</span>
-                          <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10px] font-black whitespace-nowrap">
-                            {qty} UN
-                          </span>
+                          <div className="flex items-center">
+                            <span className="text-xs font-bold text-slate-600 truncate mr-2">{comp.name}</span>
+                            <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10px] font-black whitespace-nowrap">
+                              {qty} UN
+                            </span>
+                          </div>
+                          {canReserve && (
+                            <button
+                              type="button"
+                              onClick={() => openReserveModal({
+                                item,
+                                companyId: comp.id,
+                                companyName: comp.name,
+                                sourceStockItemId: stockDoc.id,
+                                maxQty: qty
+                              })}
+                              title={`Separar este pneu em ${comp.name} para um cliente`}
+                              className="ml-2 shrink-0 inline-flex items-center gap-1 px-2 py-1 bg-gold-600 text-white rounded-lg text-[10px] font-black hover:bg-gold-700 transition-colors cursor-pointer"
+                            >
+                              <ShoppingBag size={11} /> Reservar
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -278,6 +374,125 @@ export default function PublicStock() {
           </div>
         )}
       </div>
+
+      {/* ============ RESERVA PARA CLIENTE ============ */}
+      {/* O pedido nasce SOLICITADO e não segura nada: o pneu só é bloqueado
+          quando a loja de origem aprovar. É por isso que o texto abaixo é
+          explícito — o vendedor não pode prometer o pneu antes disso. */}
+      {reserveTarget && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                <ShoppingBag size={18} className="text-gold-600" /> Reservar para cliente
+              </h3>
+              <button
+                type="button"
+                onClick={() => setReserveTarget(null)}
+                className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mb-4 space-y-1 text-sm text-slate-600 bg-slate-50 border border-slate-100 rounded-2xl p-3">
+              <p className="font-bold text-slate-900">
+                {reserveTarget.item.brand} {reserveTarget.item.model}{" "}
+                <span className="font-mono text-slate-500">({reserveTarget.item.size})</span>
+              </p>
+              <p className="text-xs"><strong>Loja:</strong> {reserveTarget.companyName}</p>
+              <p className="text-xs"><strong>Livre agora:</strong> {reserveTarget.maxQty} un</p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantidade</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={reserveTarget.maxQty}
+                  value={reserveQty}
+                  onChange={(e) => { setReserveQty(parseInt(e.target.value) || 0); setReserveError(""); }}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nome do cliente</label>
+                <input
+                  type="text"
+                  value={reserveCustomer}
+                  onChange={(e) => { setReserveCustomer(e.target.value); setReserveError(""); }}
+                  placeholder="Ex: João da Silva"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                  Observação <span className="text-slate-400 normal-case font-semibold">(opcional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={reserveNote}
+                  onChange={(e) => setReserveNote(e.target.value)}
+                  placeholder="Ex: troca marcada para sexta de manhã"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400"
+                />
+              </div>
+            </div>
+
+            <p className="mt-4 text-[11px] text-slate-500 bg-blue-50 border border-blue-100 text-blue-800 rounded-xl p-2.5">
+              A reserva vai para {reserveTarget.companyName} como pedido. O pneu só fica bloqueado
+              depois que a loja aprovar — até lá ele continua disponível para outras vendas.
+            </p>
+
+            {reserveError && (
+              <p className="mt-3 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2.5">
+                {reserveError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                type="button"
+                onClick={() => setReserveTarget(null)}
+                disabled={reserveLoading}
+                className="px-4 py-2 border border-slate-200 rounded-xl text-slate-500 font-bold hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={submitReserve}
+                disabled={reserveLoading}
+                className="px-4 py-2 bg-gold-600 text-white rounded-xl font-bold hover:bg-gold-700 disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
+              >
+                {reserveLoading && <Loader2 size={14} className="animate-spin" />}
+                {reserveLoading ? "Enviando..." : "Confirmar reserva"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmação da reserva enviada */}
+      {reserveDone && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl text-center">
+            <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center">
+              <ShoppingBag size={22} className="text-emerald-600" />
+            </div>
+            <h3 className="text-base font-black text-slate-900 mb-2">Reserva enviada</h3>
+            <p className="text-sm text-slate-600">{reserveDone}</p>
+            <button
+              type="button"
+              onClick={() => setReserveDone("")}
+              className="mt-5 w-full px-4 py-2 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 cursor-pointer"
+            >
+              Entendi
+            </button>
+          </div>
+        </div>
+      )}
 
     </div>
   );

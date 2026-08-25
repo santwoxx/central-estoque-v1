@@ -177,6 +177,25 @@ export type TransferStatus =
 //  SOLICITACAO — o DESTINO pediu; nasce SOLICITADO e depende do aval da origem.
 export type TransferRequestKind = "ENVIO" | "SOLICITACAO";
 
+// ─────────────────────────────────────────────────────────────────
+// Reserva de cliente
+//
+// Destino sentinela usado quando um VENDEDOR separa um pneu do estoque de uma
+// loja para um cliente final — e nao para outra filial. Nao existe documento em
+// `companies` com este id, e nenhum usuario pertence a ele: por isso um pedido
+// com este destino NUNCA entra no fluxo de assinatura/recebimento (ninguem
+// poderia assinar a chegada). Ele nasce SOLICITADO, a loja de ORIGEM aprova
+// (reservando o saldo) e a propria loja de origem o encerra em "Concluir Venda",
+// que da a baixa definitiva no estoque.
+// ─────────────────────────────────────────────────────────────────
+export const CLIENTE_COMPANY_ID = "CLIENTE";
+
+export function isCustomerReservation(
+  t: { destinationCompanyId?: string } | null | undefined
+): boolean {
+  return t?.destinationCompanyId === CLIENTE_COMPANY_ID;
+}
+
 // Reserva de estoque presa por um pedido de transferencia.
 //
 // Enquanto `active` for true, a quantidade de cada item esta somada em
@@ -279,6 +298,15 @@ export interface TransferOrder {
   approvedByUid?: string;
   approvedByName?: string;
   approvedAt?: any;
+
+  // Reserva de cliente (destino CLIENTE_COMPANY_ID): nome do cliente informado
+  // pelo vendedor. Vira o `partyName` do movimento de saida quando a venda fecha.
+  customerName?: string;
+
+  // Quem fechou a venda de uma reserva de cliente (a loja de origem).
+  saleCompletedByUid?: string;
+  saleCompletedByName?: string;
+  saleCompletedAt?: any;
 
   // Quem recusou a solicitacao
   rejectedByUid?: string;

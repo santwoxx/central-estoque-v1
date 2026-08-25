@@ -177,6 +177,30 @@ service cloud.firestore {
           (request.resource.data.status == 'SOLICITADO' &&
            request.resource.data.destinationCompanyId == getUserData().companyId)
         )
+      ) || (
+        // RESERVA DE CLIENTE: o vendedor separa pneus de uma LOJA para o cliente
+        // final dele. O destino 'CLIENTE' e um sentinela — nao existe empresa com
+        // esse id, e nenhum usuario pertence a ela. Por isso o pedido nasce parado
+        // em SOLICITADO, sem reserva e sem agendamento: ele so prende saldo quando
+        // a loja de origem aprovar (regra e), e so e encerrado por ela (regra h).
+        isVendedor() &&
+        request.resource.data.destinationCompanyId == 'CLIENTE' &&
+        request.resource.data.sourceCompanyId != 'CLIENTE' &&
+        request.resource.data.status == 'SOLICITADO' &&
+        request.resource.data.requestKind == 'SOLICITACAO' &&
+        request.resource.data.scheduledFor == null &&
+        request.resource.data.items is list &&
+        request.resource.data.items.size() > 0 &&
+        request.resource.data.items.size() <= 100 &&
+        request.resource.data.requestedByUid == request.auth.uid &&
+        // O nome do cliente e o que a loja ve no pedido e o que vai para o
+        // historico de saida quando a venda fechar — sem ele o registro fica cego.
+        request.resource.data.customerName is string &&
+        request.resource.data.customerName.size() > 0 &&
+        request.resource.data.customerName.size() <= 200 &&
+        request.resource.data.delivery == null &&
+        request.resource.data.receipt == null &&
+        request.resource.data.get('reservation', null) == null
       );
 
       // Updates are split into narrow, field-locked transitions. Each branch only allows
@@ -200,6 +224,7 @@ service cloud.firestore {
         // move aqui — e so a coleta da primeira das duas vias da saida.
         isAlimentador() &&
         resource.data.sourceCompanyId == getUserData().companyId &&
+        resource.data.destinationCompanyId != 'CLIENTE' &&
         resource.data.status == 'PENDENTE' &&
         request.resource.data.status == 'PENDENTE' &&
         request.resource.data.dispatch.sender.signedByUid == request.auth.uid &&
@@ -218,6 +243,7 @@ service cloud.firestore {
         // PENDENTE, transitioning to EM_TRANSITO, only touching status/delivery/updatedAt.
         isAlimentador() &&
         resource.data.sourceCompanyId == getUserData().companyId &&
+        resource.data.destinationCompanyId != 'CLIENTE' &&
         resource.data.status == 'PENDENTE' &&
         request.resource.data.status == 'EM_TRANSITO' &&
         // A via do remetente ja precisa existir (gravada na regra b0). A via do
@@ -241,9 +267,11 @@ service cloud.firestore {
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'receipt', 'arrival', 'destinationStockItemId', 'updatedAt'])
       ) || (
         // (d) Pre-dispatch cancellation: an alimentador of the SOURCE or DESTINATION company,
-        // only while AGENDADO, PENDENTE or SOLICITADO (nothing has physically moved yet).
-        isAlimentador() &&
-        (resource.data.sourceCompanyId == getUserData().companyId || resource.data.destinationCompanyId == getUserData().companyId) &&
+        // or the Vendedor who created it, only while AGENDADO, PENDENTE or SOLICITADO (nothing has physically moved yet).
+        (
+          (isAlimentador() && (resource.data.sourceCompanyId == getUserData().companyId || resource.data.destinationCompanyId == getUserData().companyId)) ||
+          (isVendedor() && resource.data.requestedByUid == request.auth.uid)
+        ) &&
         (resource.data.status == 'AGENDADO' || resource.data.status == 'PENDENTE' || resource.data.status == 'SOLICITADO') &&
         request.resource.data.status == 'CANCELADO' &&
         // Pedido com reserva ativa segura pneus no estoque da ORIGEM, e so a origem
@@ -253,7 +281,7 @@ service cloud.firestore {
         (
           resource.data.get('reservation', null) == null ||
           resource.data.reservation.get('active', false) != true ||
-          resource.data.sourceCompanyId == getUserData().companyId
+          (isAlimentador() && resource.data.sourceCompanyId == getUserData().companyId)
         ) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledByUid', 'cancelledByName', 'cancelledAt', 'cancelReason', 'reservation', 'updatedAt'])
       ) || (
@@ -284,6 +312,23 @@ service cloud.firestore {
         (resource.data.status == 'AGENDADO' || resource.data.status == 'PENDENTE') &&
         request.resource.data.status == resource.data.status &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservation', 'updatedAt'])
+      ) || (
+        // (h) CONCLUSAO DA VENDA de uma reserva de cliente. Sem esta regra, o
+        // botao "Concluir Venda" batia em permission-denied: a regra (c), a unica
+        // que leva um pedido a CONCLUIDO, exige EM_TRANSITO e um alimentador da
+        // empresa de DESTINO — e ninguem pertence a empresa sentinela 'CLIENTE'.
+        //
+        // Quem fecha e a LOJA DE ORIGEM, na mesma transacao em que debita
+        // quantity e devolve reservedQuantity no proprio estoque (as regras de
+        // stock ja garantem que ela so escreve nos itens dela). O pedido nao passa
+        // por EM_TRANSITO: o pneu vai da prateleira direto para a mao do cliente.
+        isAlimentador() &&
+        resource.data.destinationCompanyId == 'CLIENTE' &&
+        resource.data.sourceCompanyId == getUserData().companyId &&
+        (resource.data.status == 'PENDENTE' || resource.data.status == 'AGENDADO') &&
+        request.resource.data.status == 'CONCLUIDO' &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'reservation', 'saleCompletedByUid', 'saleCompletedByName', 'saleCompletedAt', 'updatedAt'])
       );
 
       // Only admin can hard-delete a transfer record (e.g. cleaning up test data).

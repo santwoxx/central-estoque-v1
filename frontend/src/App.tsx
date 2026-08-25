@@ -62,6 +62,7 @@ import {
   TransferRequestKind,
   TransferSyncResult
 } from "./types";
+import { CLIENTE_COMPANY_ID, isCustomerReservation } from "./types";
 import { toMillis, formatDate, availableQuantity, reservedQuantityOf } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
@@ -109,7 +110,8 @@ import {
   ArrowLeftRight,
   ArrowDownUp,
   Smartphone,
-  DollarSign
+  DollarSign,
+  Search
 } from "lucide-react";
 
 // Quantos registros de movimentacao ficam em memoria. 400 (e nao 150) porque o
@@ -203,7 +205,7 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
 
   // Active Tab/View state
-  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "users-admin" | "how-to-use" | "apk-installer">("analytics");
+  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo">("analytics");
 
   // Authentication Status listener
   useEffect(() => {
@@ -259,7 +261,7 @@ export default function App() {
           });
 
           // Default tab logic based on role
-          setActiveTab("unified");
+          setActiveTab(role === "vendedor" ? "catalogo" : "unified");
         } catch (profileError) {
           console.error("Erro ao recuperar perfil:", profileError);
           setUser(null);
@@ -599,17 +601,22 @@ export default function App() {
     setTransfersReady(false);
     const transfersRef = collection(db, "transfers");
     const isGlobalAdmin = user.role === "admin" && (!user.companyId || user.email === "brisasofc@gmail.com" || user.email === "isaacbomfim.te@gmail.com" || user.email === "isaacbomfim.00@gmail.com");
-    const isGlobalViewer = isGlobalAdmin || user.role === "vendedor" || !user.companyId;
+    // "Minhas Reservas" do vendedor lista só o que ele pediu — não o movimento
+    // de transferência das filiais, que não é assunto dele.
+    const isSellerScoped = user.role === "vendedor";
+    const isGlobalViewer = !isSellerScoped && (isGlobalAdmin || !user.companyId);
 
     // Both listeners must deliver at least one snapshot before we consider the
     // transfer feed "ready" (see transfersReady usage in useAppNotifications).
     let sourceLoaded = false;
-    let destinationLoaded = isGlobalViewer; // no second listener attached in this case
+    let destinationLoaded = isGlobalViewer || isSellerScoped; // no second listener attached in these cases
     const markReadyIfComplete = () => {
       if (sourceLoaded && destinationLoaded) setTransfersReady(true);
     };
 
-    const sourceQuery = isGlobalViewer
+    const sourceQuery = isSellerScoped
+      ? query(transfersRef, where("requestedByUid", "==", user.uid))
+      : isGlobalViewer
       ? transfersRef
       : query(transfersRef, where("sourceCompanyId", "==", user.companyId));
 
@@ -624,7 +631,7 @@ export default function App() {
     });
 
     let unsubDestination = () => {};
-    if (!isGlobalViewer) {
+    if (!isGlobalViewer && !isSellerScoped) {
       const destinationQuery = query(transfersRef, where("destinationCompanyId", "==", user.companyId));
       unsubDestination = onSnapshot(destinationQuery, (snapshot) => {
         const list: TransferOrder[] = [];
@@ -680,6 +687,15 @@ export default function App() {
     stock,
     !loadingData
   );
+
+  // O vendedor só opera duas telas. Qualquer caminho que tente levá-lo a outra
+  // (clique em notificação, estado antigo restaurado) volta para o catálogo, em
+  // vez de renderizar um painel administrativo atrás de um aviso.
+  useEffect(() => {
+    if (user?.role === "vendedor" && activeTab !== "catalogo" && activeTab !== "transfers") {
+      setActiveTab("catalogo");
+    }
+  }, [user, activeTab]);
 
   const handleNotificationClick = (notification: AppNotification) => {
     markAsRead(notification.id);
@@ -1487,6 +1503,8 @@ export default function App() {
     // "ENVIO" (a origem despacha, fluxo historico) ou "SOLICITACAO" (o destino
     // pede e a origem decide). Ausente = ENVIO, para nao mexer em chamadas antigas.
     requestKind?: TransferRequestKind;
+    // Reserva de cliente (destino CLIENTE_COMPANY_ID): quem vai levar o pneu.
+    customerName?: string;
   }) => {
     if (!user) return;
 
@@ -1498,27 +1516,52 @@ export default function App() {
         throw new Error("A quantidade de todos os itens deve ser maior que zero.");
       }
     }
-    if (!data.destinationCompanyId || data.sourceCompanyId === data.destinationCompanyId) {
-      throw new Error("Selecione uma empresa de destino diferente da empresa de origem.");
-    }
     if (!data.sourceCompanyId) {
       throw new Error("Selecione a empresa de origem.");
     }
-    // Um operador sem empresa vinculada na credencial nao passa nas regras do
-    // Firestore (que comparam a empresa do pedido com a do perfil). Sem esta
-    // checagem o erro chegaria como um "Missing or insufficient permissions" seco.
-    if (user.role !== "admin" && !user.companyId) {
-      throw new Error(
-        "Seu usuário não está vinculado a nenhuma empresa. Peça ao administrador para definir a empresa da sua credencial em Operadores e Senhas e faça login novamente."
-      );
+    if (!data.destinationCompanyId || data.sourceCompanyId === data.destinationCompanyId) {
+      throw new Error("Selecione uma empresa de destino diferente da empresa de origem.");
     }
 
-    const isScheduled = !!data.scheduledFor && data.scheduledFor.getTime() > Date.now();
-    const requestKind: TransferRequestKind = data.requestKind === "SOLICITACAO" ? "SOLICITACAO" : "ENVIO";
+    // Reserva de CLIENTE: o pneu nao vai para outra filial, vai para o cliente
+    // final do vendedor. O destino e um sentinela sem empresa correspondente, e
+    // por isso este pedido segue regras proprias (ver CLIENTE_COMPANY_ID em types.ts).
+    const isCustomerOrder = data.destinationCompanyId === CLIENTE_COMPANY_ID;
+    const customerName = (data.customerName || "").trim();
 
-    // Uma SOLICITACAO so pode partir de quem vai RECEBER — e o pedido "me manda
-    // esses pneus". Quem envia por conta propria usa o fluxo de ENVIO.
-    if (requestKind === "SOLICITACAO" && user.role !== "admin" && data.destinationCompanyId !== user.companyId) {
+    if (isCustomerOrder) {
+      if (user.role !== "vendedor" && user.role !== "admin") {
+        throw new Error("Apenas vendedores podem reservar pneus para um cliente.");
+      }
+      if (!customerName) {
+        throw new Error("Informe o nome do cliente para quem o pneu está sendo reservado.");
+      }
+      if (data.sourceCompanyId === CLIENTE_COMPANY_ID) {
+        throw new Error("Selecione a loja de origem do pneu.");
+      }
+    } else {
+      // Um operador sem empresa vinculada na credencial nao passa nas regras do
+      // Firestore (que comparam a empresa do pedido com a do perfil). Sem esta
+      // checagem o erro chegaria como um "Missing or insufficient permissions" seco.
+      // O vendedor nao entra aqui: ele nunca cria transferencia entre filiais.
+      if (user.role !== "admin" && !user.companyId) {
+        throw new Error(
+          "Seu usuário não está vinculado a nenhuma empresa. Peça ao administrador para definir a empresa da sua credencial em Operadores e Senhas e faça login novamente."
+        );
+      }
+    }
+
+    // A reserva de cliente e sempre imediata: nada de agendamento, e a loja de
+    // origem decide na hora. Por isso ela ignora scheduledFor.
+    const isScheduled = !isCustomerOrder && !!data.scheduledFor && data.scheduledFor.getTime() > Date.now();
+    const requestKind: TransferRequestKind =
+      isCustomerOrder || data.requestKind === "SOLICITACAO" ? "SOLICITACAO" : "ENVIO";
+
+    // Uma SOLICITACAO entre filiais so pode partir de quem vai RECEBER — e o
+    // pedido "me manda esses pneus". Quem envia por conta propria usa o fluxo de
+    // ENVIO. A reserva de cliente e a excecao: quem pede e o vendedor, e o
+    // "destino" e o balcao, nao uma empresa do sistema.
+    if (requestKind === "SOLICITACAO" && !isCustomerOrder && user.role !== "admin" && data.destinationCompanyId !== user.companyId) {
       throw new Error("Uma solicitação só pode ser aberta pela empresa que vai receber os pneus.");
     }
 
@@ -1536,6 +1579,7 @@ export default function App() {
         destinationCompanyId: data.destinationCompanyId,
         destinationCompanyName: data.destinationCompanyName,
         reason: data.reason?.trim() || "",
+        ...(isCustomerOrder ? { customerName } : {}),
         requestKind,
         reservation: null,
         status: initialStatus,
@@ -1552,6 +1596,12 @@ export default function App() {
     } catch (err: any) {
       console.error("Erro ao criar pedido de transferência:", err);
       if (err?.code === "permission-denied") {
+        if (isCustomerOrder) {
+          throw new Error(
+            "O banco recusou a reserva por permissão. Confirme com o administrador se o seu acesso está " +
+            "marcado como Vendedor e, se a sua credencial mudou recentemente, saia e entre novamente."
+          );
+        }
         // Causa quase sempre operacional: a empresa gravada no perfil (users/{uid},
         // escrito no login) nao bate com a empresa do pedido — tipicamente porque a
         // credencial trocou de empresa e a sessao ainda e a antiga.
@@ -2245,6 +2295,182 @@ export default function App() {
   };
 
   // ─────────────────────────────────────────────────────────────────
+  // Conclusão de venda (reserva de cliente)
+  //
+  // Fecha um pedido com destino CLIENTE_COMPANY_ID: o vendedor separou o pneu,
+  // a loja de origem aprovou (reservando o saldo) e agora entregou de fato.
+  // Numa única transação atômica:
+  //   1. debita `quantity` do estoque da ORIGEM;
+  //   2. devolve a mesma quantidade de `reservedQuantity` — a reserva deixou de
+  //      existir porque virou saída real (mesma conversão que o despacho de uma
+  //      transferência faz em handleCompleteDispatch);
+  //   3. grava a SAIDA em `movements` com o cliente em partyName, para a venda
+  //      aparecer em Entradas e Saídas como qualquer outra baixa;
+  //   4. encerra o pedido em CONCLUIDO.
+  // Não há dupla contagem: quem debita o saldo é só este passo — a aprovação
+  // apenas reserva, nunca baixa.
+  // ─────────────────────────────────────────────────────────────────
+  const handleCompleteSale = async (transferId: string) => {
+    if (!user) return;
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const transferRef = doc(db, "transfers", transferId);
+        const transferSnap = await transaction.get(transferRef);
+        if (!transferSnap.exists()) {
+          throw new Error("Reserva não encontrada (pode ter sido excluída).");
+        }
+        const transferData: any = transferSnap.data();
+
+        if (!isCustomerReservation(transferData)) {
+          throw new Error("Este pedido é uma transferência entre filiais — conclua pelo fluxo de assinaturas.");
+        }
+        // Depois de aprovada, a reserva fica em PENDENTE (ou AGENDADO). Não
+        // existe status "APROVADO" neste sistema — ver TransferStatus em types.ts.
+        if (transferData.status !== "PENDENTE" && transferData.status !== "AGENDADO") {
+          throw new Error(
+            transferData.status === "SOLICITADO"
+              ? "Esta reserva ainda não foi aprovada. Aprove e reserve os pneus antes de concluir a venda."
+              : `Esta reserva não está mais aberta (situação atual: ${transferData.status}).`
+          );
+        }
+        if (user.role !== "admin" && transferData.sourceCompanyId !== user.companyId) {
+          throw new Error("Só a loja que tem o pneu no estoque pode concluir esta venda.");
+        }
+
+        const items = transferData.items || [];
+        if (items.length === 0) {
+          throw new Error("Reserva não contém itens.");
+        }
+
+        // Com a reserva ativa, a baixa consome o próprio saldo reservado. Se ela
+        // tiver sido liberada antes, a venda disputa o saldo livre como qualquer
+        // outra saída — e pode legitimamente faltar pneu.
+        const wasReserved = transferData.reservation?.active === true;
+        const customerName = (transferData.customerName || "").trim() || "Não informado";
+        const operationId = `VENDA-${transferId}`;
+
+        // --- TODAS AS LEITURAS PRIMEIRO (exigência do Firestore) ---
+        const stockDataToUpdate = [];
+        for (const item of items) {
+          if (!item?.sourceStockItemId) {
+            throw new Error(`O item ${item?.sku || ""} da reserva não aponta para nenhum produto do estoque.`);
+          }
+          const sourceStockRef = doc(db, "stock", item.sourceStockItemId);
+          const sourceStockSnap = await transaction.get(sourceStockRef);
+
+          if (!sourceStockSnap.exists()) {
+            throw new Error(`O pneu ${item.sku} não existe mais no estoque da loja.`);
+          }
+
+          const sourceData: any = sourceStockSnap.data();
+          const currentQty = sourceData.quantity ?? 0;
+          const currentReserved = reservedQuantityOf(sourceData);
+          const qty = Number(item.quantity) || 0;
+
+          if (currentQty < qty) {
+            throw new Error(
+              `Estoque insuficiente para ${item.sku}. Saldo atual: ${currentQty} un, necessário: ${qty} un.`
+            );
+          }
+
+          const newQty = currentQty - qty;
+          // A reserva DESTE pedido sai do contador; a de outros pedidos permanece.
+          const newReserved = wasReserved
+            ? Math.max(0, currentReserved - qty)
+            : currentReserved;
+
+          // Uma venda sem reserva própria não pode comer o que outro pedido já
+          // prendeu — aquele saldo está prometido a outra filial ou cliente.
+          if (newQty < newReserved) {
+            throw new Error(
+              `${newReserved} un de ${item.sku} estão reservadas para outro pedido. ` +
+              `Livre: ${Math.max(0, currentQty - currentReserved)} un, necessário: ${qty} un.`
+            );
+          }
+
+          stockDataToUpdate.push({
+            ref: sourceStockRef,
+            newQty,
+            newReserved,
+            reservedChanged: newReserved !== currentReserved,
+            unitPrice: Number(sourceData.priceCash ?? sourceData.price ?? 0) || 0,
+            item
+          });
+        }
+
+        // --- DEPOIS TODAS AS ESCRITAS ---
+        for (const updateData of stockDataToUpdate) {
+          const qty = Number(updateData.item.quantity) || 0;
+
+          transaction.update(updateData.ref, {
+            quantity: updateData.newQty,
+            ...(updateData.reservedChanged ? { reservedQuantity: updateData.newReserved } : {}),
+            updatedAt: serverTimestamp()
+          });
+
+          const movementRef = doc(collection(db, "movements"));
+          transaction.set(movementRef, {
+            sku: updateData.item.sku,
+            brand: updateData.item.brand,
+            model: updateData.item.model,
+            size: updateData.item.size,
+            type: "SAIDA",
+            quantity: -qty,
+            balanceAfter: updateData.newQty,
+            companyId: transferData.sourceCompanyId,
+            companyName: transferData.sourceCompanyName,
+            userId: user.uid,
+            userEmail: user.email,
+            timestamp: serverTimestamp(),
+            reason:
+              `Saída de pneus — Venda • Cliente: ${customerName} • ` +
+              `Reserva de ${transferData.requestedByName || "vendedor"} (${operationId})`,
+            // Os campos abaixo são os mesmos que o módulo de Entradas e Saídas
+            // grava: sem eles a venda não se agrupa como operação no histórico
+            // nem aparece com o nome do cliente na coluna "Fornecedor / Cliente".
+            stockItemId: updateData.item.sourceStockItemId,
+            operationId,
+            operationReason: "Venda",
+            docNumber: "",
+            partyName: customerName,
+            partyDoc: "",
+            vehiclePlate: "",
+            observation: (transferData.reason || "").trim(),
+            unitPrice: updateData.unitPrice,
+            totalAmount: updateData.unitPrice * qty,
+            transferId
+          });
+        }
+
+        transaction.update(transferRef, {
+          status: "CONCLUIDO",
+          // A reserva vira saída real: fica registrada como encerrada,
+          // preservando quem reservou e quando (auditoria não se apaga).
+          ...(wasReserved
+            ? {
+                reservation: {
+                  ...transferData.reservation,
+                  active: false,
+                  releasedAt: serverTimestamp(),
+                  releasedReason: "Venda concluída e entregue ao cliente"
+                }
+              }
+            : {}),
+          saleCompletedByUid: user.uid,
+          saleCompletedByName: user.displayName,
+          saleCompletedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      });
+    } catch (err: any) {
+      console.error("Erro ao concluir a venda:", err);
+      throw describeTransferWriteError(err, "Erro ao concluir a venda.");
+    }
+  };
+
+
+  // ─────────────────────────────────────────────────────────────────
   // Regularização do histórico de transferências
   //
   // Toda transferência assinada grava o seu movimento na MESMA transação que
@@ -2560,82 +2786,97 @@ export default function App() {
 
           {/* Navigation Links Column */}
           <nav className="flex flex-col gap-1.5">
-            {/* Everyone can browse everyone's stock here (read-only outside their own
-                company's column) — this is how an alimentador checks whether another
-                filial has what they need before requesting a transfer. */}
-            <button
-              type="button"
-              onClick={() => setActiveTab("unified")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                activeTab === "unified"
-                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-              }`}
-            >
-              <Warehouse size={14} className="stroke-[2px]" /> Estoque Unificado
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab("analytics")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                activeTab === "analytics" 
-                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-              }`}
-            >
-              <TrendingUp size={14} className="stroke-[2px]" /> Painel de Indicadores
-            </button>
-
-            {(user.role === "alimentador" || user.role === "admin") && (
+            {(user.role === "admin" || user.role === "vendedor") && (
               <button
                 type="button"
-                onClick={() => setActiveTab("inventory")}
+                onClick={() => setActiveTab("catalogo")}
                 className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                  activeTab === "inventory" 
-                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
+                  activeTab === "catalogo"
+                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
                     : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
                 }`}
               >
-                <Layers size={14} className="stroke-[2px]" /> Cadastros e Ajustes
+                <Search size={14} className="stroke-[2px]" /> Catálogo e Reservas
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={() => setActiveTab("stock-flow")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                activeTab === "stock-flow"
-                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-              }`}
-            >
-              <ArrowDownUp size={14} className="stroke-[2px]" /> Entradas e Saídas
-            </button>
+            {user.role !== "vendedor" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("unified")}
+                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                    activeTab === "unified"
+                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                  }`}
+                >
+                  <Warehouse size={14} className="stroke-[2px]" /> Estoque Unificado
+                </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab("pdf-import")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                activeTab === "pdf-import" 
-                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-              }`}
-            >
-              <FileUp size={14} className="stroke-[2px]" /> Importar Estoque
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("analytics")}
+                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                    activeTab === "analytics" 
+                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
+                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                  }`}
+                >
+                  <TrendingUp size={14} className="stroke-[2px]" /> Painel de Indicadores
+                </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab("reports")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                activeTab === "reports" 
-                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-              }`}
-            >
-              <Activity size={14} className="stroke-[2px]" /> Auditoria & Histórico
-            </button>
+                {(user.role === "alimentador" || user.role === "admin") && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("inventory")}
+                    className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                      activeTab === "inventory" 
+                        ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
+                        : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                    }`}
+                  >
+                    <Layers size={14} className="stroke-[2px]" /> Cadastros e Ajustes
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("stock-flow")}
+                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                    activeTab === "stock-flow"
+                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                  }`}
+                >
+                  <ArrowDownUp size={14} className="stroke-[2px]" /> Entradas e Saídas
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("pdf-import")}
+                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                    activeTab === "pdf-import" 
+                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
+                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                  }`}
+                >
+                  <FileUp size={14} className="stroke-[2px]" /> Importar Estoque
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("reports")}
+                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                    activeTab === "reports" 
+                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
+                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                  }`}
+                >
+                  <Activity size={14} className="stroke-[2px]" /> Auditoria & Histórico
+                </button>
+              </>
+            )}
 
             <button
               type="button"
@@ -2646,7 +2887,7 @@ export default function App() {
                   : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
               }`}
             >
-              <ArrowLeftRight size={14} className="stroke-[2px]" /> Transferências
+              <ArrowLeftRight size={14} className="stroke-[2px]" /> {user.role === "vendedor" ? "Minhas Reservas" : "Transferências"}
             </button>
 
             {user.role === "admin" && (
@@ -2782,71 +3023,88 @@ export default function App() {
 
       {/* Mobile navigation bottom bar */}
       <div className="md:hidden bg-[#0b0f19] border-t border-gold-500/20 fixed bottom-0 inset-x-0 h-16 z-40 flex items-stretch divide-x divide-slate-800 shadow-[0_-4px_25px_rgba(0,0,0,0.2)] overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => setActiveTab("unified")}
-          className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-            activeTab === "unified" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-          }`}
-        >
-          <Warehouse size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Geral</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab("analytics")}
-          className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-            activeTab === "analytics" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-          }`}
-        >
-          <TrendingUp size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Painel</span>
-        </button>
-
-        {(user.role === "alimentador" || user.role === "admin") && (
+        {(user.role === "admin" || user.role === "vendedor") && (
           <button
             type="button"
-            onClick={() => setActiveTab("inventory")}
+            onClick={() => setActiveTab("catalogo")}
             className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-              activeTab === "inventory" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+              activeTab === "catalogo" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
             }`}
           >
-            <Layers size={18} />
-            <span className="text-[9px] font-extrabold uppercase tracking-wide">Cadastros</span>
+            <Search size={18} />
+            <span className="text-[9px] font-extrabold uppercase tracking-wide">Catálogo</span>
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={() => setActiveTab("stock-flow")}
-          className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-            activeTab === "stock-flow" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-          }`}
-        >
-          <ArrowDownUp size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Ent/Saí</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("pdf-import")}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all ${
-            activeTab === "pdf-import" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-          }`}
-        >
-          <FileUp size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Importar</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("reports")}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all ${
-            activeTab === "reports" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-          }`}
-        >
-          <Activity size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Relatórios</span>
-        </button>
+        {user.role !== "vendedor" && (
+          <>
+            <button
+              type="button"
+              onClick={() => setActiveTab("unified")}
+              className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
+                activeTab === "unified" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+              }`}
+            >
+              <Warehouse size={18} />
+              <span className="text-[9px] font-extrabold uppercase tracking-wide">Geral</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("analytics")}
+              className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
+                activeTab === "analytics" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+              }`}
+            >
+              <TrendingUp size={18} />
+              <span className="text-[9px] font-extrabold uppercase tracking-wide">Painel</span>
+            </button>
+
+            {(user.role === "alimentador" || user.role === "admin") && (
+              <button
+                type="button"
+                onClick={() => setActiveTab("inventory")}
+                className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
+                  activeTab === "inventory" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+                }`}
+              >
+                <Layers size={18} />
+                <span className="text-[9px] font-extrabold uppercase tracking-wide">Cadastros</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("stock-flow")}
+              className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
+                activeTab === "stock-flow" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+              }`}
+            >
+              <ArrowDownUp size={18} />
+              <span className="text-[9px] font-extrabold uppercase tracking-wide">Ent/Saí</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("pdf-import")}
+              className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all ${
+                activeTab === "pdf-import" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+              }`}
+            >
+              <FileUp size={18} />
+              <span className="text-[9px] font-extrabold uppercase tracking-wide">Importar</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("reports")}
+              className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all ${
+                activeTab === "reports" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+              }`}
+            >
+              <Activity size={18} />
+              <span className="text-[9px] font-extrabold uppercase tracking-wide">Relatórios</span>
+            </button>
+          </>
+        )}
 
         <button
           type="button"
@@ -2856,7 +3114,7 @@ export default function App() {
           }`}
         >
           <ArrowLeftRight size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Transf.</span>
+          <span className="text-[9px] font-extrabold uppercase tracking-wide">{user.role === "vendedor" ? "Reservas" : "Transf."}</span>
         </button>
 
         <button
@@ -2973,6 +3231,11 @@ export default function App() {
             <div className="h-5 w-5 border-2 border-gold-500 border-t-transparent rounded-full animate-spin"></div>
           </div>
         }>
+          {activeTab === "catalogo" && (
+            <PublicStock user={user} onCreateTransfer={handleCreateTransfer} />
+          )}
+
+
           {activeTab === "unified" && (
             <div className="space-y-4">
               {loadingData && (
@@ -3079,6 +3342,7 @@ export default function App() {
               onCompleteDispatch={handleCompleteDispatch}
               onSignReceiverArrival={handleSignReceiverArrival}
               onCompleteArrival={handleCompleteArrival}
+              onCompleteSale={handleCompleteSale}
               onReverseTransfer={handleReverseInTransitTransfer}
               onDeleteTransfer={handleDeleteTransfer}
             />
