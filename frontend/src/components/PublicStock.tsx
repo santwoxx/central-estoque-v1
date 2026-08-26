@@ -11,9 +11,28 @@ interface ConsolidatedItem {
   brand: string;
   model: string;
   size: string;
-  priceCash: number;
-  priceInstallment: number;
   docs: Record<string, StockItem>;
+
+  // O MESMO pneu custa valores diferentes em cada filial, e o preço mora no
+  // documento de estoque de cada uma — não na ficha. Por isso aqui não existe
+  // "o preço do pneu": existe o da loja mais barata, para o "a partir de" do
+  // rodapé, e um aviso de que as outras cobram diferente.
+  cheapestDoc: StockItem | null;
+  priceVaries: boolean;
+}
+
+// Leitura tolerante de preço: documentos antigos só têm o campo legado `price`,
+// e um pneu sem preço a prazo próprio é vendido pelo valor à vista.
+function cashPriceOf(doc?: StockItem | null): number {
+  return doc ? doc.priceCash || doc.price || 0 : 0;
+}
+
+function installmentPriceOf(doc?: StockItem | null): number {
+  return doc ? doc.priceInstallment || cashPriceOf(doc) : 0;
+}
+
+function formatPrice(value: number): string {
+  return `R$ ${value.toFixed(2).replace(".", ",")}`;
 }
 
 interface PublicStockProps {
@@ -186,8 +205,8 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
           model: item.model,
           size: item.size,
           description: `${item.size} ${item.brand} ${item.model}`.trim(),
-          priceCash: item.priceCash || item.price || 0,
-          priceInstallment: item.priceInstallment || item.price || 0,
+          cheapestDoc: null,
+          priceVaries: false,
           docs: {}
         });
       }
@@ -203,8 +222,6 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
         cons.docs[compId] = item;
       }
       
-      if (item.priceCash && item.priceCash > cons.priceCash) cons.priceCash = item.priceCash;
-      if (item.priceInstallment && item.priceInstallment > cons.priceInstallment) cons.priceInstallment = item.priceInstallment;
     });
 
     // Filtra apenas produtos que têm alguma quantidade > 0 em alguma filial
@@ -216,7 +233,28 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       return Object.values(item.docs).some(doc => availableQuantity(doc) > 0);
     });
 
-    return availableItems.sort((a, b) => a.sku.localeCompare(b.sku));
+    // O "a partir de" do rodapé sai da loja mais barata ENTRE AS QUE APARECEM —
+    // ou seja, só as que têm o pneu livre. Anunciar o preço de uma filial que
+    // está sem estoque é oferecer o que não dá para vender.
+    //
+    // ANTES daqui saía o MAIOR preço entre todas as filiais, exibido como se
+    // fosse o preço do pneu: quem comprava na loja mais barata via o valor da
+    // mais cara.
+    return availableItems
+      .map(item => {
+        const inStock = Object.values(item.docs).filter(doc => availableQuantity(doc) > 0);
+        const cheapestDoc = inStock.reduce<StockItem | null>(
+          (best, doc) => (!best || cashPriceOf(doc) < cashPriceOf(best) ? doc : best),
+          null
+        );
+        const priceVaries = inStock.length > 1 && inStock.some(
+          doc =>
+            cashPriceOf(doc) !== cashPriceOf(cheapestDoc) ||
+            installmentPriceOf(doc) !== installmentPriceOf(cheapestDoc)
+        );
+        return { ...item, cheapestDoc, priceVaries };
+      })
+      .sort((a, b) => a.sku.localeCompare(b.sku));
   }, [stock, companies]);
 
   const filteredItems = useMemo(() => {
@@ -348,15 +386,22 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                       // o pneu ser bloqueado — muda quem confirma.
                       const own = isOwnStore(comp.id);
 
+                      // O preço é DESTA filial. Duas lojas com o mesmo pneu
+                      // cobram valores diferentes, e é esse número que vale para
+                      // quem for comprar aqui.
+                      const cash = cashPriceOf(stockDoc);
+                      const installment = installmentPriceOf(stockDoc);
+
                       return (
                         <div
                           key={comp.id}
-                          className={`flex items-center gap-1.5 pl-2 pr-1.5 py-1.5 rounded-lg border ${
+                          className={`flex flex-col gap-1 pl-2 pr-1.5 py-1.5 rounded-lg border ${
                             own
                               ? "bg-gold-50/70 border-gold-200"
                               : "bg-slate-50 border-slate-100"
                           }`}
                         >
+                          <div className="flex items-center gap-1.5">
                           {/* min-w-0 + flex-1: o nome fica com todo o espaço que
                               sobrar e só corta quando não há mesmo como caber —
                               o title garante o nome inteiro ao passar o mouse. */}
@@ -399,29 +444,52 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                               {own ? "Reservar" : "Solicitar"}
                             </button>
                           )}
+                          </div>
+
+                          {/* Preço desta loja. "A prazo" só aparece quando é
+                              mesmo diferente do à vista — repetir o número nas
+                              duas linhas só rouba espaço da ficha. */}
+                          {cash > 0 && (
+                            <div className="flex items-baseline gap-2 pl-0.5">
+                              <span className="text-[10px] font-bold text-emerald-700 whitespace-nowrap">
+                                À vista{" "}
+                                <strong className="text-[11px] font-black">{formatPrice(cash)}</strong>
+                              </span>
+                              {installment > 0 && installment !== cash && (
+                                <span className="text-[10px] font-semibold text-slate-500 whitespace-nowrap">
+                                  A prazo{" "}
+                                  <strong className="font-black text-slate-700">{formatPrice(installment)}</strong>
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* Rodapé: preços */}
-                {(item.priceCash > 0 || item.priceInstallment > 0) && (
+                {/* Rodapé: o menor preço entre as lojas que têm o pneu.
+                    Com filiais cobrando valores diferentes ele vira "a partir
+                    de" — o preço exato de cada uma está na linha dela acima. */}
+                {cashPriceOf(item.cheapestDoc) > 0 && (
                   <div className="flex items-end justify-between gap-2 px-4 py-2.5 border-t border-gold-100 bg-gradient-to-r from-gold-50/60 to-amber-50/40 rounded-b-2xl">
-                    {item.priceCash > 0 && (
-                      <div className="min-w-0">
-                        <div className="text-[9px] font-bold uppercase text-gold-700 tracking-wider leading-none">À Vista</div>
-                        <div className="text-base font-black text-emerald-700 leading-none mt-1 truncate">
-                          R$ {item.priceCash.toFixed(2).replace(".", ",")}
-                        </div>
+                    <div className="min-w-0">
+                      <div className="text-[9px] font-bold uppercase text-gold-700 tracking-wider leading-none">
+                        {item.priceVaries ? "À vista a partir de" : "À Vista"}
                       </div>
-                    )}
+                      <div className="text-base font-black text-emerald-700 leading-none mt-1 truncate">
+                        {formatPrice(cashPriceOf(item.cheapestDoc))}
+                      </div>
+                    </div>
 
-                    {item.priceInstallment > 0 && (
+                    {installmentPriceOf(item.cheapestDoc) > 0 && (
                       <div className="text-right min-w-0">
-                        <div className="text-[9px] font-bold uppercase text-slate-500 tracking-wider leading-none">A Prazo</div>
+                        <div className="text-[9px] font-bold uppercase text-slate-500 tracking-wider leading-none">
+                          {item.priceVaries ? "A prazo a partir de" : "A Prazo"}
+                        </div>
                         <div className="text-sm font-black text-slate-800 leading-none mt-1 truncate">
-                          R$ {item.priceInstallment.toFixed(2).replace(".", ",")}
+                          {formatPrice(installmentPriceOf(item.cheapestDoc))}
                         </div>
                       </div>
                     )}
@@ -472,6 +540,27 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                 )}
               </p>
               <p className="text-xs"><strong>Livre agora:</strong> {reserveTarget.maxQty} un</p>
+              {/* O preço é o DESTA loja — a mesma que o pedido vai para. É aqui
+                  que a filial é escolhida, então é aqui que o número importa. */}
+              {cashPriceOf(reserveTarget.item.docs[reserveTarget.companyId]) > 0 && (
+                <p className="text-xs">
+                  <strong>Preço em {reserveTarget.companyName}:</strong>{" "}
+                  <span className="font-black text-emerald-700">
+                    {formatPrice(cashPriceOf(reserveTarget.item.docs[reserveTarget.companyId]))}
+                  </span>
+                  <span className="text-slate-400"> à vista</span>
+                  {installmentPriceOf(reserveTarget.item.docs[reserveTarget.companyId]) !==
+                    cashPriceOf(reserveTarget.item.docs[reserveTarget.companyId]) && (
+                    <>
+                      {" · "}
+                      <span className="font-black text-slate-700">
+                        {formatPrice(installmentPriceOf(reserveTarget.item.docs[reserveTarget.companyId]))}
+                      </span>
+                      <span className="text-slate-400"> a prazo</span>
+                    </>
+                  )}
+                </p>
+              )}
             </div>
 
             <div className="space-y-4">
