@@ -69,6 +69,32 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     return [own, ...companiesProp.filter(c => c.id !== own.id)];
   }, [companiesProp, user.companyId]);
 
+  // ── Filtro por empresa ────────────────────────────────────────────
+  // "ALL" mantem o comportamento historico: a tabela e UNIFICADA, e a graca
+  // dela e comparar as filiais lado a lado. O filtro existe para o outro
+  // momento — quando alguem quer olhar so a propria loja e as colunas das
+  // outras viram ruido (uma fileira de tracos ate a coluna que interessa).
+  //
+  // Nao entra travado na loja do usuario de proposito: quem abre "Estoque
+  // Unificado" na maioria das vezes quer justamente o comparativo.
+  const [companyFilter, setCompanyFilter] = useState<string>("ALL");
+
+  // A empresa selecionada pode sumir (renomeada, apagada por um admin em outra
+  // aba). Sem isto a tabela ficaria sem nenhuma coluna, sem explicacao.
+  React.useEffect(() => {
+    if (companyFilter !== "ALL" && !companies.some(c => c.id === companyFilter)) {
+      setCompanyFilter("ALL");
+    }
+  }, [companies, companyFilter]);
+
+  // As colunas que a tabela realmente desenha. TUDO que renderiza quantidade
+  // por empresa le daqui — cabecalho, corpo, cards do celular e a planilha
+  // exportada — para nao existir uma tela filtrada que exporta o contrario.
+  const visibleCompanies = useMemo(
+    () => (companyFilter === "ALL" ? companies : companies.filter(c => c.id === companyFilter)),
+    [companies, companyFilter]
+  );
+
   const consolidatedItems = useMemo(() => {
     const map = new Map<string, ConsolidatedItem>();
 
@@ -107,26 +133,33 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
   }, [items, companies]);
 
   const filteredItems = useMemo(() => {
-    if (!searchTerm) return consolidatedItems;
+    // Com uma empresa escolhida, some tambem a LINHA do pneu que aquela loja
+    // nem cadastrou. Sem isso a tabela filtrada viraria uma coluna unica cheia
+    // de tracos, listando o estoque das outras filiais sem mostrar nenhum.
+    const base = companyFilter === "ALL"
+      ? consolidatedItems
+      : consolidatedItems.filter(item => !!item.docs[companyFilter]);
+
+    if (!searchTerm) return base;
     const lower = searchTerm.toLowerCase();
-    return consolidatedItems.filter(item =>
+    return base.filter(item =>
       item.sku.toLowerCase().includes(lower) ||
       item.description.toLowerCase().includes(lower) ||
       item.brand.toLowerCase().includes(lower) ||
       item.size.toLowerCase().includes(lower) ||
       matchesTireSize(item.size, lower)
     );
-  }, [consolidatedItems, searchTerm]);
+  }, [consolidatedItems, searchTerm, companyFilter]);
 
   // Export Unified Stock to CSV
   const exportUnifiedToCSV = () => {
     if (filteredItems.length === 0) return;
 
-    const compHeaders = companies.map(c => c.name.toUpperCase());
+    const compHeaders = visibleCompanies.map(c => c.name.toUpperCase());
     const headers = ["CODIGO", "MEDIDA", "DESCRICAO", ...compHeaders, "P/ A VISTA", "P/ PRAZO"];
 
     const rows = filteredItems.map(item => {
-      const compQty = companies.map(comp => {
+      const compQty = visibleCompanies.map(comp => {
         const docItem = item.docs[comp.id];
         return docItem ? docItem.quantity : 0;
       });
@@ -943,6 +976,64 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         </div>
       </div>
 
+      {/* ── Filtro de empresa ──────────────────────────────────────────────
+          Fica colado na tabela, e nao junto dos botoes de acao la em cima:
+          ele muda o que a tabela MOSTRA, nao dispara nenhuma operacao. */}
+      {companies.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-4">
+          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mr-1 flex items-center gap-1">
+            <Building2 size={12} className="text-gold-600" /> Empresa
+          </span>
+
+          <button
+            type="button"
+            onClick={() => setCompanyFilter("ALL")}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all cursor-pointer ${
+              companyFilter === "ALL"
+                ? "bg-slate-900 text-gold-400 border-slate-900 shadow-sm"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900"
+            }`}
+          >
+            Todas ({companies.length})
+          </button>
+
+          {companies.map(comp => {
+            const isOwn = !!user.companyId && comp.id === user.companyId;
+            const active = companyFilter === comp.id;
+            return (
+              <button
+                key={comp.id}
+                type="button"
+                onClick={() => setCompanyFilter(active ? "ALL" : comp.id)}
+                title={active ? "Clique de novo para ver todas as empresas" : `Ver só o estoque de ${comp.name}`}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all cursor-pointer flex items-center gap-1 ${
+                  active
+                    ? "bg-gold-600 text-white border-gold-600 shadow-sm"
+                    : isOwn
+                    ? "bg-gold-50 text-gold-800 border-gold-200 hover:bg-gold-100"
+                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900"
+                }`}
+              >
+                {comp.name}
+                {/* A loja da propria pessoa fica marcada: numa lista de cinco
+                    filiais com nomes parecidos, achar a sua leva um segundo. */}
+                {isOwn && (
+                  <span className={`text-[8px] font-bold normal-case tracking-normal ${active ? "text-white/75" : "text-gold-600"}`}>
+                    sua loja
+                  </span>
+                )}
+              </button>
+            );
+          })}
+
+          {companyFilter !== "ALL" && (
+            <span className="text-[10px] font-semibold text-slate-500 ml-1">
+              Mostrando {filteredItems.length} {filteredItems.length === 1 ? "pneu" : "pneus"} cadastrados nesta loja.
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Unified Stock Table - Desktop View */}
       <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-200">
         <table className="w-full border-collapse text-left text-sm font-sans text-slate-850">
@@ -951,7 +1042,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
               <th className="border-r border-slate-200 px-2 py-3 text-center" rowSpan={2}>CODIGO</th>
               <th className="border-r border-slate-200 px-2 py-3 text-center" rowSpan={2}>MEDIDA</th>
               <th className="border-r border-slate-200 px-2 py-3" rowSpan={2}>DESCRIÇÃO</th>
-              <th className="border-r border-slate-200 px-2 py-3 text-center" colSpan={companies.length}>QUANTIDADE</th>
+              <th className="border-r border-slate-200 px-2 py-3 text-center" colSpan={visibleCompanies.length}>QUANTIDADE</th>
               <th className="border-r border-slate-200 px-2 py-3 text-center" rowSpan={2}>P/ A VISTA</th>
               <th className="px-2 py-3 text-center" rowSpan={2}>P/PRAZO</th>
               {canOperateFlow && (
@@ -959,7 +1050,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
               )}
             </tr>
             <tr className="border-t border-slate-200">
-              {companies.map(comp => (
+              {visibleCompanies.map(comp => (
                 <th key={comp.id} className="border-r border-slate-200 px-1 py-2 text-center text-[9px] min-w-[70px]">{comp.name.toUpperCase()}</th>
               ))}
             </tr>
@@ -1052,7 +1143,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                   </td>
                   
                   {/* Quantity Cells */}
-                  {companies.map(comp => {
+                  {visibleCompanies.map(comp => {
                     const docItem = item.docs[comp.id];
                     const qty = docItem ? docItem.quantity : 0;
                     const isEditing = editingCell?.sku === item.sku && editingCell?.field === comp.id;
@@ -1176,8 +1267,13 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
             
             {filteredItems.length === 0 && (
               <tr>
-                <td colSpan={6 + companies.length + (canOperateFlow ? 1 : 0)} className="p-8 text-center text-slate-400 font-semibold">
-                  Nenhum registro encontrado.
+                {/* 3 colunas fixas na frente (codigo, medida, descricao) + as
+                    de quantidade que estao visiveis + os 2 precos. Antes somava
+                    6 fixas e ignorava o filtro: sobrava coluna dos dois lados. */}
+                <td colSpan={5 + visibleCompanies.length + (canOperateFlow ? 1 : 0)} className="p-8 text-center text-slate-400 font-semibold">
+                  {companyFilter === "ALL"
+                    ? "Nenhum registro encontrado."
+                    : `Nenhum pneu cadastrado em ${companies.find(c => c.id === companyFilter)?.name || "esta loja"}${searchTerm ? " para esta busca" : ""}.`}
                 </td>
               </tr>
             )}
@@ -1290,7 +1386,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
               <div className="border-t border-slate-150/60 pt-3 space-y-2">
                 <span className="text-[9px] text-slate-400 font-black uppercase tracking-wider block">Quantidades</span>
                 <div className="grid grid-cols-2 gap-2">
-                  {companies.map(comp => {
+                  {visibleCompanies.map(comp => {
                     const docItem = item.docs[comp.id];
                     const qty = docItem ? docItem.quantity : 0;
                     const isEditing = editingCell?.sku === item.sku && editingCell?.field === comp.id;
