@@ -74,6 +74,39 @@ export function formatBRL(value: number): string {
   }).format(value);
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Leitura de um preço digitado à brasileira.
+//
+// Existe porque `<input type="number">` NÃO aceita vírgula: quem digita
+// "375,50" — a forma natural aqui — faz o navegador devolver string VAZIA, e o
+// `parseFloat(...) || 0` que havia em todo lugar transformava isso em ZERO.
+// O preço não "deixava de salvar": salvava 0, e a tela, que lê o preço a prazo
+// com fallback para o à vista, mostrava o à vista de volta. Parecia que o
+// sistema tinha ignorado a digitação.
+//
+// Devolve null quando não há número válido — para quem chama poder RECUSAR a
+// gravação em vez de zerar um preço.
+// ─────────────────────────────────────────────────────────────────
+export function parsePriceInput(raw: string): number | null {
+  const trimmed = (raw ?? "").trim().replace(/^R\$\s*/i, "");
+  if (!trimmed) return null;
+
+  const hasComma = trimmed.includes(",");
+  // "1.350,00" (ponto = milhar, vírgula = decimal) vs "1350.00" (ponto decimal).
+  // A vírgula, quando existe, é sempre o separador decimal no formato brasileiro.
+  const normalized = hasComma
+    ? trimmed.replace(/\./g, "").replace(",", ".")
+    : trimmed;
+
+  if (!/^\d*\.?\d*$/.test(normalized)) return null;
+
+  const value = parseFloat(normalized);
+  if (!Number.isFinite(value) || value < 0) return null;
+
+  // Centavos bastam: um preço com mais casas é erro de digitação, não intenção.
+  return Math.round(value * 100) / 100;
+}
+
 export function formatDate(timestamp: any): string {
   if (!timestamp) return "N/D";
   

@@ -4,7 +4,7 @@ import {
   Search, Plus, Minus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon,
   PackagePlus, PackageMinus, AlertTriangle, CheckCircle2, ArrowRight, ArrowRightLeft, Lock
 } from "lucide-react";
-import { availableQuantity, formatBRL, matchesTireSize, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import { availableQuantity, formatBRL, matchesTireSize, parsePriceInput, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
 import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
 
 interface UnifiedStockProps {
@@ -551,7 +551,15 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           }
         }
       } else if (field === "priceCash" || field === "priceInstallment") {
-        const numValue = parseFloat(rawValue.replace(",", ".")) || 0;
+        // Digitação inválida NÃO vira zero. Zerar um preço por engano é pior que
+        // recusar a edição: o pneu passa a aparecer sem valor no catálogo.
+        const numValue = parsePriceInput(rawValue);
+        if (numValue === null) {
+          throw new Error(
+            `"${rawValue}" não é um preço válido. Use apenas números — a vírgula ` +
+            `dos centavos é aceita (ex: 375,50).`
+          );
+        }
 
         // Com filtro ativo, escreve SO naquela loja — que e a que a tela esta
         // mostrando. Sem filtro, mantem o comportamento historico de igualar o
@@ -1302,8 +1310,8 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                     {editingCell?.sku === item.sku && editingCell?.field === "priceCash" ? (
                       <input 
                         autoFocus
-                        type="number"
-                        step="0.01"
+                        type="text"
+                        inputMode="decimal"
                         value={editValue}
                         onChange={(e) => setEditValue(e.target.value)}
                         onBlur={() => handleSaveEdit(item)}
@@ -1329,8 +1337,8 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                     {editingCell?.sku === item.sku && editingCell?.field === "priceInstallment" ? (
                       <input 
                         autoFocus
-                        type="number"
-                        step="0.01"
+                        type="text"
+                        inputMode="decimal"
                         value={editValue}
                         onChange={(e) => setEditValue(e.target.value)}
                         onBlur={() => handleSaveEdit(item)}
@@ -1541,8 +1549,8 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                   {editingCell?.sku === item.sku && editingCell?.field === "priceCash" ? (
                     <input 
                       autoFocus
-                      type="number"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       value={editValue}
                       onChange={(e) => setEditValue(e.target.value)}
                       onBlur={() => handleSaveEdit(item)}
@@ -1566,8 +1574,8 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                   {editingCell?.sku === item.sku && editingCell?.field === "priceInstallment" ? (
                     <input 
                       autoFocus
-                      type="number"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       value={editValue}
                       onChange={(e) => setEditValue(e.target.value)}
                       onBlur={() => handleSaveEdit(item)}

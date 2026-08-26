@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { StockItem, Company, UserRole } from "../types";
-import { availableQuantity, formatBRL, matchesTireSize, reservedQuantityOf } from "../utils";
+import { availableQuantity, formatBRL, matchesTireSize, parsePriceInput, reservedQuantityOf } from "../utils";
 import sajEstoqueData from "../saj_estoque.json";
 import autocarEstoqueData from "../autocar_estoque.json";
 import valencaEstoqueData from "../valenca_estoque.json";
@@ -89,8 +89,12 @@ export default function StockTable({
   const [formModel, setFormModel] = useState("");
   const [formSize, setFormSize] = useState("");
   const [formQuantity, setFormQuantity] = useState(0);
-  const [formPriceCash, setFormPriceCash] = useState(0);
-  const [formPriceInstallment, setFormPriceInstallment] = useState(0);
+  // Texto, não número: o campo precisa aceitar a vírgula dos centavos enquanto
+  // a pessoa digita. Guardar `number` obrigava `type="number"`, que descarta a
+  // vírgula e devolve string vazia — e o `parseFloat(...) || 0` que havia aqui
+  // mandava ZERO para o banco. Ver parsePriceInput em utils.
+  const [formPriceCash, setFormPriceCash] = useState("");
+  const [formPriceInstallment, setFormPriceInstallment] = useState("");
   const [formNotes, setFormNotes] = useState("");
   const [formDescription, setFormDescription] = useState("");
   const [formImageUrl, setFormImageUrl] = useState("");
@@ -541,8 +545,8 @@ export default function StockTable({
     setFormModel(item.model);
     setFormSize(item.size);
     setFormQuantity(item.quantity);
-    setFormPriceCash(item.priceCash || item.price || 0);
-    setFormPriceInstallment(item.priceInstallment || item.price || 0);
+    setFormPriceCash(String(item.priceCash || item.price || 0).replace(".", ","));
+    setFormPriceInstallment(String(item.priceInstallment || item.price || 0).replace(".", ","));
     setFormNotes(item.notes);
     setFormDescription(item.description || "");
     setFormImageUrl(item.imageUrl || "");
@@ -560,8 +564,8 @@ export default function StockTable({
     setFormModel("");
     setFormSize("");
     setFormQuantity(4);
-    setFormPriceCash(399.00);
-    setFormPriceInstallment(420.00);
+    setFormPriceCash("399,00");
+    setFormPriceInstallment("420,00");
     setFormNotes("");
     setFormDescription("");
     setFormImageUrl("");
@@ -584,6 +588,13 @@ export default function StockTable({
       if (match) matchedCompName = match.name;
     }
 
+    const priceCash = parsePriceInput(formPriceCash);
+    const priceInstallment = parsePriceInput(formPriceInstallment);
+    if (priceCash === null || priceInstallment === null) {
+      setErrorMsg("Confira os preços: use apenas números, com vírgula nos centavos (ex: 375,50).");
+      return;
+    }
+
     setSubmitting(true);
     setErrorMsg("");
 
@@ -594,9 +605,9 @@ export default function StockTable({
         model: formModel,
         size: formSize,
         quantity: Number(formQuantity),
-        price: Number(formPriceCash),
-        priceCash: Number(formPriceCash),
-        priceInstallment: Number(formPriceInstallment),
+        price: priceCash,
+        priceCash,
+        priceInstallment,
         notes: formNotes,
         description: formDescription,
         imageUrl: formImageUrl,
@@ -626,6 +637,13 @@ export default function StockTable({
       if (match) matchedCompName = match.name;
     }
 
+    const priceCash = parsePriceInput(formPriceCash);
+    const priceInstallment = parsePriceInput(formPriceInstallment);
+    if (priceCash === null || priceInstallment === null) {
+      setErrorMsg("Confira os preços: use apenas números, com vírgula nos centavos (ex: 375,50).");
+      return;
+    }
+
     setSubmitting(true);
     setErrorMsg("");
 
@@ -636,9 +654,9 @@ export default function StockTable({
         model: formModel,
         size: formSize,
         quantity: Number(formQuantity),
-        price: Number(formPriceCash),
-        priceCash: Number(formPriceCash),
-        priceInstallment: Number(formPriceInstallment),
+        price: priceCash,
+        priceCash,
+        priceInstallment,
         notes: formNotes,
         description: formDescription,
         imageUrl: formImageUrl,
@@ -1621,22 +1639,20 @@ export default function StockTable({
                   <div className="w-1/2">
                     <label className="block text-xs font-semibold text-emerald-700 mb-1">À Vista (R$)</label>
                     <input
-                      type="number"
-                      step="0.01"
-                      min={0}
+                      type="text"
+                      inputMode="decimal"
                       value={formPriceCash}
-                      onChange={(e) => setFormPriceCash(parseFloat(e.target.value) || 0)}
+                      onChange={(e) => setFormPriceCash(e.target.value)}
                       className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-emerald-500 bg-emerald-50 text-emerald-800"
                     />
                   </div>
                   <div className="w-1/2">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">A Prazo (R$)</label>
                     <input
-                      type="number"
-                      step="0.01"
-                      min={0}
+                      type="text"
+                      inputMode="decimal"
                       value={formPriceInstallment}
-                      onChange={(e) => setFormPriceInstallment(parseFloat(e.target.value) || 0)}
+                      onChange={(e) => setFormPriceInstallment(e.target.value)}
                       className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
                     />
                   </div>
@@ -1820,22 +1836,20 @@ export default function StockTable({
                   <div className="w-1/2">
                     <label className="block text-xs font-semibold text-emerald-700 mb-1">À Vista (R$)</label>
                     <input
-                      type="number"
-                      step="0.01"
-                      min={0}
+                      type="text"
+                      inputMode="decimal"
                       value={formPriceCash}
-                      onChange={(e) => setFormPriceCash(parseFloat(e.target.value) || 0)}
+                      onChange={(e) => setFormPriceCash(e.target.value)}
                       className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-emerald-500 bg-emerald-50 text-emerald-800"
                     />
                   </div>
                   <div className="w-1/2">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">A Prazo (R$)</label>
                     <input
-                      type="number"
-                      step="0.01"
-                      min={0}
+                      type="text"
+                      inputMode="decimal"
                       value={formPriceInstallment}
-                      onChange={(e) => setFormPriceInstallment(parseFloat(e.target.value) || 0)}
+                      onChange={(e) => setFormPriceInstallment(e.target.value)}
                       className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
                     />
                   </div>
