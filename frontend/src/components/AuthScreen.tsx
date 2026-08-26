@@ -174,10 +174,17 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       }
 
       if (!matchedCred) {
-        // Look up credentials in the Firestore collection
+        // Look up credentials in the Firestore collection.
+        //
+        // O .toLowerCase() nao e cosmetico: UsersAdmin SEMPRE grava o usuario em
+        // minusculas, e o caminho direto (handleDirectLogin) ja normalizava. So
+        // este aqui comparava o que a pessoa digitou, cru. Quem tem e-mail
+        // vinculado e obrigado a passar por este caminho — entao o Nicolas
+        // digitando "Nicolas" batia em "usuario inexistente", sem nenhuma pista
+        // do porque.
         const q = query(
           collection(db, "custom_credentials"),
-          where("username", "==", username.trim()),
+          where("username", "==", username.trim().toLowerCase()),
           limit(5)
         );
         const querySnapshot = await getDocs(q);
@@ -448,8 +455,8 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
         {/* ================= ETAPA 1: ESCOLHA DA PORTA DE ENTRADA =================
             Duas portas, e a ordem aqui importa. A MAIORIA entra por usuario e
-            senha: todo vendedor, e todo operador cadastrado sem e-mail Google
-            vinculado (isaac, jorge, davi, nicolas, edgar...). O Google so serve
+            senha: todo vendedor, e todo dono de loja cadastrado sem e-mail Google
+            vinculado (hoje, a maioria deles). O Google so serve
             a quem tem e-mail preso na credencial — e so nesse caminho existem
             "duas etapas". Por isso o vendedor vem primeiro e em destaque, e o
             aviso de "Etapa 1 de 2" mora colado no botao do Google, em vez de
@@ -462,10 +469,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               <form className="space-y-4 animate-fadeIn" onSubmit={handleDirectLogin}>
                 <div className="bg-gold-50/40 p-3.5 rounded-2xl border border-gold-200/30 text-center space-y-0.5">
                   <span className="inline-block px-2.5 py-0.5 rounded-full bg-gold-400/10 text-gold-700 font-black text-[9px] uppercase tracking-widest">
-                    Entrada de Vendedor
+                    Vendedor ou Dono da Loja
                   </span>
                   <p className="text-[11px] text-slate-600 font-semibold leading-relaxed">
-                    Use o usuário e a senha que o dono da sua loja passou.
+                    Vendedor: use o usuário e a senha que o dono da sua loja passou.
                   </p>
                 </div>
 
@@ -538,13 +545,20 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   <button
                     type="button"
                     onClick={() => setDirectLoginMode(true)}
-                    className="w-full py-3.5 px-4 rounded-xl text-white font-black bg-gradient-to-r from-gold-600 to-gold-500 hover:from-gold-700 hover:to-gold-600 focus:outline-none focus:ring-4 focus:ring-gold-500/20 transition-all text-xs flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider shadow-md"
+                    className="w-full py-3 px-4 rounded-xl text-white font-black bg-gradient-to-r from-gold-600 to-gold-500 hover:from-gold-700 hover:to-gold-600 focus:outline-none focus:ring-4 focus:ring-gold-500/20 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer shadow-md"
                   >
-                    <ShoppingBag size={15} className="shrink-0" /> Entrar como Vendedor
+                    <span className="flex items-center gap-2 text-xs uppercase tracking-wider">
+                      <ShoppingBag size={15} className="shrink-0" /> Entrar como Vendedor
+                    </span>
+                    {/* Os donos de loja entram por esta MESMA porta, e nenhum
+                        deles e vendedor. Sem esta segunda linha o rotulo excluiria
+                        justamente o grupo que mais usa o botao. */}
+                    <span className="text-[10px] font-bold text-white/80 normal-case tracking-normal">
+                      ou dono da loja
+                    </span>
                   </button>
                   <p className="text-[10px] text-slate-500 text-center font-semibold leading-relaxed px-2">
-                    Usuário e senha, uma etapa só. Operadores e donos de loja sem
-                    e-mail Google vinculado entram por aqui também.
+                    Usuário e senha, uma etapa só — sem Google.
                   </p>
                 </div>
 

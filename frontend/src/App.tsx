@@ -164,14 +164,20 @@ function mapTransferDoc(docSnap: any): TransferOrder {
 }
 
 export default function App() {
+  // O caminho chega com a barra final quando alguem copia o link do navegador
+  // ou o WhatsApp "arruma" a URL. Sem normalizar, '/consulta/' nao batia com
+  // nenhuma rota e caia na tela de login — o cliente abria o catalogo e via um
+  // pedido de senha.
+  const route = window.location.pathname.replace(/\/+$/, "") || "/";
+
   // Se for a rota pública, renderiza apenas o estoque público e ignora todo o resto
-  if (window.location.pathname === '/consulta') {
+  if (route === '/consulta') {
     return <PublicStock />;
   }
 
   // Pagina publica de assinatura do motorista. Ele nao tem login: chega por um
   // link com token e assina ali. Fica antes de qualquer checagem de sessao.
-  if (window.location.pathname === '/assinar') {
+  if (route === '/assinar') {
     return <PublicSignature />;
   }
 
