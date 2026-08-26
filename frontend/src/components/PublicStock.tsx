@@ -3,7 +3,7 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { StockItem, Company, CLIENTE_COMPANY_ID } from "../types";
 import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X } from "lucide-react";
-import { availableQuantity, matchesTireSize } from "../utils";
+import { availableQuantity, mapStockDoc, matchesTireSize } from "../utils";
 
 interface ConsolidatedItem {
   sku: string;
@@ -178,27 +178,7 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       const itemsList: StockItem[] = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
-        itemsList.push({
-          id: docSnap.id,
-          sku: data.sku || "",
-          brand: data.brand || "",
-          model: data.model || "",
-          size: data.size || "",
-          quantity: data.quantity ?? 0,
-          reservedQuantity: data.reservedQuantity ?? 0,
-          price: data.price ?? 0,
-          priceCash: data.priceCash ?? data.price ?? 0,
-          priceInstallment: data.priceInstallment ?? data.price ?? 0,
-          notes: data.notes || "",
-          description: data.description || "",
-          imageUrl: data.imageUrl || "",
-          userId: data.userId || "",
-          userEmail: data.userEmail || "",
-          companyId: data.companyId || "",
-          companyName: data.companyName || "",
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt
-        });
+        itemsList.push(mapStockDoc(docSnap.id, data));
       });
       setStock(itemsList);
       setLoading(false);

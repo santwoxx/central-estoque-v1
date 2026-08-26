@@ -63,7 +63,7 @@ import {
   TransferSyncResult
 } from "./types";
 import { CLIENTE_COMPANY_ID, isCustomerReservation } from "./types";
-import { toMillis, formatDate, availableQuantity, reservedQuantityOf } from "./utils";
+import { availableQuantity, formatDate, mapStockDoc, reservedQuantityOf, toMillis } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
 // Components
@@ -310,25 +310,10 @@ export default function App() {
       const itemsList: StockItem[] = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
-        itemsList.push({
-          id: docSnap.id,
-          sku: data.sku || "",
-          brand: data.brand || "",
-          model: data.model || "",
-          size: data.size || "",
-          quantity: data.quantity ?? 0,
-          reservedQuantity: data.reservedQuantity ?? 0,
-          price: data.price ?? 0,
-          notes: data.notes || "",
-          description: data.description || "",
-          imageUrl: data.imageUrl || "",
-          userId: data.userId || "",
-          userEmail: data.userEmail || "",
-          companyId: data.companyId || "",
-          companyName: data.companyName || "",
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt
-        });
+        // Conversao unica, compartilhada com o catalogo publico. Este objeto
+        // era montado a mao aqui e nao trazia priceCash/priceInstallment: o
+        // preco a prazo ia para o banco e nunca voltava para a tela.
+        itemsList.push(mapStockDoc(docSnap.id, data));
       });
 
       // Sort by creation or update descending in memory to avoid index requirements

@@ -1,4 +1,4 @@
-import { StockFlowType } from "./types";
+import { StockFlowType, StockItem } from "./types";
 
 // ──────────────────────────────────────────────────────────────
 // Motivos sugeridos para movimentação de pneus, por tipo de operação.
@@ -65,6 +65,44 @@ export function availableQuantity(
 ): number {
   const total = Number(item?.quantity) || 0;
   return Math.max(0, total - reservedQuantityOf(item));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Documento de estoque do Firestore -> StockItem.
+//
+// Existe UMA funcao para isso porque existiam DUAS copias desta conversao —
+// uma no App e outra no catalogo publico — e elas divergiram: a do App nao
+// mapeava `priceCash` nem `priceInstallment`. O preco a prazo era gravado
+// certinho no banco e nunca voltava para a tela, que entao caia no
+// `|| price` e mostrava o valor a vista. Levou varias rodadas de "nao
+// salva" para achar, porque a gravacao estava correta o tempo todo.
+//
+// Campo novo em StockItem entra AQUI, e as duas telas ganham juntas.
+// ─────────────────────────────────────────────────────────────────
+export function mapStockDoc(id: string, data: any): StockItem {
+  return {
+    id,
+    sku: data.sku || "",
+    brand: data.brand || "",
+    model: data.model || "",
+    size: data.size || "",
+    quantity: data.quantity ?? 0,
+    reservedQuantity: data.reservedQuantity ?? 0,
+    // `price` e o campo legado. Os documentos antigos so tem ele, por isso os
+    // dois precos caem nele quando o campo proprio nao existe.
+    price: data.price ?? 0,
+    priceCash: data.priceCash ?? data.price ?? 0,
+    priceInstallment: data.priceInstallment ?? data.price ?? 0,
+    notes: data.notes || "",
+    description: data.description || "",
+    imageUrl: data.imageUrl || "",
+    userId: data.userId || "",
+    userEmail: data.userEmail || "",
+    companyId: data.companyId || "",
+    companyName: data.companyName || "",
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt
+  };
 }
 
 export function formatBRL(value: number): string {
