@@ -66,15 +66,28 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
   const ownCompanyId = user?.companyId || "";
   const isOwnStore = (companyId: string) => !!ownCompanyId && companyId === ownCompanyId;
 
-  // A loja do vendedor aparece no topo da disponibilidade: é lá que ele vende no
-  // dia a dia, e é o único lugar onde o pedido não depende de outra filial.
+  // ── Loja em foco ──────────────────────────────────────────────────
+  // Qual filial o vendedor quer ver primeiro. Começa na loja dele: é lá que ele
+  // vende no dia a dia, e é o único lugar onde o pedido não depende de outra
+  // filial. Vazio = nenhuma em foco, tudo em ordem alfabética.
+  const [focusCompanyId, setFocusCompanyId] = useState<string>(ownCompanyId);
+
+  // A loja em foco pode sumir da lista (renomeada, apagada). Sem isto a tela
+  // ficaria ordenada por uma empresa que não existe mais, sem explicação.
+  useEffect(() => {
+    if (focusCompanyId && companies.length > 0 && !companies.some(c => c.id === focusCompanyId)) {
+      setFocusCompanyId("");
+    }
+  }, [companies, focusCompanyId]);
+
+  // A loja em foco encabeça a disponibilidade dentro de cada ficha.
   const orderedCompanies = useMemo(() => {
-    if (!ownCompanyId) return companies;
+    if (!focusCompanyId) return companies;
     return [...companies].sort((a, b) => {
-      const rank = (id: string) => (isOwnStore(id) ? 0 : 1);
+      const rank = (id: string) => (id === focusCompanyId ? 0 : 1);
       return rank(a.id) - rank(b.id) || a.name.localeCompare(b.name);
     });
-  }, [companies, ownCompanyId]);
+  }, [companies, focusCompanyId]);
 
   const openReserveModal = (target: { item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number, own: boolean }) => {
     setReserveTarget(target);
@@ -258,16 +271,29 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
   }, [stock, companies]);
 
   const filteredItems = useMemo(() => {
-    if (!searchTerm) return consolidatedItems;
     const lower = searchTerm.toLowerCase();
-    return consolidatedItems.filter(item =>
-      item.sku.toLowerCase().includes(lower) ||
-      item.description.toLowerCase().includes(lower) ||
-      item.brand.toLowerCase().includes(lower) ||
-      item.size.toLowerCase().includes(lower) ||
-      matchesTireSize(item.size, lower)
-    );
-  }, [consolidatedItems, searchTerm]);
+    const matched = !searchTerm
+      ? consolidatedItems
+      : consolidatedItems.filter(item =>
+          item.sku.toLowerCase().includes(lower) ||
+          item.description.toLowerCase().includes(lower) ||
+          item.brand.toLowerCase().includes(lower) ||
+          item.size.toLowerCase().includes(lower) ||
+          matchesTireSize(item.size, lower)
+        );
+
+    if (!focusCompanyId) return matched;
+
+    // Com uma loja em foco, o que ELA tem livre sobe para o começo da lista.
+    // São centenas de produtos e a maioria só existe numa filial: sem isto o
+    // vendedor rola o catálogo inteiro atrás do que consegue vender hoje.
+    // Nada é escondido — as outras filiais continuam logo abaixo.
+    const hasFree = (item: ConsolidatedItem) => {
+      const doc = item.docs[focusCompanyId];
+      return doc && availableQuantity(doc) > 0 ? 0 : 1;
+    };
+    return [...matched].sort((a, b) => hasFree(a) - hasFree(b) || a.sku.localeCompare(b.sku));
+  }, [consolidatedItems, searchTerm, focusCompanyId]);
 
   if (loading) {
     return (
@@ -325,6 +351,61 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
             {filteredItems.length} {filteredItems.length === 1 ? 'Produto Encontrado' : 'Produtos Encontrados'}
           </h2>
         </div>
+
+        {/* ── Loja em foco ────────────────────────────────────────────────
+            Só para quem está logado: no catálogo público (rota /consulta) o
+            cliente não escolhe filial, ele procura o pneu.
+
+            Isto ORDENA, não esconde: a loja escolhida sobe para o topo de cada
+            ficha e os pneus que ela tem livres vêm primeiro na lista. As outras
+            filiais continuam logo abaixo, porque o vendedor também precisa
+            enxergá-las para solicitar o que a dele não tem. */}
+        {user && companies.length > 1 && (
+          <div className="mb-4 flex flex-wrap items-center gap-1.5 bg-white border border-slate-200 rounded-2xl px-3 py-2.5">
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mr-1 flex items-center gap-1">
+              <Store size={12} className="text-gold-600" /> Ver primeiro
+            </span>
+
+            {companies.map(comp => {
+              const active = focusCompanyId === comp.id;
+              const own = isOwnStore(comp.id);
+              return (
+                <button
+                  key={comp.id}
+                  type="button"
+                  onClick={() => setFocusCompanyId(active ? "" : comp.id)}
+                  title={active
+                    ? "Clique de novo para voltar à ordem alfabética"
+                    : `Mostrar primeiro os pneus de ${comp.name}`}
+                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all cursor-pointer flex items-center gap-1 ${
+                    active
+                      ? "bg-gold-600 text-white border-gold-600 shadow-sm"
+                      : own
+                      ? "bg-gold-50 text-gold-800 border-gold-200 hover:bg-gold-100"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                >
+                  {comp.name}
+                  {own && (
+                    <span className={`text-[8px] font-bold normal-case tracking-normal ${active ? "text-white/75" : "text-gold-600"}`}>
+                      sua loja
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+
+            {focusCompanyId && (
+              <button
+                type="button"
+                onClick={() => setFocusCompanyId("")}
+                className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-transparent transition-all cursor-pointer"
+              >
+                Limpar
+              </button>
+            )}
+          </div>
+        )}
 
         {filteredItems.length === 0 ? (
           <div className="bg-white rounded-3xl p-16 text-center shadow-sm border border-slate-200">
@@ -401,68 +482,70 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                               : "bg-slate-50 border-slate-100"
                           }`}
                         >
-                          <div className="flex items-center gap-1.5">
-                          {/* min-w-0 + flex-1: o nome fica com todo o espaço que
-                              sobrar e só corta quando não há mesmo como caber —
-                              o title garante o nome inteiro ao passar o mouse. */}
-                          <span
-                            title={own ? `${comp.name} — sua loja` : comp.name}
-                            className={`flex-1 min-w-0 truncate text-[11px] font-bold ${
-                              own ? "text-gold-800" : "text-slate-600"
-                            }`}
-                          >
-                            {comp.name}
-                          </span>
-
-                          <span className="shrink-0 bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded text-[10px] font-black whitespace-nowrap">
-                            {qty} un
-                          </span>
-
-                          {canReserve && (
-                            <button
-                              type="button"
-                              onClick={() => openReserveModal({
-                                item,
-                                companyId: comp.id,
-                                companyName: comp.name,
-                                sourceStockItemId: stockDoc.id,
-                                maxQty: qty,
-                                own
-                              })}
-                              title={
-                                own
-                                  ? `Reservar este pneu na sua loja para um cliente — o dono de ${comp.name} confirma`
-                                  : `Solicitar este pneu a ${comp.name} — o dono daquela loja precisa confirmar`
-                              }
-                              className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-1 rounded-md text-[10px] font-black transition-colors cursor-pointer ${
-                                own
-                                  ? "bg-gold-600 text-white hover:bg-gold-700"
-                                  : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                          {/* O nome da loja ocupa a linha inteira, com a
+                              quantidade ao lado. ANTES ele dividia a linha com a
+                              quantidade E o botao: numa ficha de ~200px sobravam
+                              uns 50px, e "CENTRAL AUTOCENTER" virava "Central …".
+                              Sem `truncate` ele quebra em duas linhas em vez de
+                              esconder o que identifica o dono do pneu. */}
+                          <div className="flex items-start gap-1.5">
+                            <span
+                              title={own ? `${comp.name} — sua loja` : comp.name}
+                              className={`flex-1 min-w-0 break-words leading-tight text-[11px] font-black uppercase tracking-wide ${
+                                own ? "text-gold-800" : "text-slate-700"
                               }`}
                             >
-                              {own ? <ShoppingBag size={11} /> : <Send size={11} />}
-                              {own ? "Reservar" : "Solicitar"}
-                            </button>
-                          )}
+                              {comp.name}
+                            </span>
+
+                            <span className="shrink-0 bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded text-[10px] font-black whitespace-nowrap">
+                              {qty} un
+                            </span>
                           </div>
 
-                          {/* Preço desta loja. "A prazo" só aparece quando é
-                              mesmo diferente do à vista — repetir o número nas
-                              duas linhas só rouba espaço da ficha. */}
-                          {cash > 0 && (
-                            <div className="flex items-baseline gap-2 pl-0.5">
-                              <span className="text-[10px] font-bold text-emerald-700 whitespace-nowrap">
-                                À vista{" "}
-                                <strong className="text-[11px] font-black">{formatPrice(cash)}</strong>
+                          {/* Preco desta loja e a acao, dividindo a segunda
+                              linha — que e larga porque o nome saiu dela. */}
+                          <div className="flex items-center justify-between gap-1.5">
+                            {cash > 0 ? (
+                              <span className="min-w-0 truncate text-[10px] font-bold text-emerald-700">
+                                {formatPrice(cash)}
+                                {installment > 0 && installment !== cash && (
+                                  <span className="font-semibold text-slate-400">
+                                    {" "}· {formatPrice(installment)} a prazo
+                                  </span>
+                                )}
                               </span>
-                              {installment > 0 && installment !== cash && (
-                                <span className="text-[10px] font-semibold text-slate-500 whitespace-nowrap">
-                                  A prazo{" "}
-                                  <strong className="font-black text-slate-700">{formatPrice(installment)}</strong>
-                                </span>
-                              )}
-                            </div>
-                          )}
+                            ) : (
+                              <span className="text-[10px] text-slate-300">Sem preço</span>
+                            )}
+
+                            {canReserve && (
+                              <button
+                                type="button"
+                                onClick={() => openReserveModal({
+                                  item,
+                                  companyId: comp.id,
+                                  companyName: comp.name,
+                                  sourceStockItemId: stockDoc.id,
+                                  maxQty: qty,
+                                  own
+                                })}
+                                title={
+                                  own
+                                    ? `Reservar este pneu na sua loja para um cliente — o dono de ${comp.name} confirma`
+                                    : `Solicitar este pneu a ${comp.name} — o dono daquela loja precisa confirmar`
+                                }
+                                className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-1 rounded-md text-[10px] font-black transition-colors cursor-pointer ${
+                                  own
+                                    ? "bg-gold-600 text-white hover:bg-gold-700"
+                                    : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                                }`}
+                              >
+                                {own ? <ShoppingBag size={11} /> : <Send size={11} />}
+                                {own ? "Reservar" : "Solicitar"}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
