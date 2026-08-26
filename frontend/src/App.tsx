@@ -688,6 +688,13 @@ export default function App() {
     !loadingData
   );
 
+  // Quem abre a aba de cadastro de acessos. O ADMIN administra o sistema inteiro
+  // (operadores, empresas, backup). O DONO DA EMPRESA abre a mesma aba reduzida a
+  // cadastrar os VENDEDORES da própria loja — e só faz sentido se a credencial
+  // dele estiver vinculada a uma empresa: sem loja não há vendedor para vincular.
+  const canManageUsers =
+    user?.role === "admin" || (user?.role === "alimentador" && !!user?.companyId);
+
   // O vendedor só opera duas telas. Qualquer caminho que tente levá-lo a outra
   // (clique em notificação, estado antigo restaurado) volta para o catálogo, em
   // vez de renderizar um painel administrativo atrás de um aviso.
@@ -2899,7 +2906,7 @@ export default function App() {
               <ArrowLeftRight size={14} className="stroke-[2px]" /> {user.role === "vendedor" ? "Minhas Reservas" : "Transferências"}
             </button>
 
-            {user.role === "admin" && (
+            {canManageUsers && (
               <button
                 type="button"
                 onClick={() => setActiveTab("users-admin")}
@@ -2909,7 +2916,7 @@ export default function App() {
                     : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
                 }`}
               >
-                <Users size={14} className="stroke-[2px]" /> Operadores e Senhas
+                <Users size={14} className="stroke-[2px]" /> {user.role === "admin" ? "Operadores e Senhas" : "Meus Vendedores"}
               </button>
             )}
 
@@ -3136,7 +3143,7 @@ export default function App() {
           <BookOpen size={18} />
           <span className="text-[9px] font-extrabold uppercase tracking-wide">Ajuda</span>
         </button>
-        {user.role === "admin" && (
+        {canManageUsers && (
           <button
             type="button"
             onClick={() => setActiveTab("users-admin")}
@@ -3145,7 +3152,9 @@ export default function App() {
             }`}
           >
             <Users size={18} />
-            <span className="text-[9px] font-extrabold uppercase tracking-wide">Operadores</span>
+            <span className="text-[9px] font-extrabold uppercase tracking-wide">
+              {user.role === "admin" ? "Operadores" : "Vendedores"}
+            </span>
           </button>
         )}
       </div>
@@ -3357,8 +3366,11 @@ export default function App() {
             />
           )}
 
-          {activeTab === "users-admin" && user.role === "admin" && (
-            <UsersAdmin companies={companies} />
+          {activeTab === "users-admin" && canManageUsers && (
+            <UsersAdmin
+              companies={companies}
+              currentUser={{ role: user.role, companyId: user.companyId, companyName: user.companyName }}
+            />
           )}
 
           {activeTab === "how-to-use" && (

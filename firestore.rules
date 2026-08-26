@@ -53,6 +53,25 @@ service cloud.firestore {
         (getUserData().role == 'alimentador' || getUserData().role == 'user');
     }
 
+    // Empresa gravada no perfil de quem esta logado. Vazio quando a credencial
+    // foi criada como "Todas as Empresas" — nesse caso nao existe "a minha loja",
+    // e toda regra que limita alguem ao proprio quintal tem que recusar.
+    function myCompanyId() {
+      return getUserData().get('companyId', '');
+    }
+
+    // Um DONO DA EMPRESA (alimentador) administra as credenciais dos VENDEDORES
+    // da propria loja — e SO essas. Nunca a de outro dono, nunca a de outra
+    // empresa, e nunca uma credencial de admin: o papel tem que ser exatamente
+    // 'vendedor' dos dois lados da escrita, senao o dono se promoveria sozinho
+    // criando um admin e entrando com ele.
+    function isOwnSellerCredential(data) {
+      return isAlimentador() &&
+        myCompanyId() != '' &&
+        data.get('role', '') == 'vendedor' &&
+        data.get('companyId', '') == myCompanyId();
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Users Collection rules
     //
@@ -119,19 +138,45 @@ service cloud.firestore {
       // credencial (App.tsx) e como as regras de users conferem o papel.
       allow get: if isAuth();
 
-      // LIST: so o admin varre a colecao (tela de Operadores e Senhas). O
-      // login continua consultando por usuario, mas agora obrigatoriamente com
+      // LIST: o admin varre a colecao inteira (tela de Operadores e Senhas).
+      //
+      // O DONO DA EMPRESA lista apenas os VENDEDORES da propria loja — e o
+      // Firestore so libera isso porque a consulta do cliente carrega os dois
+      // filtros que a regra exige (role == 'vendedor' e companyId == a dele).
+      // Uma consulta sem esses filtros nao e "provavelmente segura" para o
+      // servidor e cai inteira, que e exatamente o comportamento desejado:
+      // ninguem raspa credencial de outra empresa por aqui.
+      //
+      // O login continua consultando por usuario, mas obrigatoriamente com
       // limite pequeno (AuthScreen usa limit(5)) — o que derruba o despejo da
       // colecao de uma vez. Consulta sem limite por quem nao e admin: negada.
-      allow list: if isAdmin() || (isAuth() && request.query.limit <= 5);
+      allow list: if isAdmin() ||
+        (
+          isAlimentador() &&
+          myCompanyId() != '' &&
+          resource.data.role == 'vendedor' &&
+          resource.data.companyId == myCompanyId()
+        ) ||
+        (isAuth() && request.query.limit <= 5);
+
       allow create: if isAuth() && (
         isAdmin() ||
+        // O dono cadastra os proprios vendedores. O papel e a empresa vem
+        // travados do servidor, nao do formulario: nao adianta o cliente mandar
+        // role 'admin' ou a empresa do vizinho.
+        isOwnSellerCredential(request.resource.data) ||
         (request.resource.data.associatedEmail == 'brisasofc@gmail.com' && (request.resource.data.username == 'brisas' || request.resource.data.username == 'central')) ||
         (request.resource.data.associatedEmail == 'natandsantosmarinho10@gmail.com' && request.resource.data.username == 'natand')
       );
       // Admin can update/delete anything.
       // Operators can update their own password, but cannot change their other profile metadata (role, company, username, etc.)
       allow update: if isAdmin() || (
+        // Dono editando um vendedor da casa: o documento tem que ser um vendedor
+        // dele ANTES e DEPOIS da escrita. As duas metades importam — sem a
+        // segunda, ele editaria o proprio vendedor para virar admin.
+        isOwnSellerCredential(resource.data) &&
+        isOwnSellerCredential(request.resource.data)
+      ) || (
         isAuth() && resource.data.associatedEmail == request.auth.token.email &&
         request.resource.data.username == resource.data.username &&
         request.resource.data.role == resource.data.role &&
@@ -139,7 +184,7 @@ service cloud.firestore {
         request.resource.data.companyId == resource.data.companyId &&
         request.resource.data.companyName == resource.data.companyName
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || isOwnSellerCredential(resource.data);
     }
 
     // Stock Collection rules

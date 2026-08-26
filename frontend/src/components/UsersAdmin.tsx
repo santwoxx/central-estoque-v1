@@ -9,6 +9,7 @@ import {
   query, 
   getDocs, 
   where,
+  limit,
   serverTimestamp,
   writeBatch
 } from "firebase/firestore";
@@ -41,15 +42,33 @@ interface UsersAdminProps {
   // listener on the same "companies" collection (which duplicated every read while
   // this tab was open).
   companies: Company[];
+
+  // Quem abriu a tela. O ADMIN vê tudo (operadores, empresas, backup). O DONO DA
+  // EMPRESA (alimentador) abre a mesma tela reduzida a uma única função: cadastrar
+  // os VENDEDORES da própria loja. Ele nunca vê credencial de outra empresa, nem
+  // a de outro dono, nem os painéis de empresas/backup — e as regras do Firestore
+  // repetem cada um desses limites do lado do servidor, então esconder o botão
+  // aqui é conveniência, não é a trava.
+  currentUser: { role: UserRole; companyId?: string; companyName?: string };
 }
 
-export default function UsersAdmin({ companies }: UsersAdminProps) {
+export default function UsersAdmin({ companies, currentUser }: UsersAdminProps) {
+  // Modo "dono da empresa": tela enxuta, travada na própria loja e no papel Vendedor.
+  const isAdminView = currentUser.role === "admin";
+  const ownerCompanyId = currentUser.companyId || "";
+  const ownerCompanyName =
+    companies.find(c => c.id === ownerCompanyId)?.name || currentUser.companyName || "";
   const [credentials, setCredentials] = useState<UserCredential[]>([]);
   const [loading, setLoading] = useState(true);
+  // Uma leitura recusada pelo banco devolve lista vazia, que na tela é idêntica a
+  // "ainda não cadastrei ninguém". São coisas muito diferentes: sem esta mensagem
+  // o dono acharia que perdeu os vendedores dele.
+  const [listError, setListError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Sub tab: credentials list or companies register
-  const [subTab, setSubTab] = useState<"credentials" | "companies">("credentials");
+  // Sub tab: credentials list, companies register or backup panel.
+  // O dono da empresa só tem a primeira — as outras nem são renderizadas.
+  const [subTab, setSubTab] = useState<"credentials" | "companies" | "backup">("credentials");
 
   // Create/Edit Operator state
   const [showModal, setShowModal] = useState(false);
@@ -59,7 +78,7 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [role, setRole] = useState<UserRole>("alimentador");
+  const [role, setRole] = useState<UserRole>(isAdminView ? "alimentador" : "vendedor");
   const [associatedEmail, setAssociatedEmail] = useState("");
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
 
@@ -370,9 +389,30 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
     }
   };
 
-  // Fetch credentials in real-time
+  // Fetch credentials in real-time.
+  //
+  // O admin varre a coleção inteira. O dono da empresa consulta com os DOIS
+  // filtros que a regra do Firestore exige (`role == vendedor` e a empresa dele):
+  // sem eles o servidor derruba a consulta inteira, porque não consegue provar
+  // que o resultado não traria credencial — e senha — de outra empresa.
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "custom_credentials"), (snapshot) => {
+    if (!isAdminView && !ownerCompanyId) {
+      setCredentials([]);
+      setLoading(false);
+      return;
+    }
+
+    setListError("");
+
+    const credentialsQuery = isAdminView
+      ? collection(db, "custom_credentials")
+      : query(
+          collection(db, "custom_credentials"),
+          where("companyId", "==", ownerCompanyId),
+          where("role", "==", "vendedor")
+        );
+
+    const unsub = onSnapshot(credentialsQuery, (snapshot) => {
       const list: UserCredential[] = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -391,14 +431,20 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
       // Sort by username alphabetically
       list.sort((a, b) => a.username.localeCompare(b.username));
       setCredentials(list);
+      setListError("");
       setLoading(false);
     }, (error) => {
       console.error("Error reading custom credentials:", error);
+      setListError(
+        error?.code === "permission-denied"
+          ? "O banco recusou a leitura dos vendedores. Se a empresa da sua credencial mudou há pouco, saia e entre novamente no sistema."
+          : "Não foi possível carregar a lista agora. Verifique a conexão e recarregue a página."
+      );
       setLoading(false);
     });
 
     return unsub;
-  }, []);
+  }, [isAdminView, ownerCompanyId]);
 
   const handleOpenAdd = () => {
     setIsEditing(false);
@@ -406,9 +452,11 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
     setUsername("");
     setPassword("");
     setDisplayName("");
-    setRole("alimentador");
+    // O dono só cria vendedor, e sempre para a loja dele: os dois campos nascem
+    // travados (o formulário nem mostra os seletores).
+    setRole(isAdminView ? "alimentador" : "vendedor");
     setAssociatedEmail("");
-    setSelectedCompanyId("");
+    setSelectedCompanyId(isAdminView ? "" : ownerCompanyId);
     setFormError("");
     setSuccessMsg("");
     setShowModal(true);
@@ -448,20 +496,48 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
       return;
     }
 
+    // O dono da empresa não escolhe papel nem empresa: os dois vêm travados aqui,
+    // e o Firestore recusa a gravação se chegarem diferentes disso.
+    const effectiveRole: UserRole = isAdminView ? role : "vendedor";
+    const effectiveCompanyId = isAdminView ? selectedCompanyId : ownerCompanyId;
+
+    if (!isAdminView && !effectiveCompanyId) {
+      setFormError(
+        "Sua credencial não está vinculada a nenhuma empresa, então não há loja para o vendedor. " +
+        "Peça ao administrador para definir a empresa do seu acesso."
+      );
+      return;
+    }
+
     // Resolve company name to match companyId
     let resolvedCompanyName = "";
-    if (selectedCompanyId) {
-      const matchedCompany = companies.find(c => c.id === selectedCompanyId);
+    if (effectiveCompanyId) {
+      const matchedCompany = companies.find(c => c.id === effectiveCompanyId);
       if (matchedCompany) {
         resolvedCompanyName = matchedCompany.name;
+      } else if (!isAdminView) {
+        resolvedCompanyName = ownerCompanyName;
       }
     }
+
+    // O admin enxerga a coleção inteira e detecta duplicidade na lista que já tem
+    // em mãos. O dono da empresa só enxerga os vendedores DELE — um nome de usuário
+    // já usado em outra loja passaria batido, e o login (que busca por usuário)
+    // ficaria ambíguo entre as duas credenciais. Por isso aqui a checagem vai ao
+    // banco, com o limite pequeno que as regras exigem de quem não é admin.
+    const usernameTakenElsewhere = async () => {
+      if (isAdminView) return false;
+      const snap = await getDocs(
+        query(collection(db, "custom_credentials"), where("username", "==", cleanUsername), limit(5))
+      );
+      return snap.docs.some(d => d.id !== selectedId);
+    };
 
     try {
       if (isEditing) {
         // Prevent editing username to duplicate other credentials
         const dupCheck = credentials.find(c => c.username === cleanUsername && c.id !== selectedId);
-        if (dupCheck) {
+        if (dupCheck || (await usernameTakenElsewhere())) {
           setFormError("Este nome de usuário já está sendo utilizado por outra credencial.");
           return;
         }
@@ -471,9 +547,9 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
           username: cleanUsername,
           password: cleanPassword,
           displayName: cleanDisplayName,
-          role: role,
+          role: effectiveRole,
           associatedEmail: cleanEmail,
-          companyId: selectedCompanyId,
+          companyId: effectiveCompanyId,
           companyName: resolvedCompanyName,
           updatedAt: serverTimestamp()
         });
@@ -483,7 +559,7 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
       } else {
         // Create verification
         const dupCheck = credentials.find(c => c.username === cleanUsername);
-        if (dupCheck) {
+        if (dupCheck || (await usernameTakenElsewhere())) {
           setFormError("Este nome de usuário já está cadastrado.");
           return;
         }
@@ -492,14 +568,18 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
           username: cleanUsername,
           password: cleanPassword,
           displayName: cleanDisplayName,
-          role: role,
+          role: effectiveRole,
           associatedEmail: cleanEmail,
-          companyId: selectedCompanyId,
+          companyId: effectiveCompanyId,
           companyName: resolvedCompanyName,
           createdAt: serverTimestamp()
         });
 
-        setSuccessMsg("Nova credencial de usuário criada com sucesso!");
+        setSuccessMsg(
+          isAdminView
+            ? "Nova credencial de usuário criada com sucesso!"
+            : "Vendedor cadastrado! Passe o usuário e a senha para ele entrar no sistema."
+        );
         setTimeout(() => setShowModal(false), 800);
       }
     } catch (err: any) {
@@ -511,6 +591,14 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
   const handleDelete = async (cred: UserCredential) => {
     if (cred.username === "brisas" || cred.associatedEmail === "brisasofc@gmail.com") {
       alert("Operação proibida! Não é permitido deletar a credencial administrativa nativa master 'brisas'.");
+      return;
+    }
+
+    // O dono só apaga vendedor da própria loja. A lista dele já vem filtrada
+    // assim, mas a checagem fica aqui para o caso de um documento chegar por
+    // outro caminho — e o Firestore recusa de qualquer forma.
+    if (!isAdminView && (cred.role !== "vendedor" || cred.companyId !== ownerCompanyId)) {
+      alert("Você só pode remover os vendedores da sua própria empresa.");
       return;
     }
 
@@ -643,69 +731,92 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-5 border-b border-slate-100">
         <div>
           <h2 className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <Users size={20} className="text-gold-600 shrink-0" /> Gerenciar Configurações Corporativas
+            <Users size={20} className="text-gold-600 shrink-0" />
+            {isAdminView ? "Gerenciar Configurações Corporativas" : "Meus Vendedores"}
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Gerencie múltiplos estoques segmentados por empresas, delegando credenciais de acesso operacionais aos seus colaboradores.
+            {isAdminView ? (
+              "Gerencie múltiplos estoques segmentados por empresas, delegando credenciais de acesso operacionais aos seus colaboradores."
+            ) : (
+              <>
+                Cadastre os vendedores de <strong className="text-slate-700">{ownerCompanyName || "sua empresa"}</strong>.
+                Eles reservam pneus para clientes — e toda reserva, inclusive a do estoque da sua própria loja,
+                só prende o pneu depois que <strong className="text-slate-700">você confirmar</strong> em Transferências.
+              </>
+            )}
           </p>
         </div>
         
         {subTab === "credentials" && (
           <div className="flex gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleAutoSeedDefaultData}
-              className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-900 border border-slate-700 text-gold-400 font-extrabold rounded-xl text-xs cursor-pointer hover:bg-slate-800 transition-all active:scale-[0.98]"
-            >
-              🚀 Inicializar Padrões
-            </button>
+            {isAdminView && (
+              <button
+                type="button"
+                onClick={handleAutoSeedDefaultData}
+                className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-900 border border-slate-700 text-gold-400 font-extrabold rounded-xl text-xs cursor-pointer hover:bg-slate-800 transition-all active:scale-[0.98]"
+              >
+                🚀 Inicializar Padrões
+              </button>
+            )}
             <button
               type="button"
               onClick={handleOpenAdd}
-              className="flex items-center gap-1.5 px-4 py-2.5 bg-gradient-to-r from-gold-600 to-amber-550 border border-gold-400/20 text-white font-extrabold rounded-xl text-xs shadow-md shadow-gold-500/10 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98]"
+              disabled={!isAdminView && !ownerCompanyId}
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-gradient-to-r from-gold-600 to-amber-550 border border-gold-400/20 text-white font-extrabold rounded-xl text-xs shadow-md shadow-gold-500/10 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
             >
-              <UserPlus size={14} className="stroke-[2.5px]" /> Criar Credencial
+              <UserPlus size={14} className="stroke-[2.5px]" /> {isAdminView ? "Criar Credencial" : "Cadastrar Vendedor"}
             </button>
           </div>
         )}
       </div>
 
-      {/* Sub tabs switches */}
-      <div className="flex border-b border-slate-150 pb-px gap-1">
-        <button
-          type="button"
-          onClick={() => setSubTab("credentials")}
-          className={`px-4 py-2.5 text-xs font-black rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-            subTab === "credentials"
-              ? "bg-[#1e1a12] text-gold-400 border border-gold-500/30 font-black shadow-md"
-              : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
-          }`}
-        >
-          🔑 Operadores & Credenciais
-        </button>
-        <button
-          type="button"
-          onClick={() => setSubTab("companies")}
-          className={`px-4 py-2.5 text-xs font-black rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-            subTab === "companies"
-              ? "bg-[#1e1a12] text-gold-400 border border-gold-500/30 font-black shadow-md"
-              : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
-          }`}
-        >
-          🏢 Empresas & Filiais ({companies.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setSubTab("backup")}
-          className={`px-4 py-2.5 text-xs font-black rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-            subTab === "backup"
-              ? "bg-[#1e1a12] text-gold-400 border border-gold-500/30 font-black shadow-md"
-              : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
-          }`}
-        >
-          💾 Backup & Restauração
-        </button>
-      </div>
+      {/* Sub tabs switches — cadastro de empresas e backup são só do admin. */}
+      {isAdminView && (
+        <div className="flex border-b border-slate-150 pb-px gap-1">
+          <button
+            type="button"
+            onClick={() => setSubTab("credentials")}
+            className={`px-4 py-2.5 text-xs font-black rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+              subTab === "credentials"
+                ? "bg-[#1e1a12] text-gold-400 border border-gold-500/30 font-black shadow-md"
+                : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
+            }`}
+          >
+            🔑 Operadores & Credenciais
+          </button>
+          <button
+            type="button"
+            onClick={() => setSubTab("companies")}
+            className={`px-4 py-2.5 text-xs font-black rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+              subTab === "companies"
+                ? "bg-[#1e1a12] text-gold-400 border border-gold-500/30 font-black shadow-md"
+                : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
+            }`}
+          >
+            🏢 Empresas & Filiais ({companies.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setSubTab("backup")}
+            className={`px-4 py-2.5 text-xs font-black rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+              subTab === "backup"
+                ? "bg-[#1e1a12] text-gold-400 border border-gold-500/30 font-black shadow-md"
+                : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
+            }`}
+          >
+            💾 Backup & Restauração
+          </button>
+        </div>
+      )}
+
+      {/* Aviso do dono sem empresa: sem loja não há vendedor para cadastrar. */}
+      {!isAdminView && !ownerCompanyId && (
+        <div className="bg-amber-50 border-l-4 border-amber-500 text-amber-800 p-3 rounded-xl text-[11px] font-semibold leading-relaxed">
+          Seu acesso não está vinculado a nenhuma empresa, então não existe uma loja à qual
+          vincular vendedores. Peça ao administrador para definir a sua empresa em
+          Operadores e Senhas e entre novamente no sistema.
+        </div>
+      )}
 
       {/* RENDER TAB 1: CREDENTIALS */}
       {subTab === "credentials" && (
@@ -718,16 +829,25 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
               </div>
               <input
                 type="text"
-                placeholder="Pesquise por nome, usuário, empresa ou e-mail de acesso do Google..."
+                placeholder={isAdminView
+                  ? "Pesquise por nome, usuário, empresa ou e-mail de acesso do Google..."
+                  : "Pesquise o vendedor por nome, usuário ou e-mail..."}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9 pr-4 py-2.5 w-full border border-slate-200 bg-white text-slate-900 rounded-xl focus:bg-white focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 font-semibold text-xs placeholder:text-slate-400 outline-none transition-all"
               />
             </div>
             <div className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest hidden sm:block whitespace-nowrap">
-              Auditados: <strong className="text-slate-700 text-xs">{filteredCredentials.length}</strong> logins
+              {isAdminView ? "Auditados" : "Vendedores"}: <strong className="text-slate-700 text-xs">{filteredCredentials.length}</strong>{" "}
+              {isAdminView ? "logins" : "ativos"}
             </div>
           </div>
+
+          {listError && (
+            <div className="bg-red-50 border-l-4 border-red-500 text-red-700 p-3 rounded-xl text-[11px] font-semibold leading-relaxed animate-fadeIn">
+              {listError}
+            </div>
+          )}
 
           {/* Main Credentials Table */}
           {loading ? (
@@ -738,9 +858,13 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
           ) : filteredCredentials.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg">
               <AlertCircle size={44} className="text-slate-300 stroke-[1.5px] mb-2" />
-              <p className="font-bold text-slate-700 text-sm">Nenhuma credencial encontrada</p>
+              <p className="font-bold text-slate-700 text-sm">
+                {isAdminView ? "Nenhuma credencial encontrada" : "Nenhum vendedor cadastrado"}
+              </p>
               <p className="text-[11px] text-slate-400 max-w-sm mt-1">
-                Clique no botão "Criar Credencial" acima para registrar novos operadores ou diretores de estoque.
+                {isAdminView
+                  ? 'Clique no botão "Criar Credencial" acima para registrar novos operadores ou diretores de estoque.'
+                  : 'Clique em "Cadastrar Vendedor" para dar acesso ao primeiro vendedor da sua loja.'}
               </p>
             </div>
           ) : (
@@ -873,7 +997,7 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
       )}
 
       {/* RENDER TAB 2: COMPANIES REGISTER */}
-      {subTab === "companies" && (
+      {isAdminView && subTab === "companies" && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
           
           {/* Left panel: Add/Edit company form */}
@@ -1042,7 +1166,7 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
       )}
 
       {/* RENDER TAB 3: BACKUP & RESTORE */}
-      {subTab === "backup" && (
+      {isAdminView && subTab === "backup" && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fadeIn text-left">
           
           {/* Export Backup Card */}
@@ -1177,10 +1301,14 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
             <div>
               <h3 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-1.5 font-sans">
                 {isEditing ? <Edit size={16} className="text-gold-600" /> : <UserPlus size={16} className="text-gold-600" />}
-                {isEditing ? "Alterar Credencial Operacional" : "Nova Credencial de Segurança"}
+                {isAdminView
+                  ? (isEditing ? "Alterar Credencial Operacional" : "Nova Credencial de Segurança")
+                  : (isEditing ? "Alterar Acesso do Vendedor" : "Cadastrar Vendedor")}
               </h3>
               <p className="text-[11px] text-slate-400 leading-normal font-semibold font-sans">
-                Determine as chaves para esse colaborador operar o Central Stoque.
+                {isAdminView
+                  ? "Determine as chaves para esse colaborador operar o Central Stoque."
+                  : `Este acesso fica vinculado a ${ownerCompanyName || "sua empresa"} e só permite reservar pneus para clientes.`}
               </p>
             </div>
 
@@ -1265,7 +1393,23 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
                 </span>
               </div>
 
-              {/* Field 5: Associated Company selection */}
+              {/* Field 5: Associated Company selection — travada para o dono da empresa */}
+              {!isAdminView ? (
+                <div>
+                  <label className="block text-[10px] font-black text-slate-550 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                    Empresa Vinculada ao Vendedor
+                  </label>
+                  <div className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-700 flex items-center gap-1.5">
+                    <Building size={12} className="text-gold-600 shrink-0" />
+                    {ownerCompanyName || "Sua empresa"}
+                  </div>
+                  <span className="text-[9px] text-slate-400 block mt-1.5 font-medium leading-relaxed">
+                    O vendedor nasce vinculado à sua loja. No catálogo, os pneus dela aparecem como
+                    reserva da casa; os das outras filiais viram solicitação para aquela filial decidir.
+                    Nos dois casos o pneu só fica preso depois que o dono confirma.
+                  </span>
+                </div>
+              ) : (
               <div>
                 <label className="block text-[10px] font-black text-slate-550 uppercase tracking-widest mb-1.5 flex items-center gap-1">
                   Empresa Vinculada ao Operador
@@ -1286,8 +1430,10 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
                   Selecione a empresa à qual este operador pertence. Ele só poderá visualizar e lançar produtos para este estoque. Deixe em branco se desejar dar acesso a todas as empresas.
                 </span>
               </div>
+              )}
 
               {/* Field 6: System Access Role level selection slider */}
+              {isAdminView && (
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                 <span className="block text-[9px] font-extrabold text-slate-555 uppercase tracking-widest mb-2 flex items-center gap-1">
                   <ShieldCheck size={12} className="text-gold-600" /> Nível de Acesso no Central Stoque
@@ -1328,6 +1474,7 @@ export default function UsersAdmin({ companies }: UsersAdminProps) {
                   </button>
                 </div>
               </div>
+              )}
 
               {/* Submit Buttons */}
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 text-right">
