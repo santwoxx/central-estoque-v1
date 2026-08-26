@@ -29,6 +29,11 @@ interface ConsolidatedItem {
   priceCash: number;
   priceInstallment: number;
   docs: Record<string, StockItem>; // Keyed by companyId
+  // De QUAL loja saiu o preco exibido nesta linha, e se as lojas divergem.
+  // A linha e unica mas os documentos sao varios: sem saber a origem, editar
+  // o preco e apostar em qual filial vai ser gravada.
+  priceCompanyId: string;
+  priceVaries: boolean;
 }
 
 export default function UnifiedStock({ items, user, companies: companiesProp, onUpdateItem, onAddItem, onAddCompany, onRegisterFlow }: UnifiedStockProps) {
@@ -95,6 +100,18 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     [companies, companyFilter]
   );
 
+  // A loja cujo preco a linha mostra — e a mesma que a edicao vai gravar.
+  // Com um filtro ativo e aquela loja; senao, a do proprio usuario (a unica que
+  // ele consegue editar); e so em ultimo caso a primeira que tiver o pneu.
+  const priceSourceCompanyId = React.useCallback(
+    (docs: Record<string, StockItem>): string => {
+      if (companyFilter !== "ALL" && docs[companyFilter]) return companyFilter;
+      if (user.companyId && docs[user.companyId]) return user.companyId;
+      return companies.find(c => docs[c.id])?.id || "";
+    },
+    [companyFilter, user.companyId, companies]
+  );
+
   const consolidatedItems = useMemo(() => {
     const map = new Map<string, ConsolidatedItem>();
 
@@ -107,8 +124,10 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           model: item.model,
           size: item.size,
           description: `${item.size} ${item.brand} ${item.model}`.trim(),
-          priceCash: item.priceCash || item.price || 0,
-          priceInstallment: item.priceInstallment || item.price || 0,
+          priceCash: 0,
+          priceInstallment: 0,
+          priceCompanyId: "",
+          priceVaries: false,
           docs: {}
         });
       }
@@ -124,13 +143,43 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       if (compId) {
         cons.docs[compId] = item;
       }
-      
-      if (item.priceCash && item.priceCash > cons.priceCash) cons.priceCash = item.priceCash;
-      if (item.priceInstallment && item.priceInstallment > cons.priceInstallment) cons.priceInstallment = item.priceInstallment;
     });
 
-    return Array.from(map.values()).sort((a, b) => a.sku.localeCompare(b.sku));
-  }, [items, companies]);
+    // O preco da linha e o de UMA loja — a mesma que a edicao vai gravar.
+    //
+    // ANTES aqui rodava um "maximo entre as filiais": a linha mostrava o maior
+    // preco de todas. Como salvar so escreve nas lojas que a pessoa pode editar,
+    // qualquer preco menor que o de outra filial era gravado no banco e sumia da
+    // tela no mesmo instante — o dono baixava o preco, via o numero da outra
+    // loja voltar, e concluia que "nao salva". A assimetria entre as duas
+    // colunas vinha do fallback: o valor inicial caia em `price` (o campo
+    // legado) quando faltava, mas a comparacao do maximo olhava o campo cru —
+    // entao a coluna A VISTA e a A PRAZO se comportavam diferente conforme
+    // qual documento tivesse o campo antigo preenchido.
+    return Array.from(map.values())
+      .map(cons => {
+        const sourceId = priceSourceCompanyId(cons.docs);
+        const src = sourceId ? cons.docs[sourceId] : undefined;
+        const cashOf = (d?: StockItem) => (d ? d.priceCash || d.price || 0 : 0);
+        // Sem preco a prazo proprio, vale o a vista: e o mesmo padrao usado ao
+        // cadastrar o produto, e evita mostrar "—" num pneu que tem preco.
+        const instOf = (d?: StockItem) => (d ? d.priceInstallment || cashOf(d) : 0);
+
+        const withDocs = companies.map(c => cons.docs[c.id]).filter(Boolean) as StockItem[];
+        const priceVaries = withDocs.length > 1 && withDocs.some(
+          d => cashOf(d) !== cashOf(src) || instOf(d) !== instOf(src)
+        );
+
+        return {
+          ...cons,
+          priceCash: cashOf(src),
+          priceInstallment: instOf(src),
+          priceCompanyId: sourceId,
+          priceVaries
+        };
+      })
+      .sort((a, b) => a.sku.localeCompare(b.sku));
+  }, [items, companies, priceSourceCompanyId]);
 
   const filteredItems = useMemo(() => {
     // Com uma empresa escolhida, some tambem a LINHA do pneu que aquela loja
@@ -414,13 +463,31 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     return user.companyId === colCompanyId;
   };
 
+  // De quem e o preco que a linha esta mostrando. A tabela tem UMA coluna de
+  // preco para N filiais: sem dizer de qual loja o numero saiu, um preco
+  // divergente entre filiais parece erro do sistema.
+  const priceHint = (item: ConsolidatedItem) => {
+    const name = companies.find(c => c.id === item.priceCompanyId)?.name;
+    if (!name) return "Nenhuma loja tem este pneu cadastrado.";
+    return item.priceVaries
+      ? `Preço de ${name}. As outras filiais têm preço diferente para este pneu — use o filtro de empresa acima para ver o de cada uma.`
+      : `Preço de ${name}.`;
+  };
+
   const startEdit = (item: ConsolidatedItem, field: string, currentValue: string) => {
     if (isVendedor) return;
     
     const isCompanyField = companies.some(c => c.id === field);
     if (isCompanyField && !canEditCompany(field)) return;
-    if ((field === "priceCash" || field === "priceInstallment") && !isAdmin && !companies.some(c => canEditCompany(c.id))) {
-      return;
+    // Preco: a coluna representa UMA loja (ver priceSourceCompanyId). Com um
+    // filtro apontando para filial que nao e sua, nao ha o que editar — antes o
+    // clique abria o campo e a gravacao ia parar na SUA loja, alterando um preco
+    // que a tela nem estava mostrando.
+    if (field === "priceCash" || field === "priceInstallment") {
+      const canEditShownPrice = companyFilter === "ALL"
+        ? companies.some(c => canEditCompany(c.id))
+        : canEditCompany(companyFilter);
+      if (!canEditShownPrice) return;
     }
 
     setEditingCell({ sku: item.sku, field });
@@ -478,12 +545,35 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         }
       } else if (field === "priceCash" || field === "priceInstallment") {
         const numValue = parseFloat(rawValue.replace(",", ".")) || 0;
-        for (const comp of companies) {
-          if (canEditCompany(comp.id) && item.docs[comp.id]) {
-            const docToUpdate = item.docs[comp.id];
-            if (docToUpdate[field as keyof StockItem] !== numValue) {
-              await onUpdateItem(docToUpdate.id, { [field]: numValue }, "Atualização de Preço", 0);
-            }
+
+        // Com filtro ativo, escreve SO naquela loja — que e a que a tela esta
+        // mostrando. Sem filtro, mantem o comportamento historico de igualar o
+        // preco em todas as lojas que a pessoa pode editar (para o dono, isso e
+        // exatamente a loja dele; so o admin atinge varias).
+        const targets = companies.filter(comp =>
+          canEditCompany(comp.id) &&
+          item.docs[comp.id] &&
+          (companyFilter === "ALL" || comp.id === companyFilter)
+        );
+
+        if (targets.length === 0) {
+          throw new Error(
+            "Este pneu não está cadastrado em nenhuma loja que você possa editar, " +
+            "então não há preço seu para alterar aqui."
+          );
+        }
+
+        for (const comp of targets) {
+          const docToUpdate = item.docs[comp.id];
+          // O campo pode nem existir nos documentos antigos: `undefined !== n`
+          // e verdadeiro, entao a primeira gravacao passa e cria o campo.
+          if (docToUpdate[field as keyof StockItem] !== numValue) {
+            // O `price` legado alimenta o fallback de leitura em varias telas
+            // (inclusive no catalogo publico). Deixa-lo para tras faz o preco
+            // antigo reaparecer onde o campo novo estiver vazio.
+            const fields: Partial<StockItem> =
+              field === "priceCash" ? { priceCash: numValue, price: numValue } : { priceInstallment: numValue };
+            await onUpdateItem(docToUpdate.id, fields, "Atualização de Preço", 0);
           }
         }
       } else if (isTextField) {
@@ -1199,6 +1289,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                   {/* Price Cash */}
                   <td 
                     className={`border-r border-slate-200 px-2 py-3 text-center font-bold text-slate-900 text-xs whitespace-nowrap ${(!isVendedor) ? "cursor-pointer hover:bg-gold-400/10" : ""}`}
+                    title={priceHint(item)}
                     onClick={() => startEdit(item, "priceCash", item.priceCash.toString())}
                   >
                     {editingCell?.sku === item.sku && editingCell?.field === "priceCash" ? (
@@ -1213,13 +1304,19 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                         className="w-20 px-1 text-center outline-none bg-white border border-gold-400 rounded font-bold"
                       />
                     ) : (
-                      item.priceCash > 0 ? `R$ ${item.priceCash.toFixed(2).replace(".", ",")}` : <span className="text-slate-300">—</span>
+                      <>
+                        {item.priceCash > 0 ? `R$ ${item.priceCash.toFixed(2).replace(".", ",")}` : <span className="text-slate-300">—</span>}
+                        {item.priceVaries && (
+                        <span className="ml-0.5 align-super text-[9px] font-black text-amber-500">≠</span>
+                      )}
+                      </>
                     )}
                   </td>
 
                   {/* Price Installment */}
                   <td 
                     className={`px-2 py-3 text-center font-bold text-slate-900 text-xs whitespace-nowrap ${(!isVendedor) ? "cursor-pointer hover:bg-gold-400/10" : ""}`}
+                    title={priceHint(item)}
                     onClick={() => startEdit(item, "priceInstallment", item.priceInstallment.toString())}
                   >
                     {editingCell?.sku === item.sku && editingCell?.field === "priceInstallment" ? (
@@ -1234,7 +1331,12 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                         className="w-20 px-1 text-center outline-none bg-white border border-gold-400 rounded font-bold"
                       />
                     ) : (
-                      item.priceInstallment > 0 ? `R$ ${item.priceInstallment.toFixed(2).replace(".", ",")}` : <span className="text-slate-300">—</span>
+                      <>
+                        {item.priceInstallment > 0 ? `R$ ${item.priceInstallment.toFixed(2).replace(".", ",")}` : <span className="text-slate-300">—</span>}
+                        {item.priceVaries && (
+                        <span className="ml-0.5 align-super text-[9px] font-black text-amber-500">≠</span>
+                      )}
+                      </>
                     )}
                   </td>
 
