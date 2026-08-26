@@ -16,7 +16,7 @@ import {
   setDoc
 } from "firebase/firestore";
 import { auth, db } from "../firebase";
-import { Lock, User, Eye, EyeOff, ShieldCheck, Mail, Key, Sparkles, ArrowRight, RefreshCw } from "lucide-react";
+import { Lock, User, Eye, EyeOff, ShieldCheck, Mail, Key, Sparkles, ArrowRight, RefreshCw, ShoppingBag } from "lucide-react";
 
 interface AuthScreenProps {
   onAuthSuccess: (profile: { uid: string; email: string; displayName: string; role: "user" | "admin"; companyId?: string; companyName?: string }) => void;
@@ -376,8 +376,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
             <h2 className="text-2xl font-black text-slate-900 tracking-tight">
               Central Stoque
             </h2>
+            {/* Antes: "Admin & Operator Portal". O vendedor lia isso, concluia
+                que a pagina nao era dele e parava antes de achar o botao. */}
             <p className="text-xs font-black text-gold-600 tracking-widest uppercase">
-              Admin & Operator Portal
+              Acesso ao Sistema
             </p>
             
             {/* Download Desktop App Banner — hidden automatically once you're
@@ -444,55 +446,29 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           </div>
         )}
 
-        {/* ================= STAGE 1: GOOGLE SIGN IN ================= */}
+        {/* ================= ETAPA 1: ESCOLHA DA PORTA DE ENTRADA =================
+            Duas portas, e a ordem aqui importa. A MAIORIA entra por usuario e
+            senha: todo vendedor, e todo operador cadastrado sem e-mail Google
+            vinculado (isaac, jorge, davi, nicolas, edgar...). O Google so serve
+            a quem tem e-mail preso na credencial — e so nesse caminho existem
+            "duas etapas". Por isso o vendedor vem primeiro e em destaque, e o
+            aviso de "Etapa 1 de 2" mora colado no botao do Google, em vez de
+            ficar no topo parecendo obrigatorio para todo mundo.
+        ======================================================================= */}
         {!googleUser ? (
           <div className="space-y-5 animate-fadeIn">
-            <div className="bg-gold-50/40 p-4 rounded-2xl border border-gold-200/20 text-center space-y-1">
-              <span className="inline-block px-2.5 py-0.5 rounded-full bg-gold-400/10 text-gold-700 font-black text-[9px] uppercase tracking-widest">
-                Etapa 1 de 2
-              </span>
-              <p className="text-xs text-slate-600 font-semibold">
-                Por favor, conecte com sua identidade corporativa Google.
-              </p>
-            </div>
-
-            {/* Standard True Google Button */}
-            <button
-              onClick={handleGoogleLoginReal}
-              disabled={loading}
-              className="w-full py-3 px-4 rounded-xl text-slate-700 hover:text-slate-900 font-bold bg-white hover:bg-slate-50/80 active:bg-slate-100 border border-slate-300/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)] flex items-center justify-center gap-2.5 transition-all text-xs disabled:opacity-50 cursor-pointer"
-            >
-              <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24">
-                <path
-                  fill="#EA4335"
-                  d="M12 5.04c1.5 0 2.85.51 3.91 1.52l2.91-2.91C17.06 1.95 14.73 1 .01 1c-4.72 0-8.77 2.72-10.74 6.72l3.43 2.66c.86-2.59 3.28-4.34 6.3-4.34z"
-                />
-                <path
-                  fill="#4285F4"
-                  d="M23.49 12.27c0-.81-.07-1.59-.2-2.35H12v4.51h6.46c-.29 1.48-1.14 2.73-2.4 3.58l3.73 2.88c2.18-2.01 3.7-4.97 3.7-8.62z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M4.69 14.74c-.23-.69-.36-1.42-.36-2.19c0-.77.13-1.5.36-2.19L1.26 7.7c-.82 1.64-1.28 3.49-1.28 5.45s.46 3.81 1.28 5.45l3.43-2.86z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23c3.24 0 5.97-1.07 7.96-2.91l-3.73-2.88c-1.04.69-2.37 1.11-4.23 1.11c-3.02 0-5.44-1.75-6.3-4.34L1.26 16.6C3.23 20.6 7.28 23 12 23z"
-                />
-              </svg>
-              Autenticar com o Google
-            </button>
-
-
-
-            <div className="relative flex py-2 items-center">
-              <div className="flex-grow border-t border-slate-200"></div>
-              <span className="flex-shrink-0 mx-4 text-slate-400 text-[10px] font-bold uppercase tracking-wider">OU</span>
-              <div className="flex-grow border-t border-slate-200"></div>
-            </div>
 
             {directLoginMode ? (
               <form className="space-y-4 animate-fadeIn" onSubmit={handleDirectLogin}>
+                <div className="bg-gold-50/40 p-3.5 rounded-2xl border border-gold-200/30 text-center space-y-0.5">
+                  <span className="inline-block px-2.5 py-0.5 rounded-full bg-gold-400/10 text-gold-700 font-black text-[9px] uppercase tracking-widest">
+                    Entrada de Vendedor
+                  </span>
+                  <p className="text-[11px] text-slate-600 font-semibold leading-relaxed">
+                    Use o usuário e a senha que o dono da sua loja passou.
+                  </p>
+                </div>
+
                 <div className="space-y-1">
                   <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider">
                     Usuário
@@ -504,6 +480,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                     <input
                       type="text"
                       required
+                      autoFocus
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       className="block w-full pl-10 pr-3 py-2.5 border border-slate-200 rounded-xl focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 text-slate-900 bg-slate-50/50 text-xs font-semibold outline-none transition-all placeholder:text-slate-350"
@@ -541,29 +518,76 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3 px-4 rounded-xl text-white font-black bg-slate-800 hover:bg-slate-900 focus:outline-none focus:ring-4 focus:ring-slate-500/20 transition-all disabled:opacity-50 text-xs flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider shadow-md"
+                  className="w-full py-3 px-4 rounded-xl text-white font-black bg-gradient-to-r from-gold-600 to-gold-500 hover:from-gold-700 hover:to-gold-600 focus:outline-none focus:ring-4 focus:ring-gold-500/20 transition-all disabled:opacity-50 text-xs flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider shadow-md"
                 >
-                  {loading ? "Entrando..." : "Entrar Direto"}
+                  {loading ? "Entrando..." : "Entrar"}
                 </button>
-                
+
                 <button
                   type="button"
                   onClick={() => setDirectLoginMode(false)}
-                  className="w-full text-center text-xs font-bold text-slate-500 hover:text-slate-700 mt-2"
+                  className="w-full text-center text-xs font-bold text-slate-500 hover:text-slate-700 mt-2 cursor-pointer"
                 >
-                  Voltar para login com Google
+                  Voltar
                 </button>
               </form>
             ) : (
-              <button
-                type="button"
-                onClick={() => setDirectLoginMode(true)}
-                className="w-full py-2.5 px-4 rounded-xl text-slate-700 font-bold bg-slate-100 hover:bg-slate-200 transition-all text-xs cursor-pointer border border-slate-200 shadow-sm"
-              >
-                Entrar Apenas com Usuário e Senha
-              </button>
-            )}
+              <>
+                {/* Porta principal: o vendedor (e todo operador sem e-mail Google) */}
+                <div className="space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setDirectLoginMode(true)}
+                    className="w-full py-3.5 px-4 rounded-xl text-white font-black bg-gradient-to-r from-gold-600 to-gold-500 hover:from-gold-700 hover:to-gold-600 focus:outline-none focus:ring-4 focus:ring-gold-500/20 transition-all text-xs flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider shadow-md"
+                  >
+                    <ShoppingBag size={15} className="shrink-0" /> Entrar como Vendedor
+                  </button>
+                  <p className="text-[10px] text-slate-500 text-center font-semibold leading-relaxed px-2">
+                    Usuário e senha, uma etapa só. Operadores e donos de loja sem
+                    e-mail Google vinculado entram por aqui também.
+                  </p>
+                </div>
 
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-slate-200"></div>
+                  <span className="flex-shrink-0 mx-4 text-slate-400 text-[10px] font-bold uppercase tracking-wider">OU</span>
+                  <div className="flex-grow border-t border-slate-200"></div>
+                </div>
+
+                {/* Porta secundaria: so quem tem e-mail preso na credencial */}
+                <div className="space-y-1.5">
+                  <button
+                    onClick={handleGoogleLoginReal}
+                    disabled={loading}
+                    className="w-full py-3 px-4 rounded-xl text-slate-700 hover:text-slate-900 font-bold bg-white hover:bg-slate-50/80 active:bg-slate-100 border border-slate-300/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)] flex items-center justify-center gap-2.5 transition-all text-xs disabled:opacity-50 cursor-pointer"
+                  >
+                    <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24">
+                      <path
+                        fill="#EA4335"
+                        d="M12 5.04c1.5 0 2.85.51 3.91 1.52l2.91-2.91C17.06 1.95 14.73 1 .01 1c-4.72 0-8.77 2.72-10.74 6.72l3.43 2.66c.86-2.59 3.28-4.34 6.3-4.34z"
+                      />
+                      <path
+                        fill="#4285F4"
+                        d="M23.49 12.27c0-.81-.07-1.59-.2-2.35H12v4.51h6.46c-.29 1.48-1.14 2.73-2.4 3.58l3.73 2.88c2.18-2.01 3.7-4.97 3.7-8.62z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M4.69 14.74c-.23-.69-.36-1.42-.36-2.19c0-.77.13-1.5.36-2.19L1.26 7.7c-.82 1.64-1.28 3.49-1.28 5.45s.46 3.81 1.28 5.45l3.43-2.86z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 23c3.24 0 5.97-1.07 7.96-2.91l-3.73-2.88c-1.04.69-2.37 1.11-4.23 1.11c-3.02 0-5.44-1.75-6.3-4.34L1.26 16.6C3.23 20.6 7.28 23 12 23z"
+                      />
+                    </svg>
+                    Autenticar com o Google
+                  </button>
+                  <p className="text-[10px] text-slate-400 text-center font-semibold leading-relaxed px-2">
+                    Etapa 1 de 2 — apenas para contas com e-mail corporativo
+                    vinculado à credencial.
+                  </p>
+                </div>
+              </>
+            )}
 
           </div>
         ) : (
