@@ -1007,8 +1007,27 @@ export default function App() {
 
       await batch.commit();
     } catch (err) {
+      // A causa real NAO pode morrer aqui. Enquanto esta mensagem era um
+      // "Erro ao gravar alteracoes." seco, uma recusa do banco, um campo
+      // invalido e uma queda de rede chegavam na tela iguais — e cada relato de
+      // "nao salva" virava adivinhacao. O codigo do Firestore
+      // (permission-denied, invalid-argument, unavailable...) diz qual e.
       console.error("Erro ao atualizar item:", err);
-      throw new Error("Erro ao gravar alterações.");
+      const code = (err as any)?.code;
+      const detail = (err as any)?.message || String(err);
+      if (code === "permission-denied") {
+        throw new Error(
+          "O banco recusou a gravação por permissão. Se a empresa da sua credencial mudou " +
+          "recentemente, saia e entre novamente no sistema."
+        );
+      }
+      if (code === "unavailable" || code === "deadline-exceeded") {
+        throw new Error(
+          "Sem conexão com o banco no momento — a alteração não foi gravada. " +
+          "Verifique a internet e tente de novo."
+        );
+      }
+      throw new Error(`Erro ao gravar alterações${code ? ` (${code})` : ""}: ${detail}`);
     }
   };
 

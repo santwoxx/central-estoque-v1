@@ -21,7 +21,8 @@ import {
   AlertTriangle,
   FileSpreadsheet,
   Loader2,
-  Camera
+  Camera,
+  Check
 } from "lucide-react";
 
 interface StockTableProps {
@@ -95,6 +96,11 @@ export default function StockTable({
   // mandava ZERO para o banco. Ver parsePriceInput em utils.
   const [formPriceCash, setFormPriceCash] = useState("");
   const [formPriceInstallment, setFormPriceInstallment] = useState("");
+
+  // Confirmação do que FOI GRAVADO, mostrada fora do modal (que fecha no
+  // sucesso). Sem ela, "salvou" e "não salvou" são visualmente idênticos: o
+  // modal some nos dois casos e resta olhar a linha da tabela e confiar.
+  const [savedMsg, setSavedMsg] = useState("");
   const [formNotes, setFormNotes] = useState("");
   const [formDescription, setFormDescription] = useState("");
   const [formImageUrl, setFormImageUrl] = useState("");
@@ -539,6 +545,7 @@ export default function StockTable({
 
   // Open Edit Modals
   const handleOpenEdit = (item: StockItem) => {
+    setSavedMsg("");
     setEditingItem(item);
     setFormSku(item.sku);
     setFormBrand(item.brand);
@@ -667,6 +674,10 @@ export default function StockTable({
       const quantityDiff = Number(formQuantity) - editingItem.quantity;
       await onUpdateItem(editingItem.id, updatedFields, movementReason || "Edição de cadastro", quantityDiff);
       setShowEditModal(false);
+      setSavedMsg(
+        `${formBrand} ${formModel} (${formSize}) gravado — à vista ${formatBRL(priceCash)}, ` +
+        `a prazo ${formatBRL(priceInstallment)}, ${Number(formQuantity)} un.`
+      );
     } catch (err: any) {
       setErrorMsg(err.message || "Erro ao atualizar dados.");
     } finally {
@@ -1145,6 +1156,21 @@ export default function StockTable({
           </div>
         </div>
       </div>
+
+      {savedMsg && (
+        <div className="mb-3 flex items-start gap-2 bg-emerald-50 border-l-4 border-emerald-500 text-emerald-800 px-3.5 py-2.5 rounded-xl text-xs font-semibold leading-relaxed animate-fadeIn">
+          <Check size={14} className="shrink-0 mt-0.5 stroke-[3px]" />
+          <span className="flex-1">{savedMsg}</span>
+          <button
+            type="button"
+            onClick={() => setSavedMsg("")}
+            className="shrink-0 text-emerald-600 hover:text-emerald-900 cursor-pointer"
+            title="Fechar"
+          >
+            <X size={14} className="stroke-[2.5px]" />
+          </button>
+        </div>
+      )}
 
       {/* Main Stock Container */}
       <div className="bg-transparent overflow-hidden font-sans">
