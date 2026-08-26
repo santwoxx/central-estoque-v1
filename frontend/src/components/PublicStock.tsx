@@ -72,13 +72,20 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
   // filial. Vazio = nenhuma em foco, tudo em ordem alfabética.
   const [focusCompanyId, setFocusCompanyId] = useState<string>(ownCompanyId);
 
+  // "Só esta loja": esconde as outras filiais em vez de apenas rebaixá-las.
+  // Nasce desligado de propósito — parte do trabalho do vendedor é achar, em
+  // OUTRA filial, o pneu que a dele não tem, para abrir a solicitação. Ligado,
+  // a tela vira o estoque de uma empresa só.
+  const [onlyFocusStore, setOnlyFocusStore] = useState(false);
+
   // A loja em foco pode sumir da lista (renomeada, apagada). Sem isto a tela
   // ficaria ordenada por uma empresa que não existe mais, sem explicação.
   useEffect(() => {
     if (focusCompanyId && companies.length > 0 && !companies.some(c => c.id === focusCompanyId)) {
       setFocusCompanyId("");
     }
-  }, [companies, focusCompanyId]);
+    if (!focusCompanyId && onlyFocusStore) setOnlyFocusStore(false);
+  }, [companies, focusCompanyId, onlyFocusStore]);
 
   // A loja em foco encabeça a disponibilidade dentro de cada ficha.
   const orderedCompanies = useMemo(() => {
@@ -284,6 +291,14 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
 
     if (!focusCompanyId) return matched;
 
+    // Modo exclusivo: some com o que a loja em foco não tem livre.
+    if (onlyFocusStore) {
+      return matched.filter(item => {
+        const doc = item.docs[focusCompanyId];
+        return !!doc && availableQuantity(doc) > 0;
+      });
+    }
+
     // Com uma loja em foco, o que ELA tem livre sobe para o começo da lista.
     // São centenas de produtos e a maioria só existe numa filial: sem isto o
     // vendedor rola o catálogo inteiro atrás do que consegue vender hoje.
@@ -293,7 +308,7 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       return doc && availableQuantity(doc) > 0 ? 0 : 1;
     };
     return [...matched].sort((a, b) => hasFree(a) - hasFree(b) || a.sku.localeCompare(b.sku));
-  }, [consolidatedItems, searchTerm, focusCompanyId]);
+  }, [consolidatedItems, searchTerm, focusCompanyId, onlyFocusStore]);
 
   if (loading) {
     return (
@@ -396,13 +411,30 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
             })}
 
             {focusCompanyId && (
-              <button
-                type="button"
-                onClick={() => setFocusCompanyId("")}
-                className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-transparent transition-all cursor-pointer"
-              >
-                Limpar
-              </button>
+              <>
+                <span className="mx-0.5 h-4 w-px bg-slate-200" aria-hidden />
+                <button
+                  type="button"
+                  onClick={() => setOnlyFocusStore(v => !v)}
+                  title={onlyFocusStore
+                    ? "Voltar a mostrar as outras filiais (logo abaixo desta)"
+                    : "Esconder as outras filiais e ver só o estoque desta loja"}
+                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all cursor-pointer ${
+                    onlyFocusStore
+                      ? "bg-slate-900 text-gold-400 border-slate-900 shadow-sm"
+                      : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                >
+                  {onlyFocusStore ? "✓ Só esta loja" : "Só esta loja"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setFocusCompanyId(""); setOnlyFocusStore(false); }}
+                  className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-transparent transition-all cursor-pointer"
+                >
+                  Limpar
+                </button>
+              </>
             )}
           </div>
         )}
@@ -457,6 +489,10 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
 
                   <div className="space-y-1">
                     {orderedCompanies.map(comp => {
+                      // No modo exclusivo a ficha mostra só a loja em foco: deixar
+                      // as outras aqui seria dizer "só esta loja" e listar as demais.
+                      if (onlyFocusStore && comp.id !== focusCompanyId) return null;
+
                       const stockDoc = item.docs[comp.id];
                       const qty = stockDoc ? availableQuantity(stockDoc) : 0;
                       if (qty === 0) return null; // Só exibe filiais que tem o pneu livre

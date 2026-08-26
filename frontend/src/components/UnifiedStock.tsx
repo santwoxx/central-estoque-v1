@@ -80,9 +80,16 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
   // momento — quando alguem quer olhar so a propria loja e as colunas das
   // outras viram ruido (uma fileira de tracos ate a coluna que interessa).
   //
-  // Nao entra travado na loja do usuario de proposito: quem abre "Estoque
-  // Unificado" na maioria das vezes quer justamente o comparativo.
-  const [companyFilter, setCompanyFilter] = useState<string>("ALL");
+  // O DONO abre na propria loja. Nao e preferencia de tela: cada empresa tem o
+  // seu estoque e o seu custo, e os SKUs nao se cruzam entre filiais — o pneu da
+  // Autocar nunca e o mesmo documento do da Autocenter. Sem o filtro, ele abria
+  // 678 produtos para encontrar os 147 dele, com as outras 4 colunas em branco
+  // e as linhas alheias recusando qualquer edicao.
+  //
+  // O ADMIN abre em "Todas": para ele o comparativo entre filiais e o trabalho.
+  const [companyFilter, setCompanyFilter] = useState<string>(
+    isAdmin || isVendedor ? "ALL" : (user.companyId || "ALL")
+  );
 
   // A empresa selecionada pode sumir (renomeada, apagada por um admin em outra
   // aba). Sem isto a tabela ficaria sem nenhuma coluna, sem explicacao.
