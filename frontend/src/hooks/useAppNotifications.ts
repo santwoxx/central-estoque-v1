@@ -57,6 +57,11 @@ function describeTransferEvent(
   const route = `${transfer.sourceCompanyName} → ${transfer.destinationCompanyName}`;
   const status = transfer.status;
 
+  // Um ENVIO aberto pela loja de origem ja nasce com o saldo preso. Dizer isso na
+  // notificacao e o que evita a pergunta seguinte ("o pneu ainda esta la?"): quem
+  // le sabe na hora que aquelas unidades sairam do disponivel para venda.
+  const bornReservedNote = transfer.reservation?.active ? " Os itens já ficaram reservados no estoque de origem." : "";
+
   // Brand-new transfer document (this user just saw it appear for the first time).
   if (prevStatus === null) {
     // Solicitação: quem precisa decidir é a ORIGEM, dona dos pneus.
@@ -76,10 +81,10 @@ function describeTransferEvent(
         type: "TRANSFER_UPDATE",
         title: "Transferência agendada",
         message: isGlobal
-          ? `${route}: ${itemsLabel} agendados por ${transfer.requestedByName}.`
+          ? `${route}: ${itemsLabel} agendados por ${transfer.requestedByName}.${bornReservedNote}`
           : isSource
-          ? `${itemsLabel} agendados para envio a ${transfer.destinationCompanyName}.`
-          : `${transfer.sourceCompanyName} agendou o envio de ${itemsLabel} para sua empresa.`
+          ? `${itemsLabel} agendados para envio a ${transfer.destinationCompanyName}.${bornReservedNote}`
+          : `${transfer.sourceCompanyName} agendou o envio de ${itemsLabel} para sua empresa.${bornReservedNote}`
       };
     }
     if (status === "PENDENTE") {
@@ -87,10 +92,10 @@ function describeTransferEvent(
         type: isSource || isGlobal ? "TRANSFER_ACTION_REQUIRED" : "TRANSFER_UPDATE",
         title: "Nova transferência",
         message: isGlobal
-          ? `${route}: nova transferência com ${itemsLabel}, aguardando envio.`
+          ? `${route}: nova transferência com ${itemsLabel}, aguardando envio.${bornReservedNote}`
           : isSource
-          ? `${itemsLabel} aguardando sua assinatura de envio para ${transfer.destinationCompanyName}.`
-          : `${transfer.sourceCompanyName} está preparando o envio de ${itemsLabel} para sua empresa.`
+          ? `${itemsLabel} aguardando sua assinatura de envio para ${transfer.destinationCompanyName}.${bornReservedNote}`
+          : `${transfer.sourceCompanyName} está preparando o envio de ${itemsLabel} para sua empresa.${bornReservedNote}`
       };
     }
     return null;

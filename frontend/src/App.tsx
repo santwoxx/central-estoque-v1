@@ -136,6 +136,16 @@ function mapTransferDoc(docSnap: any): TransferOrder {
     // Pedidos criados antes do fluxo de solicitacao nao tem requestKind: sao envios.
     requestKind: data.requestKind || "ENVIO",
     reservation: data.reservation || null,
+    // Campos da reserva de cliente. Sem eles o App lia `undefined` em toda
+    // decisao que depende de QUEM pediu: `isCrossStoreRequest` dava sempre falso
+    // (nao dava para distinguir vendedor da casa de vendedor de outra filial) e
+    // o nome do cliente nunca chegava na tela, virando sempre "o cliente".
+    customerName: data.customerName || "",
+    requestedByCompanyId: data.requestedByCompanyId || "",
+    requestedByCompanyName: data.requestedByCompanyName || "",
+    saleCompletedByUid: data.saleCompletedByUid || "",
+    saleCompletedByName: data.saleCompletedByName || "",
+    saleCompletedAt: data.saleCompletedAt,
     approvedByUid: data.approvedByUid || "",
     approvedByName: data.approvedByName || "",
     approvedAt: data.approvedAt,
@@ -1507,8 +1517,10 @@ export default function App() {
   // Inter-company Transfer Orders: create, cancel, sign delivery/receipt, admin reversal
   // ─────────────────────────────────────────────────────────────────
 
-  // Create a new transfer request (immediate or scheduled for later). Nothing is
-  // moved in stock yet — that only happens once both signatures are collected.
+  // Create a new transfer request (immediate or scheduled for later). O saldo so
+  // SAI do estoque quando as assinaturas sao coletadas — mas um ENVIO da propria
+  // loja ja nasce com a quantidade RESERVADA (ver `reserveOnCreate` abaixo), de
+  // modo que o pneu prometido para a outra filial nao possa ser vendido no meio.
   const handleCreateTransfer = async (data: {
     items: { sourceStockItemId: string; sku: string; brand: string; model: string; size: string; quantity: number; }[];
     sourceCompanyId: string;
@@ -1588,37 +1600,109 @@ export default function App() {
       ? "SOLICITADO"
       : (isScheduled ? "AGENDADO" : "PENDENTE");
 
+    // ── Reserva ja no nascimento do pedido ──────────────────────────
+    // Um ENVIO aberto pela PROPRIA loja de origem prende o saldo na MESMA
+    // transacao que cria o pedido. E o ponto do modulo: entre "separei o pneu
+    // para a outra loja" e "o motorista assinou a retirada" podem passar dias, e
+    // nesse intervalo o balcao nao pode vender o que ja esta prometido.
+    //
+    // Quem NAO reserva aqui, e por que:
+    //   • SOLICITACAO (inclusive reserva de cliente) — quem abre o pedido e o
+    //     destino/vendedor, que nao tem permissao de escrever no estoque da outra
+    //     loja. A reserva entra quando a origem aprova (handleApproveTransferRequest).
+    //   • ENVIO cuja origem e outra loja — mesmo motivo: o estoque nao e meu.
+    //     Segue como antes, com o botao "Reservar" a disposicao da origem.
+    const reserveOnCreate =
+      requestKind === "ENVIO" &&
+      (user.role === "admin" || data.sourceCompanyId === user.companyId);
+
+    const payload: Record<string, any> = {
+      items: data.items,
+      sourceCompanyId: data.sourceCompanyId,
+      sourceCompanyName: data.sourceCompanyName,
+      destinationCompanyId: data.destinationCompanyId,
+      destinationCompanyName: data.destinationCompanyName,
+      reason: data.reason?.trim() || "",
+      // Na reserva de cliente fica registrado de qual loja o vendedor veio: a
+      // loja que recebe o pedido precisa distinguir "vendedor da casa" de
+      // "vendedor de outra filial pedindo meu pneu".
+      ...(isCustomerOrder
+        ? {
+            customerName,
+            requestedByCompanyId: user.companyId || "",
+            requestedByCompanyName: user.companyName || ""
+          }
+        : {}),
+      requestKind,
+      reservation: null,
+      status: initialStatus,
+      scheduledFor: isScheduled ? data.scheduledFor : null,
+      requestedByUid: user.uid,
+      requestedByEmail: user.email,
+      requestedByName: user.displayName,
+      requestedAt: serverTimestamp(),
+      delivery: null,
+      receipt: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    };
+
     try {
-      await addDoc(collection(db, "transfers"), {
-        items: data.items,
-        sourceCompanyId: data.sourceCompanyId,
-        sourceCompanyName: data.sourceCompanyName,
-        destinationCompanyId: data.destinationCompanyId,
-        destinationCompanyName: data.destinationCompanyName,
-        reason: data.reason?.trim() || "",
-        // Na reserva de cliente fica registrado de qual loja o vendedor veio: a
-        // loja que recebe o pedido precisa distinguir "vendedor da casa" de
-        // "vendedor de outra filial pedindo meu pneu".
-        ...(isCustomerOrder
-          ? {
-              customerName,
-              requestedByCompanyId: user.companyId || "",
-              requestedByCompanyName: user.companyName || ""
+      if (!reserveOnCreate) {
+        await addDoc(collection(db, "transfers"), payload);
+      } else {
+        await runTransaction(db, async (transaction) => {
+          // --- TODAS AS LEITURAS PRIMEIRO (exigencia do Firestore) ---
+          // Reler o estoque aqui, em vez de confiar no que a tela mostrava, e o
+          // que impede duas telas de reservarem o mesmo ultimo pneu: a transacao
+          // refaz a conta com o saldo do servidor e uma das duas repete ou falha.
+          const pending: { ref: any; nextReserved: number }[] = [];
+          for (const item of data.items) {
+            if (!item.sourceStockItemId) {
+              throw new Error(`O item ${item.sku || ""} do pedido não aponta para nenhum produto do estoque.`);
             }
-          : {}),
-        requestKind,
-        reservation: null,
-        status: initialStatus,
-        scheduledFor: isScheduled ? data.scheduledFor : null,
-        requestedByUid: user.uid,
-        requestedByEmail: user.email,
-        requestedByName: user.displayName,
-        requestedAt: serverTimestamp(),
-        delivery: null,
-        receipt: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
+            const stockRef = doc(db, "stock", item.sourceStockItemId);
+            const stockSnap = await transaction.get(stockRef);
+            if (!stockSnap.exists()) {
+              throw new Error(`O produto ${item.sku || ""} não existe mais no estoque da origem.`);
+            }
+
+            const stockData: any = stockSnap.data();
+            const total = Number(stockData.quantity) || 0;
+            const reserved = reservedQuantityOf(stockData);
+            const free = Math.max(0, total - reserved);
+            const qty = Number(item.quantity) || 0;
+
+            if (qty > free) {
+              throw new Error(
+                `Não há saldo livre suficiente de ${stockData.sku || item.sku} ` +
+                `(${stockData.brand || ""} ${stockData.size || ""}). Livre: ${free} un` +
+                `${reserved > 0 ? ` (${reserved} un já reservadas em outros pedidos)` : ""}, ` +
+                `necessário: ${qty} un.`
+              );
+            }
+            pending.push({ ref: stockRef, nextReserved: reserved + qty });
+          }
+
+          // --- DEPOIS TODAS AS ESCRITAS ---
+          for (const entry of pending) {
+            transaction.update(entry.ref, {
+              reservedQuantity: entry.nextReserved,
+              updatedAt: serverTimestamp()
+            });
+          }
+
+          transaction.set(doc(collection(db, "transfers")), {
+            ...payload,
+            reservation: {
+              active: true,
+              reservedByUid: user.uid,
+              reservedByName: user.displayName,
+              reservedAt: serverTimestamp()
+            }
+          });
+        });
+      }
     } catch (err: any) {
       console.error("Erro ao criar pedido de transferência:", err);
       if (err?.code === "permission-denied") {
@@ -1650,11 +1734,13 @@ export default function App() {
   // duas escritas separadas, senao uma falha no meio deixaria pneu preso para
   // sempre ou pedido aprovado sem lastro.
   //
-  // Sao exatamente quatro os momentos em que este saldo muda:
+  // Sao estes os momentos em que este saldo muda:
   //   RESERVE  — a origem aprova a solicitacao, ou reserva um envio ja pendente;
   //   RELEASE  — a origem libera manualmente, ou o pedido e cancelado.
-  // O quarto e o despacho, quando o pneu sai de verdade: esse mora em
-  // handleCompleteDispatch, que ja mexe em `quantity` na mesma transacao.
+  // Fora daqui ficam outros dois, cada um ja dentro da propria transacao:
+  // a CRIACAO de um envio pela loja de origem, que nasce reservado
+  // (handleCreateTransfer), e o DESPACHO, quando o pneu sai de verdade
+  // (handleCompleteDispatch, que mexe em `quantity` na mesma transacao).
   // ─────────────────────────────────────────────────────────────────
   const applyTransferReservation = async (
     transferId: string,
@@ -1662,7 +1748,10 @@ export default function App() {
     options: {
       expectedStatuses: TransferStatus[];
       nextStatus?: TransferStatus;
-      extraTransferFields?: Record<string, any>;
+      // Aceita uma funcao para os casos em que os campos extras dependem do
+      // conteudo do pedido: assim eles saem do documento lido DENTRO da
+      // transacao, e nao de uma copia possivelmente velha do estado da tela.
+      extraTransferFields?: Record<string, any> | ((transferData: any) => Record<string, any>);
       releaseReason?: string;
       // Quando true, um pedido sem reserva ativa nao e erro: apenas segue com a
       // mudanca de status (usado pelo cancelamento, que vale reservado ou nao).
@@ -1770,9 +1859,13 @@ export default function App() {
           }
         : (transferData.reservation || null);
 
+      const extraFields = typeof options.extraTransferFields === "function"
+        ? options.extraTransferFields(transferData)
+        : (options.extraTransferFields || {});
+
       transaction.update(transferRef, {
         ...(options.nextStatus ? { status: options.nextStatus } : {}),
-        ...(options.extraTransferFields || {}),
+        ...extraFields,
         reservation: reservationField,
         updatedAt: serverTimestamp()
       });
@@ -1794,6 +1887,26 @@ export default function App() {
   // A origem aprova a solicitacao: os pneus ficam reservados na hora e o pedido
   // entra no fluxo normal de assinaturas. A partir daqui ninguem consegue vender
   // ou baixar essa quantidade.
+  //
+  // Aprovar faz uma de DUAS coisas, e a diferenca esta em quem pediu:
+  //
+  //   • Reserva de cliente de um vendedor da PROPRIA loja — o pneu nao viaja.
+  //     Fica reservado na prateleira e a loja encerra em "Concluir Venda".
+  //
+  //   • Reserva de cliente de um vendedor de OUTRA filial — o pneu PRECISA ir ate
+  //     a loja dele, senao a reserva nao serve para nada: o cliente esta la, o
+  //     pneu esta aqui. Aprovar deixa de ser o fim do caso e vira o comeco de uma
+  //     transferencia de verdade: o destino deixa de ser o balcao (a empresa
+  //     sentinela CLIENTE) e passa a ser a loja de quem pediu. Dali em diante o
+  //     pedido e uma transferencia comum e percorre as quatro assinaturas
+  //     (remetente + motorista na saida, motorista + recebedor na chegada), com o
+  //     saldo preso na origem o tempo todo. `customerName` fica no documento: e o
+  //     registro de para quem aquele pneu esta indo.
+  //
+  //   • Solicitacao normal entre filiais — ja nasceu transferencia; so reserva.
+  //
+  // Pedidos antigos, aprovados antes desta mudanca, continuam com destino CLIENTE
+  // e sao encerrados como sempre foram — nada aqui os reescreve.
   const handleApproveTransferRequest = async (transferId: string) => {
     if (!user) return;
     const transfer = transfers.find(t => t.id === transferId);
@@ -1806,10 +1919,28 @@ export default function App() {
       await applyTransferReservation(transferId, "RESERVE", {
         expectedStatuses: ["SOLICITADO"],
         nextStatus,
-        extraTransferFields: {
-          approvedByUid: user.uid,
-          approvedByName: user.displayName,
-          approvedAt: serverTimestamp()
+        // Derivado do documento lido dentro da transacao: quem pediu e de qual
+        // loja sao dados do pedido, nao da tela de quem esta aprovando.
+        extraTransferFields: (transferData: any) => {
+          const base: Record<string, any> = {
+            approvedByUid: user.uid,
+            approvedByName: user.displayName,
+            approvedAt: serverTimestamp()
+          };
+
+          const requesterCompanyId = transferData.requestedByCompanyId || "";
+          const isCrossStoreCustomerOrder =
+            isCustomerReservation(transferData) &&
+            !!requesterCompanyId &&
+            requesterCompanyId !== transferData.sourceCompanyId;
+
+          if (!isCrossStoreCustomerOrder) return base;
+
+          return {
+            ...base,
+            destinationCompanyId: requesterCompanyId,
+            destinationCompanyName: transferData.requestedByCompanyName || "Loja do vendedor"
+          };
         }
       });
     } catch (err: any) {

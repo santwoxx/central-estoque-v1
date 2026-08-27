@@ -199,6 +199,17 @@ export default function TransferOrders({
     !!t.requestedByCompanyId &&
     t.requestedByCompanyId !== t.sourceCompanyId;
 
+  // Reserva de cliente que JÁ virou transferência: ao aprovar um pedido de
+  // vendedor de outra filial, o destino deixa de ser o balcão e passa a ser a
+  // loja dele — daí em diante o pedido percorre as quatro assinaturas como
+  // qualquer transferência. O `customerName` é o que denuncia a origem do
+  // pedido: transferência comum nenhuma carrega nome de cliente.
+  const isConvertedCustomerOrder = (t: TransferOrder) =>
+    !isCustomerOrder(t) && !!t.customerName;
+
+  // "Este pneu tem dono" — vale nos dois formatos, antes e depois da conversão.
+  const hasCustomer = (t: TransferOrder) => isCustomerOrder(t) || isConvertedCustomerOrder(t);
+
   // O que o VENDEDOR lê no lugar de "Aguardando Aprovação": o pedido dele está
   // em análise com a loja dona do pneu.
   const statusLabelFor = (t: TransferOrder) => {
@@ -277,6 +288,13 @@ export default function TransferOrders({
   // Numa solicitação, a empresa que recebe sou eu: o destino fica travado para
   // operadores (o admin global segue escolhendo os dois lados).
   const isSolicitacao = formKind === "SOLICITACAO";
+  // Um ENVIO que sai do MEU estoque já nasce reservado: o saldo é preso na mesma
+  // gravação que cria o pedido, sem esperar assinatura nenhuma. Numa solicitação
+  // não dá — quem prende o saldo é a loja de origem, no momento em que aprova.
+  const willReserveOnCreate =
+    !isSolicitacao &&
+    !!effectiveSourceCompanyId &&
+    (isAdmin || effectiveSourceCompanyId === user.companyId);
   const lockDestination = isSolicitacao && !isGlobalAdmin;
   const sourceOptions = lockDestination
     ? companies.filter(c => c.id !== user.companyId)
@@ -485,14 +503,24 @@ export default function TransferOrders({
 
   // Aprovar já reserva: entre o clique e a reserva não existe janela em que o
   // pneu esteja prometido mas ainda vendável (as duas coisas são uma transação só).
+  //
+  // A reserva de cliente de um vendedor de OUTRA filial é o caso em que aprovar
+  // muda o rumo do pedido: ele vira uma transferência para a loja dele e passa a
+  // exigir as quatro assinaturas. Quem aprova tem que saber disso ANTES de clicar.
   const handleApproveClick = async (t: TransferOrder) => {
     if (!onApproveRequest) return;
     const units = totalUnitsOf(t);
-    if (!window.confirm(
-      `Aprovar esta solicitação de ${t.destinationCompanyName}?\n\n` +
-      `${units} un serão RESERVADAS no seu estoque e ficarão bloqueadas para venda ` +
-      `até o envio ser assinado.`
-    )) return;
+    const becomesTransfer = isCrossStoreRequest(t);
+    const message = becomesTransfer
+      ? `Aprovar a reserva de ${t.requestedByName} para ${t.customerName || "o cliente"}?\n\n` +
+        `${units} un serão RESERVADAS no seu estoque agora, e o pedido vira uma ` +
+        `TRANSFERÊNCIA para ${t.requestedByCompanyName || "a loja do vendedor"} — ` +
+        `com as assinaturas de envio e recebimento normais.\n\n` +
+        `O pneu só sai do seu estoque quando você assinar a saída.`
+      : `Aprovar esta solicitação de ${t.destinationCompanyName}?\n\n` +
+        `${units} un serão RESERVADAS no seu estoque e ficarão bloqueadas para venda ` +
+        `até o envio ser assinado.`;
+    if (!window.confirm(message)) return;
     setProcessingId(t.id);
     try {
       await onApproveRequest(t.id);
@@ -944,7 +972,7 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
           {canCreate && (
             <button
               onClick={() => openCreateModal("ENVIO")}
-              title="Enviar pneus da sua empresa para outra"
+              title="Enviar pneus da sua empresa para outra. Os itens ficam reservados no seu estoque assim que o pedido for criado."
               className="flex items-center justify-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl text-xs shadow-sm hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer"
             >
               <Plus size={14} className="stroke-[3px]" /> Nova Transferência
@@ -1041,12 +1069,12 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                       <span className={`inline-block px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider ${STATUS_BADGE_STYLES[t.status]}`}>
                         {statusLabelFor(t)}
                       </span>
-                      {isCustomerOrder(t) ? (
+                      {hasCustomer(t) ? (
                         <>
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-blue-50 text-blue-700 border-blue-200">
                             <ShoppingBag size={10} /> Reserva de cliente{t.customerName ? `: ${t.customerName}` : ""}
                           </span>
-                          {isCrossStoreRequest(t) && (
+                          {(isCrossStoreRequest(t) || isConvertedCustomerOrder(t)) && (
                             <span
                               className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-300"
                               title={`Pedido aberto por um vendedor de ${t.requestedByCompanyName || "outra filial"}`}
@@ -1221,7 +1249,7 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                       {isCustomerOrder(t) ? (
                         isSourceOf(t) ? (
                           isCrossStoreRequest(t)
-                            ? <><strong>{t.requestedByName}</strong>, vendedor de <strong>{t.requestedByCompanyName || "outra filial"}</strong>, está pedindo um pneu do SEU estoque para <strong>{t.customerName || "um cliente"}</strong>. Ao aprovar, ele fica bloqueado aqui até a venda ser concluída.</>
+                            ? <><strong>{t.requestedByName}</strong>, vendedor de <strong>{t.requestedByCompanyName || "outra filial"}</strong>, está pedindo um pneu do SEU estoque para <strong>{t.customerName || "um cliente"}</strong>. Ao aprovar, ele fica reservado aqui e o pedido vira uma <strong>transferência para {t.requestedByCompanyName || "a loja dele"}</strong> — o pneu só sai quando você assinar o envio.</>
                             : <><strong>{t.requestedByName}</strong> reservou estes pneus para <strong>{t.customerName || "um cliente"}</strong>. Ao aprovar, eles ficam bloqueados no seu estoque até a venda ser concluída.</>
                         ) : isCrossStoreRequest(t) ? (
                           <>Solicitação <strong>em análise</strong> com <strong>{t.sourceCompanyName}</strong> — o pneu é daquela filial e o dono dela decide. Até confirmar, o pneu segue disponível para outras vendas.</>
@@ -1266,6 +1294,23 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                   </div>
                 )}
 
+                {/* Transferência que nasceu de uma reserva de cliente: o pneu já
+                    tem dono do outro lado. Sem esta linha, a loja que recebe não
+                    tem como saber — o pedido chega parecendo reposição comum. */}
+                {isConvertedCustomerOrder(t) && t.status !== "CANCELADO" && t.status !== "RECUSADO" && (
+                  <div className="flex items-start gap-1.5 text-[11px] text-blue-800 bg-blue-50 border border-blue-200 rounded-xl p-2.5">
+                    <ShoppingBag size={13} className="shrink-0 mt-0.5" />
+                    <span>
+                      Reservado para o cliente <strong>{t.customerName}</strong>, de{" "}
+                      <strong>{t.requestedByName}</strong>
+                      {t.destinationCompanyName ? <> ({t.destinationCompanyName})</> : null}.
+                      {t.status === "CONCLUIDO"
+                        ? " O pneu já está no estoque de destino — separe-o para esse cliente."
+                        : " Não use estes pneus para outra venda."}
+                    </span>
+                  </div>
+                )}
+
                 {t.status === "RECUSADO" && (
                   <div className="flex items-start gap-1.5 text-[11px] text-rose-700 bg-rose-50 border border-rose-100 rounded-xl p-2.5">
                     <AlertTriangle size={13} className="shrink-0 mt-0.5" />
@@ -1288,10 +1333,15 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                       <button
                         disabled={isProcessing}
                         onClick={() => handleApproveClick(t)}
-                        title="Aprovar a solicitação e reservar os pneus no seu estoque"
+                        title={
+                          isCrossStoreRequest(t)
+                            ? `Aprovar, reservar os pneus e abrir a transferência para ${t.requestedByCompanyName || "a loja do vendedor"}`
+                            : "Aprovar a solicitação e reservar os pneus no seu estoque"
+                        }
                         className="flex items-center gap-1.5 px-3.5 py-2 bg-violet-600 hover:bg-violet-700 text-white font-black rounded-xl text-[11px] shadow-sm transition-all cursor-pointer disabled:opacity-50"
                       >
-                        {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Aprovar e Reservar
+                        {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}{" "}
+                        {isCrossStoreRequest(t) ? "Aprovar e Transferir" : "Aprovar e Reservar"}
                       </button>
                     )}
                     {canDecideRequest(t) && onRejectRequest && (
@@ -1739,6 +1789,32 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                   </p>
                 )}
               </div>
+
+              {!isSolicitacao && !willReserveOnCreate && !!effectiveSourceCompanyId && formItems.length > 0 && (
+                <div className="flex items-start gap-1.5 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+                  <LockOpen size={13} className="shrink-0 mt-0.5" />
+                  <span>
+                    Estes pneus <strong>não ficam reservados</strong> agora: o estoque é de{" "}
+                    {effectiveSourceCompanyName || "outra loja"}, e só ela pode prendê-lo. Quem for
+                    separar a mercadoria precisa usar <strong>"Reservar Itens"</strong> no pedido — ou
+                    abra uma <strong>Solicitação</strong>, que já reserva quando a loja aprovar.
+                  </span>
+                </div>
+              )}
+
+              {willReserveOnCreate && formItems.length > 0 && (
+                <div className="flex items-start gap-1.5 text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+                  <Lock size={13} className="shrink-0 mt-0.5" />
+                  <span>
+                    <strong>
+                      {formItems.reduce((sum, i) => sum + i.quantity, 0)} un ficam reservadas
+                    </strong>{" "}
+                    no estoque de {effectiveSourceCompanyName || "origem"} assim que você criar o pedido —
+                    antes de qualquer assinatura. Elas somem do saldo disponível para venda e baixa até
+                    o despacho. Se o pedido for cancelado ou a reserva liberada, voltam ao normal.
+                  </span>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
                 <button

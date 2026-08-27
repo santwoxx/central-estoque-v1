@@ -187,6 +187,20 @@ export type TransferRequestKind = "ENVIO" | "SOLICITACAO";
 // poderia assinar a chegada). Ele nasce SOLICITADO, a loja de ORIGEM aprova
 // (reservando o saldo) e a propria loja de origem o encerra em "Concluir Venda",
 // que da a baixa definitiva no estoque.
+//
+// EXCECAO — vendedor de outra filial:
+// se quem abriu a reserva pertence a uma loja DIFERENTE da dona do pneu
+// (`requestedByCompanyId != sourceCompanyId`), o pneu esta numa loja e o cliente
+// esta em outra: encerrar a venda na origem nao entregaria nada a ninguem. Nesse
+// caso a APROVACAO troca o destino de 'CLIENTE' para a loja do vendedor, e o
+// pedido deixa de ser reserva de cliente para virar uma transferencia comum —
+// quatro assinaturas, saldo reservado na origem ate o despacho. O `customerName`
+// permanece no documento como registro de para quem o pneu esta indo, e e ele
+// que a tela usa para continuar mostrando "reserva de cliente" depois da
+// conversao (ver `isConvertedCustomerOrder` em TransferOrders.tsx).
+//
+// `isCustomerReservation` continua respondendo pelo ESTADO ATUAL do pedido:
+// depois da conversao ela e falsa, que e exatamente o que libera as assinaturas.
 // ─────────────────────────────────────────────────────────────────
 export const CLIENTE_COMPANY_ID = "CLIENTE";
 
@@ -200,8 +214,16 @@ export function isCustomerReservation(
 //
 // Enquanto `active` for true, a quantidade de cada item esta somada em
 // `reservedQuantity` no documento de estoque da ORIGEM, e portanto indisponivel
-// para venda/baixa. A reserva e liberada em exatamente tres momentos: o despacho
-// (o pneu sai de verdade), o cancelamento e a liberacao manual pela origem.
+// para venda/baixa.
+//
+// Ela NASCE em dois pontos, sempre na mesma transacao que grava o pedido:
+//   • na CRIACAO de um ENVIO aberto pela propria loja de origem — o pneu ja sai
+//     do saldo vendavel no instante em que o pedido existe, sem assinatura nenhuma;
+//   • na APROVACAO de uma SOLICITACAO (inclusive reserva de cliente), porque ali
+//     quem abriu o pedido foi o destino, que nao escreve no estoque alheio.
+//
+// E e liberada no despacho (o pneu sai de verdade), no cancelamento, na
+// liberacao manual pela origem e na exclusao do pedido por um administrador.
 export interface TransferReservation {
   active: boolean;
   reservedByUid: string;

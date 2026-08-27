@@ -280,9 +280,22 @@ service cloud.firestore {
         request.resource.data.requestedByUid == request.auth.uid &&
         request.resource.data.delivery == null &&
         request.resource.data.receipt == null &&
-        // Nenhum pedido nasce reservado: a reserva so existe depois que a ORIGEM
-        // aprova (regra e) ou reserva explicitamente (regra g).
-        request.resource.data.get('reservation', null) == null &&
+        // RESERVA NO NASCIMENTO: um ENVIO aberto pela propria loja de ORIGEM ja
+        // nasce reservado — o pneu prometido sai do saldo vendavel no instante em
+        // que o pedido existe, sem esperar assinatura nenhuma. So a origem pode
+        // faze-lo, porque so ela consegue somar `reservedQuantity` nos proprios
+        // itens (regras de /stock), e o app grava as duas coisas na mesma transacao.
+        //
+        // Uma SOLICITACAO continua nascendo sem reserva: quem a abre e o DESTINO,
+        // que nao escreve no estoque alheio. La a reserva entra no aval (regra e).
+        (
+          request.resource.data.get('reservation', null) == null || (
+            request.resource.data.sourceCompanyId == getUserData().companyId &&
+            request.resource.data.status != 'SOLICITADO' &&
+            request.resource.data.reservation.get('active', false) == true &&
+            request.resource.data.reservation.reservedByUid == request.auth.uid
+          )
+        ) &&
         (
           (request.resource.data.scheduledFor == null && request.resource.data.status == 'PENDENTE') ||
           (request.resource.data.scheduledFor is timestamp &&
@@ -410,8 +423,25 @@ service cloud.firestore {
         resource.data.sourceCompanyId == getUserData().companyId &&
         resource.data.status == 'SOLICITADO' &&
         (request.resource.data.status == 'PENDENTE' || request.resource.data.status == 'AGENDADO') &&
+        // O destino de um pedido e imutavel, com UMA excecao: a reserva de
+        // cliente aberta por um vendedor de OUTRA filial. O pneu esta aqui e o
+        // cliente esta la, entao aprovar tem que colocar o pneu a caminho —
+        // o destino sai do balcao ('CLIENTE') e passa a ser a loja de quem pediu,
+        // e o pedido vira uma transferencia comum, com as quatro assinaturas.
+        //
+        // A troca so pode apontar para a loja registrada no proprio pedido
+        // (`requestedByCompanyId`, gravado na criacao): quem aprova nao escolhe
+        // o destino, so confirma o que o vendedor ja tinha declarado.
+        (
+          request.resource.data.destinationCompanyId == resource.data.destinationCompanyId || (
+            resource.data.destinationCompanyId == 'CLIENTE' &&
+            resource.data.get('requestedByCompanyId', '') != '' &&
+            resource.data.get('requestedByCompanyId', '') != resource.data.sourceCompanyId &&
+            request.resource.data.destinationCompanyId == resource.data.requestedByCompanyId
+          )
+        ) &&
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'reservation', 'approvedByUid', 'approvedByName', 'approvedAt', 'updatedAt'])
+          .hasOnly(['status', 'reservation', 'approvedByUid', 'approvedByName', 'approvedAt', 'destinationCompanyId', 'destinationCompanyName', 'updatedAt'])
       ) || (
         // (f) A ORIGEM recusa a solicitacao. Nada foi reservado, entao e so status.
         isAlimentador() &&
