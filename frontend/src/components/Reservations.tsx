@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   ShoppingBag,
   Store,
+  Trash2,
   Truck,
   Unlock,
   User,
@@ -66,6 +67,8 @@ interface ReservationsProps {
   // Só para administrador: devolve ao estoque um pneu que ficou preso por um
   // pedido já encerrado. Não existe fluxo normal que chegue nesse estado.
   onForceRelease: (transferId: string) => Promise<void>;
+  // Apaga o registro de vez. Só vale para reserva recusada ou cancelada.
+  onDelete: (transferId: string) => Promise<void>;
 }
 
 type ViewFilter = "ACAO" | "ANALISE" | "TRANSFERENCIA" | "CONCLUIDAS" | "ENCERRADAS" | "TODAS";
@@ -87,7 +90,8 @@ export default function Reservations({
   onApproveStep,
   onReject,
   onCancel,
-  onForceRelease
+  onForceRelease,
+  onDelete
 }: ReservationsProps) {
   const isAdmin = user.role === "admin";
   const isVendedor = user.role === "vendedor";
@@ -148,6 +152,15 @@ export default function Reservations({
     isAdmin &&
     t.reservation?.active === true &&
     (t.status === "CANCELADO" || t.status === "RECUSADO" || t.status === "CONCLUIDO");
+
+  // Apagar o registro. Só o que já morreu: recusada ou cancelada — e nunca com
+  // pneu ainda preso, senão some a única pista de por que o saldo está travado.
+  // O dono da loja que TEM o pneu é quem faz a faxina da própria fila; o
+  // administrador apaga qualquer uma.
+  const canDelete = (t: TransferOrder) =>
+    (t.status === "RECUSADO" || t.status === "CANCELADO") &&
+    t.reservation?.active !== true &&
+    (isAdmin || isSourceOwner(t));
 
   // "Espera uma decisão minha" — o mesmo critério do selo no menu, senão o
   // contador diria 3 e a aba mostraria 2. O pneu travado entra aqui porque é o
@@ -296,6 +309,51 @@ export default function Reservations({
     run(t.id, () => onForceRelease(t.id));
   };
 
+  const handleDelete = (t: TransferOrder) => {
+    if (
+      !window.confirm(
+        `Apagar de vez o registro desta reserva de ${t.customerName || "cliente"}?\n\n` +
+          `Ela já está ${describeStatus(t).toLowerCase()} e o pneu já voltou ao estoque — apagar remove só ` +
+          `o histórico do pedido, e isso não tem volta.`
+      )
+    ) {
+      return;
+    }
+    run(t.id, () => onDelete(t.id));
+  };
+
+  // Faxina em lote da aba "Recusadas / Canceladas". Uma a uma, com uma
+  // confirmação cada, seria inviável numa fila que acumula meses de pedidos.
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const deletableInView = visible.filter(canDelete);
+
+  const handleBulkDelete = async () => {
+    if (deletableInView.length === 0) return;
+    if (
+      !window.confirm(
+        `Apagar de vez ${deletableInView.length} registro(s) de reserva recusada/cancelada?\n\n` +
+          `Os pneus já voltaram ao estoque; some apenas o histórico dos pedidos. Isso não tem volta.`
+      )
+    ) {
+      return;
+    }
+    setBulkBusy(true);
+    let failed = 0;
+    // Em série, de propósito: cada exclusão é uma transação, e disparar dezenas
+    // em paralelo só rende contenção e um erro genérico no fim.
+    for (const t of deletableInView) {
+      try {
+        await onDelete(t.id);
+      } catch {
+        failed += 1;
+      }
+    }
+    setBulkBusy(false);
+    if (failed > 0) {
+      alert(`${failed} registro(s) não puderam ser apagados. Verifique se você é o dono da loja do pneu.`);
+    }
+  };
+
   const handleExport = () => {
     const rows = visible.map(t => ({
       cliente: t.customerName || "—",
@@ -344,15 +402,30 @@ export default function Reservations({
             todas as lojas. A baixa só acontece na confirmação.
           </p>
         </div>
-        {visible.length > 0 && (
-          <button
-            type="button"
-            onClick={handleExport}
-            className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer"
-          >
-            <Download size={13} /> Exportar CSV
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Faxina em lote: só na aba das encerradas, e só quando há mais de uma
+              — para um registro só, o botão do próprio cartão já resolve. */}
+          {view === "ENCERRADAS" && deletableInView.length > 1 && (
+            <button
+              type="button"
+              onClick={handleBulkDelete}
+              disabled={bulkBusy}
+              title="Apagar de vez todos os registros recusados/cancelados desta lista"
+              className="flex items-center gap-1.5 px-3.5 py-2 border border-rose-200 text-rose-600 hover:bg-rose-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50"
+            >
+              {bulkBusy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Limpar {deletableInView.length}
+            </button>
+          )}
+          {visible.length > 0 && (
+            <button
+              type="button"
+              onClick={handleExport}
+              className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer"
+            >
+              <Download size={13} /> Exportar CSV
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Indicadores ─────────────────────────────────────────── */}
@@ -466,7 +539,8 @@ export default function Reservations({
               canApproveAdmin(t) ||
               canReject(t) ||
               canCancel(t) ||
-              canForceRelease(t);
+              canForceRelease(t) ||
+              canDelete(t);
 
             return (
               <div
@@ -704,6 +778,18 @@ export default function Reservations({
                         className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 text-slate-500 hover:bg-slate-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50"
                       >
                         <X size={13} /> Cancelar reserva
+                      </button>
+                    )}
+
+                    {canDelete(t) && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleDelete(t)}
+                        title="Apagar o registro desta reserva — o pneu já voltou ao estoque"
+                        className="flex items-center gap-1.5 px-3.5 py-2 border border-rose-200 text-rose-600 hover:bg-rose-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Apagar registro
                       </button>
                     )}
 

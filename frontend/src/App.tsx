@@ -2315,10 +2315,42 @@ export default function App() {
     }
   };
 
-  // Hard-delete a transfer record (e.g. cleaning up test data). Admin-only,
-  // mirrored by the Firestore rule on the transfers collection.
+  // ─────────────────────────────────────────────────────────────────
+  // Exclusao definitiva do registro
+  //
+  // Duas pessoas apagam, e por motivos diferentes:
+  //   • o ADMINISTRADOR, qualquer pedido (limpeza de dados de teste);
+  //   • o DONO DA LOJA QUE TEM O PNEU, so o que ja morreu — recusado ou
+  //     cancelado. E a faxina da fila dele: pedido encerrado nao serve para mais
+  //     nada e so esconde o que ainda espera decisao.
+  //
+  // As duas condicoes estao repetidas na regra do Firestore. Aqui elas evitam a
+  // ida ao banco e dao uma mensagem que explica; la elas e que valem.
+  // ─────────────────────────────────────────────────────────────────
   const handleDeleteTransfer = async (transferId: string) => {
-    if (!user || user.role !== "admin") return;
+    if (!user) return;
+
+    if (user.role !== "admin") {
+      const target = transfers.find(t => t.id === transferId);
+      if (!target) return;
+      const closed = target.status === "RECUSADO" || target.status === "CANCELADO";
+      const isSourceOwner = user.role === "alimentador" && !!user.companyId && target.sourceCompanyId === user.companyId;
+      if (!closed || !isSourceOwner) {
+        throw new Error(
+          "Só a loja dona do pneu pode apagar um pedido, e apenas depois de ele ser recusado ou cancelado. " +
+          "Pedidos em andamento não são apagados — cancele primeiro."
+        );
+      }
+      // Reserva ativa num pedido encerrado e uma inconsistencia: apagar o
+      // documento apagaria a unica pista de por que aquele pneu esta preso.
+      if (target.reservation?.active === true) {
+        throw new Error(
+          "Este pedido está encerrado mas ainda tem pneu preso no estoque. Peça ao administrador para " +
+          "usar \"Destravar pneu\" antes de apagar o registro."
+        );
+      }
+    }
+
     try {
       await runTransaction(db, async (transaction) => {
         const transferRef = doc(db, "transfers", transferId);
@@ -3872,6 +3904,7 @@ export default function App() {
               onReject={handleRejectTransferRequest}
               onCancel={handleCancelTransfer}
               onForceRelease={handleForceReleaseReservation}
+              onDelete={handleDeleteTransfer}
             />
           )}
 

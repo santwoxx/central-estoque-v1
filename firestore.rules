@@ -554,8 +554,30 @@ service cloud.firestore {
           .hasOnly(['status', 'reservation', 'approvedByUid', 'approvedByName', 'approvedAt', 'sourceApprovedByUid', 'sourceApprovedByName', 'sourceApprovedAt', 'saleCompletedByUid', 'saleCompletedByName', 'saleCompletedAt', 'updatedAt'])
       );
 
-      // Only admin can hard-delete a transfer record (e.g. cleaning up test data).
-      allow delete: if isAdmin();
+      // Exclusao definitiva do registro.
+      //
+      // O administrador apaga qualquer um (limpeza de teste, por exemplo).
+      //
+      // O DONO DA LOJA QUE TEM O PNEU apaga o que ja morreu: reserva ou pedido
+      // que ele mesmo recusou, ou que foi cancelado. E a faxina da fila dele —
+      // pedido encerrado nao serve para mais nada e so atrapalha quem procura o
+      // que ainda precisa de decisao.
+      //
+      // Exigimos que NAO exista reserva ativa. Um pedido encerrado nunca deveria
+      // ter (todo encerramento devolve o saldo na mesma transacao), mas se um dia
+      // tiver, apagar o documento apagaria junto a unica pista de por que aquele
+      // pneu esta preso — e o saldo ficaria travado sem nada apontando para a
+      // causa. Nesse caso o caminho e destravar primeiro (botao do administrador
+      // na aba Reservas) e apagar depois.
+      allow delete: if isAdmin() || (
+        isAlimentador() &&
+        resource.data.sourceCompanyId == getUserData().companyId &&
+        (resource.data.status == 'RECUSADO' || resource.data.status == 'CANCELADO') &&
+        (
+          resource.data.get('reservation', null) == null ||
+          resource.data.reservation.get('active', false) != true
+        )
+      );
     }
 
     // ─────────────────────────────────────────────────────────────
