@@ -1778,6 +1778,20 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Erro ao criar pedido de transferência:", err);
+      // Cota do Firebase estourada. O erro cru que chegava na tela era
+      // "Quota exceeded." — em ingles, sem dizer de quem e a culpa nem o que
+      // fazer, e facil de confundir com "o pneu acabou". Nada foi gravado: a
+      // transacao tentou cinco vezes, apanhou nas cinco e desfez tudo. E um
+      // problema do PROJETO, nao do usuario — nenhuma tela conserta, e enquanto
+      // a cota nao voltar o sistema inteiro fica assim.
+      if (err?.code === "resource-exhausted") {
+        throw new Error(
+          "O banco de dados do sistema atingiu o limite diário de operações do plano gratuito do Firebase " +
+          "e recusou o pedido. Nenhum pneu foi reservado — pode tentar de novo sem medo de duplicar. " +
+          "O limite zera à meia-noite do horário do Pacífico (por volta das 4h ou 5h daqui). " +
+          "Para não travar de novo, avise o administrador: o projeto precisa passar para o plano Blaze no Firebase."
+        );
+      }
       if (err?.code === "permission-denied") {
         if (isCustomerOrder) {
           throw new Error(
@@ -3272,6 +3286,16 @@ export default function App() {
   const lowStockItems = filteredKpiStock.filter(item => availableQuantity(item) <= 4).length;
   const totalCostValue = filteredKpiStock.reduce((acc, item) => acc + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
 
+  // ── Visão Geral do vendedor: só o alerta de reposição ────────────────
+  // O vendedor enxerga o estoque de TODAS as filiais (é o que permite achar o
+  // pneu do cliente na loja vizinha), e a Visão Geral transformava esse acesso
+  // num raio-x do grupo: quantos modelos cada loja tem, quantas unidades e —
+  // pior — o capital imobilizado, R$ 2,3 milhões na tela de quem só precisa
+  // saber se tem pneu para vender. Sobra o alerta de reposição, que é a única
+  // dessas quatro contas que muda o que ele faz no balcão: avisa que o pneu
+  // está no fim antes de ele prometer a entrega.
+  const isSellerKpi = user.role === "vendedor";
+
   return (
     <div className="min-h-screen bg-slate-50/70 flex flex-col md:flex-row font-sans transition-colors text-slate-800">
       
@@ -3725,9 +3749,12 @@ export default function App() {
               </select>
             )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 font-sans">
-            
+          <div className={`grid gap-5 font-sans ${
+            isSellerKpi ? "grid-cols-1 sm:max-w-xs" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
+          }`}>
+
             {/* Card 1: Total SKUs */}
+            {!isSellerKpi && (
             <div className="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-[0_4px_20px_rgba(0,0,0,0.015)] flex items-center justify-between hover:scale-[1.01] transition-transform duration-250">
             <div className="space-y-1">
               <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Modelos Cadastrados</span>
@@ -3737,8 +3764,10 @@ export default function App() {
               <PackageCheck size={20} className="stroke-[1.8]" />
             </div>
           </div>
+          )}
 
           {/* Card 2: Total Sum of physical pneumatics units */}
+          {!isSellerKpi && (
           <div className="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-[0_4px_20px_rgba(0,0,0,0.015)] flex items-center justify-between hover:scale-[1.01] transition-transform duration-250">
             <div className="space-y-1">
               <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Volume de Pneus</span>
@@ -3755,8 +3784,9 @@ export default function App() {
               <TrendingUp size={20} className="stroke-[1.8]" />
             </div>
           </div>
+          )}
 
-          {/* Card 3: Alert items */}
+          {/* Card 3: Alert items — o único que sobra para o vendedor */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-[0_4px_20px_rgba(0,0,0,0.015)] flex items-center justify-between hover:scale-[1.01] transition-transform duration-250">
             <div className="space-y-1">
               <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Alertas de Reposição</span>
@@ -3774,6 +3804,7 @@ export default function App() {
           </div>
 
           {/* Card 4: Capital Imobilizado */}
+          {!isSellerKpi && (
           <div className="bg-white p-5 rounded-2xl border border-slate-200/70 shadow-[0_4px_20px_rgba(0,0,0,0.015)] flex items-center justify-between hover:scale-[1.01] transition-transform duration-250">
               <div className="space-y-1">
                 <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Capital Imobilizado</span>
@@ -3785,6 +3816,7 @@ export default function App() {
                 <DollarSign size={20} className="stroke-[1.8]" />
               </div>
             </div>
+          )}
 
           </div>
         </div>
