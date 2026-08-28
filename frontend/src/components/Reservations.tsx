@@ -25,6 +25,7 @@ import {
   ShoppingBag,
   Store,
   Truck,
+  Unlock,
   User,
   X
 } from "lucide-react";
@@ -62,6 +63,9 @@ interface ReservationsProps {
   onApproveStep: (transferId: string, step: "SOURCE" | "ADMIN") => Promise<void>;
   onReject: (transferId: string, reason: string) => Promise<void>;
   onCancel: (transferId: string, reason: string) => Promise<void>;
+  // Só para administrador: devolve ao estoque um pneu que ficou preso por um
+  // pedido já encerrado. Não existe fluxo normal que chegue nesse estado.
+  onForceRelease: (transferId: string) => Promise<void>;
 }
 
 type ViewFilter = "ACAO" | "ANALISE" | "TRANSFERENCIA" | "CONCLUIDAS" | "ENCERRADAS" | "TODAS";
@@ -82,7 +86,8 @@ export default function Reservations({
   onConfirmSale,
   onApproveStep,
   onReject,
-  onCancel
+  onCancel,
+  onForceRelease
 }: ReservationsProps) {
   const isAdmin = user.role === "admin";
   const isVendedor = user.role === "vendedor";
@@ -124,14 +129,32 @@ export default function Reservations({
   const canReject = (t: TransferOrder) =>
     isCustomerReservation(t) && t.status === "SOLICITADO" && (isAdmin || isSourceOwner(t));
 
-  // O vendedor desiste do próprio pedido; a loja que tem o pneu e o admin também
-  // podem, porque são eles que conseguem devolver o saldo preso.
+  // Cancelar vale enquanto o pneu NÃO saiu fisicamente — e não só enquanto está
+  // em análise. Limitar a SOLICITADO deixava dois becos sem saída, os dois com
+  // pneu preso e ninguém capaz de soltar:
+  //   • reserva aprovada por uma versão anterior do sistema, parada em PENDENTE;
+  //   • reserva que já virou transferência e o cliente desistiu antes do envio.
+  // Depois de EM_TRANSITO o pneu já está na estrada: aí é estorno, não cancelamento.
   const canCancel = (t: TransferOrder) =>
-    t.status === "SOLICITADO" &&
+    (t.status === "SOLICITADO" || t.status === "PENDENTE" || t.status === "AGENDADO") &&
     ((isVendedor && t.requestedByUid === user.uid) || isAdmin || isSourceOwner(t));
 
+  // Rede de segurança do administrador: pedido já encerrado (cancelado, recusado
+  // ou concluído) que mesmo assim ficou com a reserva ativa. Não deveria existir
+  // — toda saída da reserva devolve o saldo na mesma transação —, mas se um dia
+  // acontecer (escrita parcial, dado de versão antiga, exclusão manual), o pneu
+  // ficaria preso para sempre sem nenhum botão capaz de soltá-lo. Este é o botão.
+  const canForceRelease = (t: TransferOrder) =>
+    isAdmin &&
+    t.reservation?.active === true &&
+    (t.status === "CANCELADO" || t.status === "RECUSADO" || t.status === "CONCLUIDO");
+
+  // "Espera uma decisão minha" — o mesmo critério do selo no menu, senão o
+  // contador diria 3 e a aba mostraria 2. O pneu travado entra aqui porque é o
+  // único estado em que o estoque mente calado: ninguém reclama, e a unidade
+  // simplesmente não aparece mais para vender.
   const needsMyAction = (t: TransferOrder) =>
-    canConfirmSale(t) || canApproveSource(t) || canApproveAdmin(t);
+    canConfirmSale(t) || canApproveSource(t) || canApproveAdmin(t) || canForceRelease(t);
 
   // ── Filtro ───────────────────────────────────────────────────────
   const matchesView = (t: TransferOrder) => {
@@ -247,8 +270,30 @@ export default function Reservations({
 
   const handleCancel = (t: TransferOrder) => {
     const reason = window.prompt("Motivo do cancelamento (opcional):", "") || "";
-    if (!window.confirm("Cancelar esta reserva? O pneu volta na hora para o saldo disponível.")) return;
+    const extra = isCustomerReservation(t)
+      ? ""
+      : `\n\nEsta reserva já virou uma transferência para ${t.destinationCompanyName}. ` +
+        `Cancelar desfaz o pedido inteiro — avise a outra loja.`;
+    if (
+      !window.confirm(
+        `Cancelar esta reserva? O pneu volta na hora para o saldo disponível de ${t.sourceCompanyName}.${extra}`
+      )
+    ) {
+      return;
+    }
     run(t.id, () => onCancel(t.id, reason));
+  };
+
+  const handleForceRelease = (t: TransferOrder) => {
+    if (
+      !window.confirm(
+        `Este pedido está ${describeStatus(t).toLowerCase()}, mas ainda consta ${totalUnitsOf(t)} un ` +
+          `presas no estoque de ${t.sourceCompanyName}.\n\nDevolver essas unidades ao saldo disponível?`
+      )
+    ) {
+      return;
+    }
+    run(t.id, () => onForceRelease(t.id));
   };
 
   const handleExport = () => {
@@ -416,7 +461,12 @@ export default function Reservations({
             const converted = !isCustomerReservation(t);
             const stillHeld = t.reservation?.active === true;
             const hasActions =
-              canConfirmSale(t) || canApproveSource(t) || canApproveAdmin(t) || canReject(t) || canCancel(t);
+              canConfirmSale(t) ||
+              canApproveSource(t) ||
+              canApproveAdmin(t) ||
+              canReject(t) ||
+              canCancel(t) ||
+              canForceRelease(t);
 
             return (
               <div
@@ -557,6 +607,17 @@ export default function Reservations({
                     </div>
                   )}
 
+                  {canForceRelease(t) && (
+                    <div className="flex items-start gap-1.5 text-[11px] text-amber-900 bg-amber-100 border border-amber-400 rounded-xl p-2.5">
+                      <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                      <span>
+                        <strong>Inconsistência:</strong> este pedido está encerrado, mas {units} un continuam
+                        presas no estoque de {t.sourceCompanyName}. Use <strong>Destravar pneu</strong> para
+                        devolvê-las ao saldo disponível.
+                      </span>
+                    </div>
+                  )}
+
                   {t.status === "RECUSADO" && (
                     <div className="flex items-start gap-1.5 text-[11px] text-rose-800 bg-rose-50 border border-rose-200 rounded-xl p-2.5">
                       <AlertTriangle size={13} className="shrink-0 mt-0.5" />
@@ -639,9 +700,22 @@ export default function Reservations({
                         type="button"
                         disabled={busy}
                         onClick={() => handleCancel(t)}
+                        title={`Desfazer a reserva e devolver o pneu ao saldo de ${t.sourceCompanyName}`}
                         className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 text-slate-500 hover:bg-slate-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50"
                       >
                         <X size={13} /> Cancelar reserva
+                      </button>
+                    )}
+
+                    {canForceRelease(t) && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleForceRelease(t)}
+                        title="Este pedido está encerrado mas o pneu continua preso — devolver ao saldo"
+                        className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl text-[11px] shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {busy ? <Loader2 size={13} className="animate-spin" /> : <Unlock size={13} />} Destravar pneu
                       </button>
                     )}
                   </div>

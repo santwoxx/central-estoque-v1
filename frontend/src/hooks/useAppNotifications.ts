@@ -95,6 +95,29 @@ function describeTransferEvent(
     };
   }
 
+  // Reserva encerrada sem venda. O que a pessoa precisa saber é que o pneu
+  // VOLTOU — o texto genérico de transferência dizia "cancelada" e deixava a
+  // dúvida de sempre: "então o pneu está livre de novo, ou não?".
+  if (
+    isCustomerReservation(transfer) &&
+    (status === "CANCELADO" || status === "RECUSADO") &&
+    prevStatus !== status
+  ) {
+    const who =
+      status === "RECUSADO"
+        ? transfer.rejectedByName || transfer.sourceCompanyName
+        : transfer.cancelledByName || "—";
+    const why = status === "RECUSADO" ? transfer.rejectReason : transfer.cancelReason;
+    return {
+      type: "TRANSFER_CANCELLED",
+      title: status === "RECUSADO" ? "Reserva recusada" : "Reserva cancelada",
+      message:
+        `${who} ${status === "RECUSADO" ? "recusou" : "cancelou"} a reserva de ${customer} ` +
+        `(${itemsLabel} em ${transfer.sourceCompanyName})${why ? `: ${why}` : ""}. ` +
+        `O pneu voltou para o saldo disponível.`
+    };
+  }
+
   // Confirmação da reserva da casa: SOLICITADO -> CONCLUIDO sem passar por
   // trânsito nenhum. Sem este ramo cairia no texto de "transferência concluída".
   if (isCustomerReservation(transfer) && status === "CONCLUIDO" && prevStatus !== "CONCLUIDO") {

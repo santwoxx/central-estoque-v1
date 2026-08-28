@@ -740,8 +740,9 @@ export default function UsersAdmin({ companies, currentUser }: UsersAdminProps) 
             ) : (
               <>
                 Cadastre os vendedores de <strong className="text-slate-700">{ownerCompanyName || "sua empresa"}</strong>.
-                Eles reservam pneus para clientes — e toda reserva, inclusive a do estoque da sua própria loja,
-                só prende o pneu depois que <strong className="text-slate-700">você confirmar</strong> em Transferências.
+                Eles reservam pneus para clientes — e a reserva <strong className="text-slate-700">prende o pneu na hora</strong>,
+                antes de qualquer confirmação. O que depende de você, na aba <strong className="text-slate-700">Reservas</strong>,
+                é a baixa: confirmar tira o pneu do estoque e registra a venda.
               </>
             )}
           </p>

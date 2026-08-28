@@ -518,14 +518,14 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         if (existingDoc) {
           const diff = numValue - existingDoc.quantity;
           if (diff !== 0) {
-            // Baixar abaixo do que está reservado para uma transferência aprovada
+            // Baixar abaixo do que está reservado (cliente ou transferência)
             // é recusado em App.tsx (e pelas regras do Firestore). Avisa antes de
             // gastar uma ida ao banco, com a conta já feita.
             const reserved = reservedQuantityOf(existingDoc);
             if (reserved > 0 && numValue < reserved) {
               throw new Error(
                 `${reserved} un deste pneu estão reservadas para clientes ou transferências em ` +
-                `${targetCompany.name}. O saldo não pode ficar abaixo disso — libere a reserva na aba Transferências.`
+                `${targetCompany.name}. O saldo não pode ficar abaixo disso — resolva a reserva na aba Reservas.`
               );
             }
             const reason = diff > 0 ? "Ajuste manual de entrada" : "Baixa manual";
@@ -821,7 +821,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         // Distingue "não tem pneu" de "tem pneu, mas está prometido para uma
         // transferência": a saída para o operador é completamente diferente.
         return flowReserved > 0 && flowQtyNumber <= flowBalance
-          ? `${flowReserved} un deste pneu estão RESERVADAS para uma transferência aprovada em ${flowCompanyName}. Livre para saída: ${flowFree} un.`
+          ? `${flowReserved} un deste pneu estão RESERVADAS para um cliente ou para uma transferência em ${flowCompanyName} — veja a aba Reservas. Livre para saída: ${flowFree} un.`
           : `Saldo insuficiente: disponível ${flowFree} un, solicitado ${flowQtyNumber} un.`;
       }
     }
@@ -1268,7 +1268,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                     const docItem = item.docs[comp.id];
                     const qty = docItem ? docItem.quantity : 0;
                     // Parte deste saldo pode estar prometida: reserva de cliente
-                    // aberta por um vendedor, ou transferência já aprovada. O
+                    // aberta por um vendedor, ou transferência aprovada. O
                     // número grande continua sendo o FÍSICO (é o que está na
                     // prateleira); o selo abaixo dele diz quanto disso já tem dono.
                     const reserved = reservedQuantityOf(docItem);
@@ -1563,7 +1563,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                     const docItem = item.docs[comp.id];
                     const qty = docItem ? docItem.quantity : 0;
                     // Parte deste saldo pode estar prometida: reserva de cliente
-                    // aberta por um vendedor, ou transferência já aprovada. O
+                    // aberta por um vendedor, ou transferência aprovada. O
                     // número grande continua sendo o FÍSICO (é o que está na
                     // prateleira); o selo abaixo dele diz quanto disso já tem dono.
                     const reserved = reservedQuantityOf(docItem);
@@ -1919,7 +1919,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                         {flowReserved > 0 && (
                           <span
                             className="mt-1.5 inline-flex items-center gap-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 uppercase tracking-wider"
-                            title="Presas por uma transferência aprovada — não entram na saída."
+                            title="Presas por uma reserva de cliente ou transferência — não entram na saída."
                           >
                             <Lock size={9} /> {flowReserved} un reservadas • {flowFree} livres
                           </span>

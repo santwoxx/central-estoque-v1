@@ -159,7 +159,7 @@ export default function StockFlow({ stock, movements, companies, user, transfers
     const term = search.trim().toLowerCase();
     return operableStock
       // Na saída, o que conta é o saldo LIVRE: pneu inteiramente reservado para
-      // uma transferência aprovada não pode ser baixado, então some da lista.
+      // um cliente ou por uma transferência não pode ser baixado, então some da lista.
       .filter(item => (mode === "SAIDA" ? availableQuantity(item) > 0 : true))
       .filter(item =>
         !term ||
@@ -281,7 +281,7 @@ export default function StockFlow({ stock, movements, companies, user, transfers
     if (mode === "SAIDA" && free <= 0) {
       setError(
         `Todas as ${reservedQuantityOf(item)} un deste pneu estão reservadas para clientes ou transferências. ` +
-        `Libere a reserva na aba Transferências para poder dar baixa.`
+        `Resolva a reserva na aba Reservas — confirmar, recusar ou cancelar — para liberar a baixa.`
       );
       return;
     }

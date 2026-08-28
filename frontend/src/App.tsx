@@ -718,6 +718,14 @@ export default function App() {
     const isSourceOwner = (t: TransferOrder) =>
       user.role === "alimentador" && !!user.companyId && t.sourceCompanyId === user.companyId;
     return reservations.filter(t => {
+      // Pneu preso por um pedido que já morreu não é fila de trabalho de
+      // ninguém — mas é o único estado em que o estoque mente sem alarme. Entra
+      // no selo do administrador, que é quem tem o botão de destravar.
+      const stuck =
+        user.role === "admin" &&
+        t.reservation?.active === true &&
+        (t.status === "CANCELADO" || t.status === "RECUSADO" || t.status === "CONCLUIDO");
+      if (stuck) return true;
       if (t.status !== "SOLICITADO") return false;
       if (user.role === "admin") return true;
       return isSourceOwner(t);
@@ -996,8 +1004,9 @@ export default function App() {
       const nextQuantity = Number(updatedFields.quantity) || 0;
       if (reserved > 0 && nextQuantity < reserved) {
         throw new Error(
-          `Este pneu tem ${reserved} un reservadas para uma transferência já aprovada. ` +
-          `O saldo não pode ficar abaixo disso — libere a reserva na aba Transferências antes de dar baixa.`
+          `Este pneu tem ${reserved} un reservadas para um cliente ou para uma transferência. ` +
+          `O saldo não pode ficar abaixo disso — resolva a reserva na aba Reservas ` +
+          `(confirmar, recusar ou cancelar) antes de dar baixa.`
         );
       }
     }
@@ -1095,8 +1104,8 @@ export default function App() {
       const reserved = reservedQuantityOf(itemToDrop);
       if (reserved > 0) {
         throw new Error(
-          `Não é possível excluir: ${reserved} un deste pneu estão reservadas para uma transferência aprovada. ` +
-          `Libere a reserva na aba Transferências primeiro.`
+          `Não é possível excluir: ${reserved} un deste pneu estão reservadas para um cliente ou ` +
+          `para uma transferência. Resolva a reserva na aba Reservas primeiro.`
         );
       }
 
@@ -1170,8 +1179,8 @@ export default function App() {
       ? (companyId ? stock.filter(item => item.companyId === companyId) : stock)
       : stock.filter(item => item.companyId === user.companyId);
 
-    // Pneu reservado para uma transferencia aprovada fica de fora da limpeza:
-    // apaga-lo deixaria o pedido da outra empresa apontando para o vazio.
+    // Pneu reservado fica de fora da limpeza: apaga-lo deixaria o pedido que o
+    // prendeu — reserva de cliente ou transferencia — apontando para o vazio.
     const reservedItems = scopedItems.filter(item => reservedQuantityOf(item) > 0);
     const itemsToClear = scopedItems.filter(item => reservedQuantityOf(item) === 0);
 
@@ -1180,8 +1189,8 @@ export default function App() {
     }
     if (itemsToClear.length === 0) {
       throw new Error(
-        `Todos os ${reservedItems.length} produtos deste escopo estão reservados para transferências aprovadas. ` +
-        `Libere as reservas na aba Transferências antes de apagar o estoque.`
+        `Todos os ${reservedItems.length} produtos deste escopo estão reservados para clientes ou ` +
+        `transferências. Resolva as reservas na aba Reservas antes de apagar o estoque.`
       );
     }
 
@@ -1223,7 +1232,7 @@ export default function App() {
       );
       alert(
         `Estoque apagado. ${reservedItems.length} produto(s) foram preservados porque estão reservados ` +
-        `para transferências já aprovadas.`
+        `para clientes ou transferências — veja a aba Reservas.`
       );
     }
   };
@@ -1367,9 +1376,9 @@ export default function App() {
         const before = Number(data.quantity) || 0;
         const after = isEntry ? before + input.quantity : before - input.quantity;
 
-        // Saldo LIVRE = saldo total menos o que esta reservado para transferencias
-        // ja aprovadas. A leitura vem de dentro da transacao, entao duas baixas
-        // simultaneas nao conseguem furar a mesma reserva.
+        // Saldo LIVRE = saldo total menos o que esta reservado — para um cliente
+        // (reserva de vendedor) ou para outra filial. A leitura vem de dentro da
+        // transacao, entao duas baixas simultaneas nao conseguem furar a mesma reserva.
         const reserved = reservedQuantityOf(data);
 
         if (!isEntry && after < 0) {
@@ -1382,8 +1391,9 @@ export default function App() {
         if (!isEntry && reserved > 0 && after < reserved) {
           throw new Error(
             `${reserved} un de ${data.sku || "este pneu"} (${data.brand || ""} ${data.size || ""}) estão ` +
-            `RESERVADAS para uma transferência já aprovada e não podem ser baixadas. ` +
-            `Livre para saída: ${Math.max(0, before - reserved)} un, solicitado: ${input.quantity} un.`
+            `RESERVADAS para um cliente ou para uma transferência e não podem ser baixadas — ` +
+            `veja a aba Reservas. Livre para saída: ${Math.max(0, before - reserved)} un, ` +
+            `solicitado: ${input.quantity} un.`
           );
         }
 
@@ -1855,7 +1865,18 @@ export default function App() {
       const mustTouchStock = direction === "RESERVE" || isReserved;
 
       // --- TODAS AS LEITURAS PRIMEIRO (exigência do Firestore) ---
-      const pending: { ref: any; nextReserved: number }[] = [];
+      //
+      // Indexado pelo CAMINHO do documento, não uma lista: se dois itens do mesmo
+      // pedido apontarem para o mesmo pneu, a lista faria duas leituras do mesmo
+      // saldo e duas escritas com valor ABSOLUTO — a segunda apagaria a primeira,
+      // e metade da reserva ficaria presa para sempre depois de um cancelamento.
+      // Somando no mapa, cada documento é lido uma vez e escrito uma vez.
+      const pendingByPath = new Map<string, { ref: any; nextReserved: number }>();
+      const trackStock = (ref: any, current: number, delta: number) => {
+        const existing = pendingByPath.get(ref.path);
+        const base = existing ? existing.nextReserved : current;
+        pendingByPath.set(ref.path, { ref, nextReserved: Math.max(0, base + delta) });
+      };
       if (mustTouchStock) {
         for (const item of items) {
           // Item sem referência de estoque: doc(db,"stock",undefined) derrubaria a
@@ -1882,7 +1903,10 @@ export default function App() {
           const qty = Number(item.quantity) || 0;
 
           if (direction === "RESERVE") {
-            const free = Math.max(0, total - reserved);
+            // Se este mesmo pneu já apareceu antes no pedido, o livre tem que
+            // descontar o que aquela linha acabou de prender.
+            const alreadyHeld = pendingByPath.get(stockRef.path)?.nextReserved ?? reserved;
+            const free = Math.max(0, total - alreadyHeld);
             if (qty > free) {
               throw new Error(
                 `Não há saldo livre suficiente de ${data.sku || item.sku} ` +
@@ -1891,15 +1915,15 @@ export default function App() {
                 `necessário: ${qty} un.`
               );
             }
-            pending.push({ ref: stockRef, nextReserved: reserved + qty });
+            trackStock(stockRef, reserved, qty);
           } else {
-            pending.push({ ref: stockRef, nextReserved: Math.max(0, reserved - qty) });
+            trackStock(stockRef, reserved, -qty);
           }
         }
       }
 
       // --- DEPOIS TODAS AS ESCRITAS ---
-      for (const entry of pending) {
+      for (const entry of pendingByPath.values()) {
         transaction.update(entry.ref, {
           reservedQuantity: entry.nextReserved,
           updatedAt: serverTimestamp()
@@ -2170,6 +2194,82 @@ export default function App() {
     }
   };
 
+  // ─────────────────────────────────────────────────────────────────
+  // Destravar pneu preso por pedido ja encerrado (so administrador)
+  //
+  // Todo caminho que encerra uma reserva devolve `reservedQuantity` na MESMA
+  // transacao — cancelar, recusar, confirmar a venda, despachar, excluir. Entao
+  // este estado nao deveria existir. Mas se um dia existir (escrita que morreu
+  // no meio, documento de uma versao antiga, movimento apagado a mao), o pneu
+  // fica preso por um pedido morto e NENHUM botao do fluxo normal alcanca ele:
+  // as acoes de cancelamento exigem o pedido aberto, e ele nao esta mais.
+  //
+  // Esta rotina existe so para isso, e por isso e restrita ao administrador:
+  // ela nao pergunta se o pedido faz sentido, so devolve o saldo.
+  const handleForceReleaseReservation = async (transferId: string) => {
+    if (!user) return;
+    if (user.role !== "admin") {
+      throw new Error("Somente o administrador pode destravar um pneu preso por um pedido encerrado.");
+    }
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const transferRef = doc(db, "transfers", transferId);
+        const transferSnap = await transaction.get(transferRef);
+        if (!transferSnap.exists()) throw new Error("Pedido não encontrado (pode ter sido excluído).");
+        const transferData: any = transferSnap.data();
+
+        if (transferData.reservation?.active !== true) {
+          throw new Error("Este pedido não tem reserva ativa — o pneu já está liberado.");
+        }
+        // Pedido ABERTO com reserva ativa e o estado normal do sistema: ali o
+        // caminho certo e cancelar (que devolve o saldo e encerra o pedido), nao
+        // soltar o pneu por baixo de um pedido que continua valendo.
+        const open = ["SOLICITADO", "AGENDADO", "PENDENTE", "EM_TRANSITO"];
+        if (open.includes(transferData.status)) {
+          throw new Error(
+            `Este pedido ainda está aberto (${transferData.status}). Cancele-o — o cancelamento já ` +
+            `devolve o pneu ao estoque.`
+          );
+        }
+
+        // --- LEITURAS ---
+        const pending: { ref: any; nextReserved: number }[] = [];
+        for (const item of transferData.items || []) {
+          if (!item?.sourceStockItemId) continue;
+          const stockRef = doc(db, "stock", item.sourceStockItemId);
+          const stockSnap = await transaction.get(stockRef);
+          if (!stockSnap.exists()) continue;
+          const reserved = reservedQuantityOf(stockSnap.data());
+          pending.push({
+            ref: stockRef,
+            nextReserved: Math.max(0, reserved - (Number(item.quantity) || 0))
+          });
+        }
+
+        // --- ESCRITAS ---
+        for (const entry of pending) {
+          transaction.update(entry.ref, {
+            reservedQuantity: entry.nextReserved,
+            updatedAt: serverTimestamp()
+          });
+        }
+        transaction.update(transferRef, {
+          reservation: {
+            ...transferData.reservation,
+            active: false,
+            releasedAt: serverTimestamp(),
+            releasedReason: `Pneu destravado por ${user.displayName} (pedido já encerrado)`
+          },
+          updatedAt: serverTimestamp()
+        });
+      });
+    } catch (err: any) {
+      console.error("Erro ao destravar a reserva:", err);
+      throw new Error(err?.message || "Erro ao devolver o pneu ao estoque.");
+    }
+  };
+
   // Libera a reserva sem cancelar o pedido — o pneu volta a ficar vendavel.
   const handleReleaseTransferReservation = async (transferId: string) => {
     if (!user) return;
@@ -2386,7 +2486,7 @@ export default function App() {
           // prendeu — esse saldo esta prometido a outra empresa.
           if (newQty < newReserved) {
             throw new Error(
-              `${newReserved} un de ${item.sku} estão reservadas para outra transferência aprovada. ` +
+              `${newReserved} un de ${item.sku} estão reservadas para um cliente ou outro pedido. ` +
               `Livre para envio: ${Math.max(0, currentQty - currentReserved)} un, necessário: ${item.quantity} un.`
             );
           }
@@ -2873,7 +2973,18 @@ export default function App() {
 
     // Só pedidos que já movimentaram estoque de verdade. EM_TRANSITO tem apenas
     // a saída; CONCLUIDO tem os dois lados. Os demais status não movimentam nada.
-    const relevant = transfers.filter(t => t.status === "EM_TRANSITO" || t.status === "CONCLUIDO");
+    //
+    // Reserva de cliente fica de FORA, mesmo concluída: ela não é transferência
+    // nenhuma. O pneu foi do balcão para a mão do cliente e já está gravado como
+    // SAIDA (com o nome dele). Se entrasse aqui, esta rotina veria "falta a linha
+    // de TRANSFERENCIA_SAIDA" — tipo diferente do que existe — e gravaria a mesma
+    // venda uma segunda vez, além de tentar uma TRANSFERENCIA_ENTRADA para a
+    // empresa sentinela 'CLIENTE', que não existe em `companies`.
+    // As reservas CONVERTIDAS em transferência continuam entrando: ali o destino
+    // é uma loja de verdade e as duas pontas se movimentam mesmo.
+    const relevant = transfers.filter(
+      t => (t.status === "EM_TRANSITO" || t.status === "CONCLUIDO") && !isCustomerReservation(t)
+    );
 
     for (const t of relevant) {
       const items = (t.items || []).filter((item: any) => item && item.sku);
@@ -3119,7 +3230,14 @@ export default function App() {
 
   const totalStockItemsCount = filteredKpiStock.length;
   const totalPneumaticsSum = filteredKpiStock.reduce((acc, item) => acc + (Number(item.quantity) || 0), 0);
-  const lowStockItems = filteredKpiStock.filter(item => (Number(item.quantity) || 0) <= 4).length;
+  // Quanto desse volume já tem dono. Fica ao lado do total físico porque os dois
+  // números são verdadeiros ao mesmo tempo: o pneu está no galpão E não pode ser
+  // vendido. Mostrar só o primeiro é o que faz alguém prometer o que não tem.
+  const reservedPneumaticsSum = filteredKpiStock.reduce((acc, item) => acc + reservedQuantityOf(item), 0);
+  // Reposição se mede pelo que dá para VENDER, não pelo que está na prateleira:
+  // um pneu com 6 un, 5 delas reservadas, tem 1 un vendável e é caso de compra.
+  // Enquanto esta conta usava `quantity`, o alerta ficava mudo justo nesse caso.
+  const lowStockItems = filteredKpiStock.filter(item => availableQuantity(item) <= 4).length;
   const totalCostValue = filteredKpiStock.reduce((acc, item) => acc + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
 
   return (
@@ -3595,6 +3713,11 @@ export default function App() {
               <p className="text-2xl font-black text-slate-900 tracking-tight">
                 {totalPneumaticsSum} <span className="text-xs font-bold text-slate-500 font-sans uppercase">unid.</span>
               </p>
+              {reservedPneumaticsSum > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-black text-amber-700 uppercase tracking-wider">
+                  {reservedPneumaticsSum} un reservadas · {Math.max(0, totalPneumaticsSum - reservedPneumaticsSum)} livres
+                </span>
+              )}
             </div>
             <div className="h-11 w-11 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center border border-sky-100 shadow-inner">
               <TrendingUp size={20} className="stroke-[1.8]" />
@@ -3748,6 +3871,7 @@ export default function App() {
               onApproveStep={handleApproveReservationStep}
               onReject={handleRejectTransferRequest}
               onCancel={handleCancelTransfer}
+              onForceRelease={handleForceReleaseReservation}
             />
           )}
 

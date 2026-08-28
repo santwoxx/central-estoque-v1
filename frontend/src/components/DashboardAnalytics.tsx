@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { StockItem, MovementLog, Company } from "../types";
-import { formatBRL } from "../utils";
+import { availableQuantity, formatBRL } from "../utils";
 import { TrendingUp, TrendingDown, Package, AlertTriangle, RefreshCw, BarChart2, X } from "lucide-react";
 
 interface DashboardAnalyticsProps {
@@ -54,18 +54,25 @@ export default function DashboardAnalytics({ items, movements, companies, user }
       }
     });
 
-    // Group current quantities by SKU
+    // Group current quantities by SKU.
+    //
+    // Aqui o saldo que conta é o LIVRE, não o físico: a pergunta desta tela é
+    // "vou ficar sem pneu para vender?", e pneu reservado para um cliente ou
+    // para outra filial não vai atender venda nenhuma. Com o total físico, um
+    // pneu inteiramente reservado aparecia como estoque saudável e a sugestão
+    // de compra nunca vinha — até o dia em que faltava no balcão.
     const skuStockMap = new Map<string, { brand: string; model: string; size: string; qty: number; id: string; companyId: string; companyName: string }>();
     filteredItems.forEach(item => {
+      const free = availableQuantity(item);
       const existing = skuStockMap.get(item.sku);
       if (existing) {
-        existing.qty += item.quantity;
+        existing.qty += free;
       } else {
         skuStockMap.set(item.sku, {
           brand: item.brand,
           model: item.model,
           size: item.size,
-          qty: item.quantity,
+          qty: free,
           id: item.id,
           companyId: item.companyId || "",
           companyName: item.companyName || ""
