@@ -2088,7 +2088,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       {/* ADD COMPANY MODAL */}
       {showAddCompanyModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full border border-slate-200 shadow-2xl space-y-4">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full border border-slate-200 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
                 <Building2 size={16} className="text-gold-600" /> Adicionar Nova Empresa (Coluna)

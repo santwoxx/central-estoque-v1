@@ -1288,7 +1288,7 @@ export default function UsersAdmin({ companies, currentUser }: UsersAdminProps) 
       {/* ================= MODAL DIALOG: ADD/EDIT DIALOG ================= */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-3xs flex items-center justify-center z-50 p-4 transition-all duration-200 animate-fadeIn">
-          <div className="bg-white rounded-2xl border-t-4 border-t-gold-500 border-x border-b border-slate-200 shadow-2xl max-w-md w-full overflow-hidden p-6 relative flex flex-col gap-4 animate-scaleUp">
+          <div className="bg-white rounded-2xl border-t-4 border-t-gold-500 border-x border-b border-slate-200 shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-6 relative flex flex-col gap-4 animate-scaleUp">
             
             <button
               onClick={() => setShowModal(false)}

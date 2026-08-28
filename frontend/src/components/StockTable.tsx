@@ -2322,7 +2322,7 @@ export default function StockTable({
       {/* MODAL: COMPROVANTE / RECIBO DE VENDA */}
       {lastSaleReceipt && (
         <div className="fixed inset-0 z-55 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl w-full max-w-sm p-6 border border-slate-200 shadow-2xl relative flex flex-col space-y-4 font-sans text-slate-800">
+          <div className="bg-white rounded-3xl w-full max-w-sm p-6 border border-slate-200 shadow-2xl relative flex flex-col space-y-4 font-sans text-slate-800 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-xs font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1.5">
                 <ShoppingBag size={16} /> Saída Confirmada!
@@ -2410,7 +2410,7 @@ export default function StockTable({
 
         return (
         <div className="fixed inset-0 z-55 bg-slate-900/55 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl animate-scaleUp">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl animate-scaleUp max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-lg font-bold text-red-650 flex items-center gap-1.5">
                 <AlertTriangle size={20} /> {isAdmin ? "Excluir Estoque de uma Empresa?" : "Excluir Todo o Estoque?"}
@@ -2504,7 +2504,7 @@ export default function StockTable({
       {/* MODAL: BARCODE SCANNER VIA CAMERA */}
       {showScannerModal && (
         <div className="fixed inset-0 z-55 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#0b0f19] text-white rounded-3xl w-full max-w-sm p-6 border border-slate-800 shadow-2xl relative flex flex-col space-y-4 font-sans">
+          <div className="bg-[#0b0f19] text-white rounded-3xl w-full max-w-sm p-6 border border-slate-800 shadow-2xl relative flex flex-col space-y-4 font-sans max-h-[90vh] overflow-y-auto">
             <style>{`
               @keyframes scanLaser {
                 0% { top: 15%; opacity: 0.3; }
@@ -2567,7 +2567,7 @@ export default function StockTable({
       {/* MODAL: BACKUP RESTORE */}
       {showBackupRestoreModal && (
         <div className="fixed inset-0 z-55 bg-slate-900/55 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl animate-scaleUp">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl animate-scaleUp max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-lg font-bold text-slate-900 flex items-center gap-1.5">
                 <Archive size={20} className="text-gold-600" /> Restauração de Backup

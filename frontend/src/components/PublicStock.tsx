@@ -468,25 +468,30 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                     : "bg-white border-slate-200 hover:border-slate-300"
                 }`}
               >
-                {/* Cabeçalho: marca, SKU e a medida em destaque */}
+                {/* Cabeçalho: SKU, a medida em destaque e o nome do pneu.
+                    A MARCA desceu para junto do modelo. Ela estava sozinha numa
+                    linha no topo, disputando atenção com a medida e sobrando
+                    espaço à direita — e "SMART CHASER" e "SC1" são as duas
+                    metades do MESMO nome: separadas, ninguém lia como um nome só.
+                    Juntas ("SMART CHASER SC1") a ficha volta a ter uma hierarquia
+                    de três degraus: código > medida > nome. */}
                 <div className="px-4 pt-3.5 pb-3">
+                  {/* O SKU agora ocupa a linha inteira e o selo de reserva cabe ao
+                      lado dele — antes um escondia o outro, porque a marca comia
+                      metade da largura. */}
                   <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 truncate">
-                      {item.brand}
+                    <span
+                      title={item.sku}
+                      className="min-w-0 truncate font-mono text-[9px] text-slate-400 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5"
+                    >
+                      {item.sku}
                     </span>
-                    {itemReserved > 0 ? (
+                    {itemReserved > 0 && (
                       <span
                         title={`${itemReserved} un deste pneu estão reservadas para clientes.`}
                         className="shrink-0 inline-flex items-center gap-0.5 bg-amber-500 text-white border border-amber-600 rounded px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider shadow-sm"
                       >
                         <Lock size={9} className="stroke-[3px]" /> {itemReserved} reservado{itemReserved > 1 ? "s" : ""}
-                      </span>
-                    ) : (
-                      <span
-                        title={item.sku}
-                        className="shrink-0 max-w-[45%] truncate font-mono text-[9px] text-slate-400 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5"
-                      >
-                        {item.sku}
                       </span>
                     )}
                   </div>
@@ -495,11 +500,18 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                     {item.size}
                   </h3>
 
-                  {item.model && item.model.trim().toLowerCase() !== item.brand.trim().toLowerCase() && (
-                    <div className="mt-1 text-[11px] font-semibold text-slate-500 truncate" title={item.model}>
-                      {item.model}
-                    </div>
-                  )}
+                  {/* Marca + modelo numa linha só. Quebra em duas linhas em vez de
+                      truncar: num cartão de ~200px, "SMART CHASER SC1" cortado em
+                      "SMART CHAS…" esconde justamente o que identifica o pneu. */}
+                  <div
+                    className="mt-1 text-[11px] leading-snug break-words"
+                    title={`${item.brand} ${item.model}`.trim()}
+                  >
+                    <span className="font-black uppercase tracking-wide text-slate-600">{item.brand}</span>
+                    {item.model && item.model.trim().toLowerCase() !== item.brand.trim().toLowerCase() && (
+                      <span className="font-semibold text-slate-500"> {item.model}</span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Disponibilidade por loja */}
@@ -679,7 +691,7 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
           dois avisos abaixo. */}
       {reserveTarget && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-3 mb-4">
               <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
                 {reserveTarget.own ? (
@@ -821,7 +833,7 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       {/* Confirmação da reserva enviada */}
       {reserveDone && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl text-center">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl text-center max-h-[90vh] overflow-y-auto">
             <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center">
               <ShoppingBag size={22} className="text-emerald-600" />
             </div>
