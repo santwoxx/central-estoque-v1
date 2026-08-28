@@ -280,7 +280,7 @@ export default function StockFlow({ stock, movements, companies, user, transfers
     }
     if (mode === "SAIDA" && free <= 0) {
       setError(
-        `Todas as ${reservedQuantityOf(item)} un deste pneu estão reservadas para uma transferência aprovada. ` +
+        `Todas as ${reservedQuantityOf(item)} un deste pneu estão reservadas para clientes ou transferências. ` +
         `Libere a reserva na aba Transferências para poder dar baixa.`
       );
       return;
@@ -1481,8 +1481,17 @@ export default function StockFlow({ stock, movements, companies, user, transfers
                           <div
                             key={item.id}
                             onClick={() => addToCart(item, 1)}
-                            className={`px-4 py-2.5 flex items-center gap-3 cursor-pointer transition-colors ${
-                              flashId === item.id ? (isEntrada ? "bg-emerald-100" : "bg-red-100") : inCart ? "bg-slate-50" : "hover:bg-slate-50"
+                            className={`px-4 py-2.5 flex items-center gap-3 cursor-pointer transition-colors border-l-4 ${
+                              flashId === item.id
+                                ? (isEntrada ? "bg-emerald-100 border-l-transparent" : "bg-red-100 border-l-transparent")
+                                : itemReserved > 0
+                                // Parte deste pneu já está prometida. Quem está dando
+                                // baixa precisa ver isso ANTES de escolher a quantidade,
+                                // não depois de o sistema recusar por falta de saldo.
+                                ? "bg-amber-50 hover:bg-amber-100 border-l-amber-400"
+                                : inCart
+                                ? "bg-slate-50 border-l-transparent"
+                                : "hover:bg-slate-50 border-l-transparent"
                             }`}
                           >
                             <div className="min-w-0 flex-1">
@@ -1507,10 +1516,10 @@ export default function StockFlow({ stock, movements, companies, user, transfers
                               </span>
                               {itemReserved > 0 && (
                                 <span
-                                  className="mt-0.5 inline-flex items-center gap-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 py-0.5 uppercase tracking-wider"
-                                  title={`${itemReserved} un reservadas para uma transferência aprovada — bloqueadas para venda.`}
+                                  className="mt-0.5 inline-flex items-center gap-1 text-[9px] font-black text-white bg-amber-500 border border-amber-600 rounded px-1 py-0.5 uppercase tracking-wider shadow-xs"
+                                  title={`${itemReserved} un reservadas para clientes ou transferências — bloqueadas para venda.`}
                                 >
-                                  <Lock size={8} /> {itemReserved} reserv.
+                                  <Lock size={8} className="stroke-[3px]" /> {itemReserved} reserv.
                                 </span>
                               )}
                             </div>
@@ -1661,7 +1670,7 @@ export default function StockFlow({ stock, movements, companies, user, transfers
                             <div className="flex items-center gap-1.5 text-[10px] font-black text-red-600 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
                               <AlertTriangle size={12} className="shrink-0" />
                               {line.blockedByReservation
-                                ? `${reservedQuantityOf(line.item)} un estão reservadas para uma transferência aprovada — livre para baixa: ${line.free} un.`
+                                ? `${reservedQuantityOf(line.item)} un estão reservadas para clientes ou transferências — livre para baixa: ${line.free} un.`
                                 : `Saldo insuficiente: só há ${line.free} un disponíveis.`}
                             </div>
                           )}

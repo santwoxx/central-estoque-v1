@@ -62,7 +62,7 @@ import {
   TransferRequestKind,
   TransferSyncResult
 } from "./types";
-import { CLIENTE_COMPANY_ID, isCustomerReservation } from "./types";
+import { CLIENTE_COMPANY_ID, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "./types";
 import { availableQuantity, formatDate, mapStockDoc, reservedQuantityOf, toMillis } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
@@ -83,6 +83,7 @@ const UnifiedStock = lazy(() => import("./components/UnifiedStock"));
 const DashboardAnalytics = lazy(() => import("./components/DashboardAnalytics"));
 const HowToUse = lazy(() => import("./components/HowToUse"));
 const TransferOrders = lazy(() => import("./components/TransferOrders"));
+const Reservations = lazy(() => import("./components/Reservations"));
 const StockFlow = lazy(() => import("./components/StockFlow"));
 const ApkInstaller = lazy(() =>
   import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
@@ -109,6 +110,7 @@ import {
   BookOpen,
   ArrowLeftRight,
   ArrowDownUp,
+  ShoppingBag,
   Smartphone,
   DollarSign,
   Search
@@ -149,6 +151,14 @@ function mapTransferDoc(docSnap: any): TransferOrder {
     approvedByUid: data.approvedByUid || "",
     approvedByName: data.approvedByName || "",
     approvedAt: data.approvedAt,
+    // Avais separados da reserva de vendedor. Sem estas linhas a aba Reservas
+    // nunca saberia qual das duas confirmacoes ja chegou.
+    sourceApprovedByUid: data.sourceApprovedByUid || "",
+    sourceApprovedByName: data.sourceApprovedByName || "",
+    sourceApprovedAt: data.sourceApprovedAt,
+    adminApprovedByUid: data.adminApprovedByUid || "",
+    adminApprovedByName: data.adminApprovedByName || "",
+    adminApprovedAt: data.adminApprovedAt,
     rejectedByUid: data.rejectedByUid || "",
     rejectedByName: data.rejectedByName || "",
     rejectedAt: data.rejectedAt,
@@ -204,6 +214,11 @@ export default function App() {
   // Inter-company Transfer Orders State (raw per-query arrays, merged below)
   const [transfersAsSource, setTransfersAsSource] = useState<TransferOrder[]>([]);
   const [transfersAsDestination, setTransfersAsDestination] = useState<TransferOrder[]>([]);
+  // Reservas abertas por vendedores DESTA loja num pneu de outra filial. Enquanto
+  // estão em análise, nem a origem nem o destino são a loja do vendedor, então
+  // elas não caem em nenhuma das duas consultas acima — sem esta terceira, o dono
+  // não veria na aba Reservas o pedido que o próprio vendedor dele abriu.
+  const [transfersAsRequester, setTransfersAsRequester] = useState<TransferOrder[]>([]);
   // True once every attached transfer listener has delivered its first snapshot.
   // Gates the notification center's diffing so login doesn't replay transfer
   // history as a flood of "new transfer" alerts — see useAppNotifications.
@@ -221,7 +236,7 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
 
   // Active Tab/View state
-  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo">("analytics");
+  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo">("analytics");
 
   // Authentication Status listener
   useEffect(() => {
@@ -595,6 +610,7 @@ export default function App() {
     if (!user) {
       setTransfersAsSource([]);
       setTransfersAsDestination([]);
+      setTransfersAsRequester([]);
       setTransfersReady(false);
       return;
     }
@@ -632,6 +648,7 @@ export default function App() {
     });
 
     let unsubDestination = () => {};
+    let unsubRequester = () => {};
     if (!isGlobalViewer && !isSellerScoped) {
       const destinationQuery = query(transfersRef, where("destinationCompanyId", "==", user.companyId));
       unsubDestination = onSnapshot(destinationQuery, (snapshot) => {
@@ -643,13 +660,28 @@ export default function App() {
       }, (error) => {
         console.error("Error fetching destination transfers:", error);
       });
+
+      // Terceira consulta, só para o dono da loja: as reservas que os vendedores
+      // dele abriram em pneus de OUTRAS filiais. Não entra em `markReadyIfComplete`
+      // de propósito — é um complemento da aba Reservas, e travar o feed de
+      // notificações à espera dela atrasaria tudo o mais por nada.
+      const requesterQuery = query(transfersRef, where("requestedByCompanyId", "==", user.companyId));
+      unsubRequester = onSnapshot(requesterQuery, (snapshot) => {
+        const list: TransferOrder[] = [];
+        snapshot.forEach(docSnap => list.push(mapTransferDoc(docSnap)));
+        setTransfersAsRequester(list);
+      }, (error) => {
+        console.error("Error fetching requester transfers:", error);
+      });
     } else {
       setTransfersAsDestination([]);
+      setTransfersAsRequester([]);
     }
 
     return () => {
       unsubSource();
       unsubDestination();
+      unsubRequester();
     };
   }, [user]);
 
@@ -659,12 +691,38 @@ export default function App() {
     const map = new Map<string, TransferOrder>();
     transfersAsSource.forEach(t => map.set(t.id, t));
     transfersAsDestination.forEach(t => map.set(t.id, t));
+    transfersAsRequester.forEach(t => map.set(t.id, t));
     return Array.from(map.values()).sort((a, b) => {
       const timeA = toMillis(a.updatedAt) || toMillis(a.requestedAt);
       const timeB = toMillis(b.updatedAt) || toMillis(b.requestedAt);
       return timeB - timeA;
     });
-  }, [transfersAsSource, transfersAsDestination]);
+  }, [transfersAsSource, transfersAsDestination, transfersAsRequester]);
+
+  // Toda a vida de uma reserva de cliente, em qualquer fase — inclusive depois de
+  // ela virar transferência entre filiais. Alimenta a aba Reservas.
+  const reservations = useMemo(
+    () => transfers.filter(t => isReservationOrder(t)),
+    [transfers]
+  );
+
+  // Selo do menu: quantas reservas dependem de uma decisão de QUEM ESTÁ LOGADO.
+  // O vendedor conta as próprias reservas ainda em análise (é o que ele quer
+  // saber: "já liberaram meu pneu?"); quem decide conta as que travam o estoque
+  // dele. Sem este número, a fila só existiria depois de alguém abrir a aba.
+  const pendingReservationsCount = useMemo(() => {
+    if (!user) return 0;
+    if (user.role === "vendedor") {
+      return reservations.filter(t => t.status === "SOLICITADO" && t.requestedByUid === user.uid).length;
+    }
+    const isSourceOwner = (t: TransferOrder) =>
+      user.role === "alimentador" && !!user.companyId && t.sourceCompanyId === user.companyId;
+    return reservations.filter(t => {
+      if (t.status !== "SOLICITADO") return false;
+      if (user.role === "admin") return true;
+      return isSourceOwner(t);
+    }).length;
+  }, [reservations, user]);
 
   // Stock scoped to "my own company" — used for the KPI header cards and the
   // Cadastros e Ajustes (StockTable) editing view, which should stay focused on the
@@ -700,7 +758,7 @@ export default function App() {
   // (clique em notificação, estado antigo restaurado) volta para o catálogo, em
   // vez de renderizar um painel administrativo atrás de um aviso.
   useEffect(() => {
-    if (user?.role === "vendedor" && activeTab !== "catalogo" && activeTab !== "transfers") {
+    if (user?.role === "vendedor" && activeTab !== "catalogo" && activeTab !== "reservations") {
       setActiveTab("catalogo");
     }
   }, [user, activeTab]);
@@ -1594,27 +1652,32 @@ export default function App() {
       throw new Error("Uma solicitação só pode ser aberta pela empresa que vai receber os pneus.");
     }
 
-    // Solicitacao nasce parada, aguardando o aval da origem. Nada e reservado
-    // aqui: a reserva so existe depois que a origem aprova.
+    // Solicitacao nasce parada, aguardando o aval da origem. A reserva de cliente
+    // tambem nasce em SOLICITADO — mas ja com o pneu preso (ver reserveOnCreate
+    // logo abaixo): o que falta nela e a confirmacao, nao o bloqueio.
     const initialStatus = requestKind === "SOLICITACAO"
       ? "SOLICITADO"
       : (isScheduled ? "AGENDADO" : "PENDENTE");
 
     // ── Reserva ja no nascimento do pedido ──────────────────────────
-    // Um ENVIO aberto pela PROPRIA loja de origem prende o saldo na MESMA
-    // transacao que cria o pedido. E o ponto do modulo: entre "separei o pneu
-    // para a outra loja" e "o motorista assinou a retirada" podem passar dias, e
-    // nesse intervalo o balcao nao pode vender o que ja esta prometido.
+    // Prender o saldo na MESMA transacao que cria o pedido e o ponto do modulo:
+    // entre "separei o pneu" e "alguem confirmou" podem passar dias, e nesse
+    // intervalo o balcao nao pode vender o que ja esta prometido.
     //
-    // Quem NAO reserva aqui, e por que:
-    //   • SOLICITACAO (inclusive reserva de cliente) — quem abre o pedido e o
-    //     destino/vendedor, que nao tem permissao de escrever no estoque da outra
-    //     loja. A reserva entra quando a origem aprova (handleApproveTransferRequest).
-    //   • ENVIO cuja origem e outra loja — mesmo motivo: o estoque nao e meu.
-    //     Segue como antes, com o botao "Reservar" a disposicao da origem.
+    // Reservam no nascimento:
+    //   • ENVIO aberto pela PROPRIA loja de origem;
+    //   • RESERVA DE CLIENTE de um vendedor — QUALQUER loja, inclusive a de
+    //     outra filial. E o que faz o pneu aparecer como reservado para todo
+    //     mundo no instante do pedido, antes de qualquer aprovacao. As regras do
+    //     Firestore abrem `reservedQuantity` (e so ele) para o vendedor.
+    //
+    // Nao reserva aqui: o ENVIO cuja origem e outra loja, e a SOLICITACAO comum
+    // entre filiais — nos dois o estoque nao e de quem esta pedindo, e a reserva
+    // entra quando a origem aprova (handleApproveTransferRequest).
     const reserveOnCreate =
-      requestKind === "ENVIO" &&
-      (user.role === "admin" || data.sourceCompanyId === user.companyId);
+      isCustomerOrder ||
+      (requestKind === "ENVIO" &&
+        (user.role === "admin" || data.sourceCompanyId === user.companyId));
 
     const payload: Record<string, any> = {
       items: data.items,
@@ -1884,32 +1947,21 @@ export default function App() {
     return new Error(err?.message || fallback);
   };
 
-  // A origem aprova a solicitacao: os pneus ficam reservados na hora e o pedido
-  // entra no fluxo normal de assinaturas. A partir daqui ninguem consegue vender
-  // ou baixar essa quantidade.
+  // A origem aprova uma SOLICITACAO comum entre filiais: os pneus ficam
+  // reservados na hora e o pedido entra no fluxo normal de assinaturas. A partir
+  // daqui ninguem consegue vender ou baixar essa quantidade.
   //
-  // Aprovar faz uma de DUAS coisas, e a diferenca esta em quem pediu:
-  //
-  //   • Reserva de cliente de um vendedor da PROPRIA loja — o pneu nao viaja.
-  //     Fica reservado na prateleira e a loja encerra em "Concluir Venda".
-  //
-  //   • Reserva de cliente de um vendedor de OUTRA filial — o pneu PRECISA ir ate
-  //     a loja dele, senao a reserva nao serve para nada: o cliente esta la, o
-  //     pneu esta aqui. Aprovar deixa de ser o fim do caso e vira o comeco de uma
-  //     transferencia de verdade: o destino deixa de ser o balcao (a empresa
-  //     sentinela CLIENTE) e passa a ser a loja de quem pediu. Dali em diante o
-  //     pedido e uma transferencia comum e percorre as quatro assinaturas
-  //     (remetente + motorista na saida, motorista + recebedor na chegada), com o
-  //     saldo preso na origem o tempo todo. `customerName` fica no documento: e o
-  //     registro de para quem aquele pneu esta indo.
-  //
-  //   • Solicitacao normal entre filiais — ja nasceu transferencia; so reserva.
-  //
-  // Pedidos antigos, aprovados antes desta mudanca, continuam com destino CLIENTE
-  // e sao encerrados como sempre foram — nada aqui os reescreve.
+  // Reserva de CLIENTE nao passa por aqui — ela ja nasce com o pneu preso e e
+  // decidida em handleConfirmReservationSale (pneu da propria loja do vendedor)
+  // ou handleApproveReservationStep (pneu de outra loja, dois avais).
   const handleApproveTransferRequest = async (transferId: string) => {
     if (!user) return;
     const transfer = transfers.find(t => t.id === transferId);
+    if (isCustomerReservation(transfer)) {
+      throw new Error(
+        "Esta é uma reserva de cliente — use a aba Reservas para confirmar ou aprovar."
+      );
+    }
     // Uma solicitacao agendada para o futuro volta para a fila de agendados;
     // as demais ja ficam prontas para assinatura de envio.
     const scheduledMillis = toMillis(transfer?.scheduledFor);
@@ -1919,28 +1971,10 @@ export default function App() {
       await applyTransferReservation(transferId, "RESERVE", {
         expectedStatuses: ["SOLICITADO"],
         nextStatus,
-        // Derivado do documento lido dentro da transacao: quem pediu e de qual
-        // loja sao dados do pedido, nao da tela de quem esta aprovando.
-        extraTransferFields: (transferData: any) => {
-          const base: Record<string, any> = {
-            approvedByUid: user.uid,
-            approvedByName: user.displayName,
-            approvedAt: serverTimestamp()
-          };
-
-          const requesterCompanyId = transferData.requestedByCompanyId || "";
-          const isCrossStoreCustomerOrder =
-            isCustomerReservation(transferData) &&
-            !!requesterCompanyId &&
-            requesterCompanyId !== transferData.sourceCompanyId;
-
-          if (!isCrossStoreCustomerOrder) return base;
-
-          return {
-            ...base,
-            destinationCompanyId: requesterCompanyId,
-            destinationCompanyName: transferData.requestedByCompanyName || "Loja do vendedor"
-          };
+        extraTransferFields: {
+          approvedByUid: user.uid,
+          approvedByName: user.displayName,
+          approvedAt: serverTimestamp()
         }
       });
     } catch (err: any) {
@@ -1949,17 +1983,171 @@ export default function App() {
     }
   };
 
-  // A origem recusa a solicitacao. Nada foi reservado, entao e so status.
+  // ─────────────────────────────────────────────────────────────────
+  // Reserva de pneu de OUTRA loja: os dois avais
+  //
+  // O vendedor da loja A reservou um pneu que esta na loja B. O pneu ja saiu do
+  // saldo vendavel de B no instante do pedido — o que falta e decidir se ele
+  // viaja. Como o pneu muda de dono e de endereco, a decisao nao e de uma pessoa
+  // so: precisa do DONO DE B (que abre mao do pneu) e do ADMINISTRADOR (que
+  // responde pela transferencia entre filiais). A ordem nao importa.
+  //
+  // Quando o segundo aval chega, o pedido deixa de ser reserva de cliente: o
+  // destino sai do balcao ('CLIENTE') e passa a ser a loja do vendedor, e dali em
+  // diante ele percorre as quatro assinaturas como qualquer transferencia — a
+  // baixa acontece no despacho, nao aqui. `customerName` fica no documento como
+  // registro de para quem o pneu esta indo.
+  //
+  // O passo "SOURCE" tambem e aberto ao admin: sem isso, uma loja sem dono ativo
+  // deixaria a reserva presa para sempre. Ele precisa dar os dois cliques, e cada
+  // um fica registrado com o nome de quem deu.
+  // ─────────────────────────────────────────────────────────────────
+  const handleApproveReservationStep = async (
+    transferId: string,
+    step: "SOURCE" | "ADMIN"
+  ) => {
+    if (!user) return;
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const transferRef = doc(db, "transfers", transferId);
+        const transferSnap = await transaction.get(transferRef);
+        if (!transferSnap.exists()) throw new Error("Reserva não encontrada (pode ter sido excluída).");
+        const t: any = transferSnap.data();
+
+        if (t.status !== "SOLICITADO") {
+          throw new Error(`Esta reserva não está mais em análise (situação atual: ${t.status}).`);
+        }
+        if (!isCrossStoreReservation(t)) {
+          throw new Error(
+            "Esta reserva é de um pneu da própria loja do vendedor — ela é encerrada com " +
+            "\"Confirmar e dar baixa\", não com aprovação dupla."
+          );
+        }
+
+        const isAdminUser = user.role === "admin";
+        if (step === "ADMIN" && !isAdminUser) {
+          throw new Error("Só o administrador do sistema pode dar este aval.");
+        }
+        if (step === "SOURCE" && !isAdminUser && t.sourceCompanyId !== user.companyId) {
+          throw new Error("Só o dono da loja que tem o pneu pode dar este aval.");
+        }
+
+        const alreadySource = !!t.sourceApprovedByUid;
+        const alreadyAdmin = !!t.adminApprovedByUid;
+        if (step === "SOURCE" && alreadySource) {
+          throw new Error(`A loja ${t.sourceCompanyName} já aprovou esta reserva.`);
+        }
+        if (step === "ADMIN" && alreadyAdmin) {
+          throw new Error("O administrador já aprovou esta reserva.");
+        }
+
+        const completesApproval = (step === "SOURCE" || alreadySource) && (step === "ADMIN" || alreadyAdmin);
+
+        // Rede de segurança para pedidos ANTIGOS: reservas abertas antes de a
+        // criação passar a prender o pneu chegam aqui com reservation nula, e o
+        // saldo delas nunca saiu do disponível. Deixar virar transferência sem
+        // prender nada abriria a porta para a loja vender, no balcão, o pneu que
+        // acabou de ser prometido. Então o segundo aval prende, se ninguém prendeu.
+        //
+        // TODAS AS LEITURAS ANTES DAS ESCRITAS (exigência do Firestore).
+        const pendingHolds: { ref: any; nextReserved: number }[] = [];
+        if (completesApproval && t.reservation?.active !== true) {
+          for (const item of t.items || []) {
+            if (!item?.sourceStockItemId) {
+              throw new Error(`O item ${item?.sku || ""} da reserva não aponta para nenhum produto do estoque.`);
+            }
+            const stockRef = doc(db, "stock", item.sourceStockItemId);
+            const stockSnap = await transaction.get(stockRef);
+            if (!stockSnap.exists()) {
+              throw new Error(`O produto ${item.sku || ""} não existe mais no estoque de ${t.sourceCompanyName}.`);
+            }
+            const stockData: any = stockSnap.data();
+            const total = Number(stockData.quantity) || 0;
+            const reserved = reservedQuantityOf(stockData);
+            const free = Math.max(0, total - reserved);
+            const qty = Number(item.quantity) || 0;
+            if (qty > free) {
+              throw new Error(
+                `Não há saldo livre suficiente de ${stockData.sku || item.sku} em ${t.sourceCompanyName}. ` +
+                `Livre: ${free} un, necessário: ${qty} un.`
+              );
+            }
+            pendingHolds.push({ ref: stockRef, nextReserved: reserved + qty });
+          }
+        }
+
+        for (const hold of pendingHolds) {
+          transaction.update(hold.ref, {
+            reservedQuantity: hold.nextReserved,
+            updatedAt: serverTimestamp()
+          });
+        }
+
+        const fields: Record<string, any> = { updatedAt: serverTimestamp() };
+        if (step === "SOURCE") {
+          fields.sourceApprovedByUid = user.uid;
+          fields.sourceApprovedByName = user.displayName;
+          fields.sourceApprovedAt = serverTimestamp();
+        } else {
+          fields.adminApprovedByUid = user.uid;
+          fields.adminApprovedByName = user.displayName;
+          fields.adminApprovedAt = serverTimestamp();
+        }
+
+        // Os dois avais reunidos: o pedido vira transferencia agora.
+        if (completesApproval) {
+          fields.status = "PENDENTE";
+          fields.destinationCompanyId = t.requestedByCompanyId;
+          fields.destinationCompanyName = t.requestedByCompanyName || "Loja do vendedor";
+          fields.approvedByUid = user.uid;
+          fields.approvedByName = user.displayName;
+          fields.approvedAt = serverTimestamp();
+          if (pendingHolds.length > 0) {
+            fields.reservation = {
+              active: true,
+              reservedByUid: user.uid,
+              reservedByName: user.displayName,
+              reservedAt: serverTimestamp()
+            };
+          }
+        }
+
+        transaction.update(transferRef, fields);
+      });
+    } catch (err: any) {
+      console.error("Erro ao aprovar a reserva:", err);
+      if (err?.code === "permission-denied") {
+        throw new Error(
+          "O banco recusou o aval. Só o dono da loja que TEM o pneu ou o administrador podem " +
+          "aprovar esta reserva. Se sua credencial mudou de empresa recentemente, saia e entre novamente."
+        );
+      }
+      throw new Error(err?.message || "Erro ao aprovar a reserva.");
+    }
+  };
+
+  // A origem recusa a solicitacao.
+  //
+  // Passou a ser uma transacao (era um updateDoc solto) porque a reserva de um
+  // vendedor nasce com o pneu PRESO: recusar sem devolver `reservedQuantity`
+  // deixaria o pneu bloqueado por um pedido morto, e ninguem repararia ate
+  // faltar saldo para vender. `allowNoReservation` cobre a solicitacao comum
+  // entre filiais, que chega aqui sem nada reservado.
   const handleRejectTransferRequest = async (transferId: string, reason: string) => {
     if (!user) return;
     try {
-      await updateDoc(doc(db, "transfers", transferId), {
-        status: "RECUSADO",
-        rejectedByUid: user.uid,
-        rejectedByName: user.displayName,
-        rejectedAt: serverTimestamp(),
-        rejectReason: reason?.trim() || "Solicitação recusada pela empresa de origem",
-        updatedAt: serverTimestamp()
+      await applyTransferReservation(transferId, "RELEASE", {
+        expectedStatuses: ["SOLICITADO"],
+        nextStatus: "RECUSADO",
+        extraTransferFields: {
+          rejectedByUid: user.uid,
+          rejectedByName: user.displayName,
+          rejectedAt: serverTimestamp(),
+          rejectReason: reason?.trim() || "Solicitação recusada pela empresa de origem"
+        },
+        releaseReason: `Reserva recusada por ${user.displayName}`,
+        allowNoReservation: true
       });
     } catch (err: any) {
       console.error("Erro ao recusar solicitação de transferência:", err);
@@ -2452,10 +2640,14 @@ export default function App() {
   };
 
   // ─────────────────────────────────────────────────────────────────
-  // Conclusão de venda (reserva de cliente)
+  // Confirmação da reserva = baixa (reserva de cliente da própria loja)
   //
-  // Fecha um pedido com destino CLIENTE_COMPANY_ID: o vendedor separou o pneu,
-  // a loja de origem aprovou (reservando o saldo) e agora entregou de fato.
+  // Fecha um pedido com destino CLIENTE_COMPANY_ID cujo pneu está na MESMA loja
+  // em que o vendedor atende. O pneu já estava preso desde que o vendedor abriu
+  // a reserva; o que este passo faz é a BAIXA — é o "só dá baixa quando o adm
+  // confirma". Um clique só: confirmar a reserva e tirar o pneu do estoque são
+  // a mesma coisa, e não existe estado intermediário entre eles.
+  //
   // Numa única transação atômica:
   //   1. debita `quantity` do estoque da ORIGEM;
   //   2. devolve a mesma quantidade de `reservedQuantity` — a reserva deixou de
@@ -2464,8 +2656,8 @@ export default function App() {
   //   3. grava a SAIDA em `movements` com o cliente em partyName, para a venda
   //      aparecer em Entradas e Saídas como qualquer outra baixa;
   //   4. encerra o pedido em CONCLUIDO.
-  // Não há dupla contagem: quem debita o saldo é só este passo — a aprovação
-  // apenas reserva, nunca baixa.
+  // Não há dupla contagem: quem debita o saldo é só este passo — a criação da
+  // reserva apenas prende o pneu, nunca baixa.
   // ─────────────────────────────────────────────────────────────────
   const handleCompleteSale = async (transferId: string) => {
     if (!user) return;
@@ -2482,17 +2674,28 @@ export default function App() {
         if (!isCustomerReservation(transferData)) {
           throw new Error("Este pedido é uma transferência entre filiais — conclua pelo fluxo de assinaturas.");
         }
-        // Depois de aprovada, a reserva fica em PENDENTE (ou AGENDADO). Não
-        // existe status "APROVADO" neste sistema — ver TransferStatus em types.ts.
-        if (transferData.status !== "PENDENTE" && transferData.status !== "AGENDADO") {
+        // Reserva de pneu de OUTRA loja nunca sai do estoque por aqui: ela vira
+        // transferencia depois dos dois avais e a baixa acontece no despacho
+        // assinado. Concluir a venda na origem entregaria o pneu a ninguem — o
+        // cliente esta na loja do vendedor, do outro lado da cidade.
+        if (isCrossStoreReservation(transferData)) {
           throw new Error(
-            transferData.status === "SOLICITADO"
-              ? "Esta reserva ainda não foi aprovada. Aprove e reserve os pneus antes de concluir a venda."
-              : `Esta reserva não está mais aberta (situação atual: ${transferData.status}).`
+            `Esta reserva é de ${transferData.requestedByCompanyName || "outra loja"} — ela precisa dos dois ` +
+            `avais e vira transferência. A baixa acontece quando o envio for assinado.`
           );
         }
+        // SOLICITADO e o estado normal de uma reserva de cliente: ela nasce com o
+        // pneu preso e e esta confirmacao que da a baixa. PENDENTE/AGENDADO ficam
+        // aceitos para as reservas aprovadas por versoes anteriores do sistema.
+        if (
+          transferData.status !== "SOLICITADO" &&
+          transferData.status !== "PENDENTE" &&
+          transferData.status !== "AGENDADO"
+        ) {
+          throw new Error(`Esta reserva não está mais aberta (situação atual: ${transferData.status}).`);
+        }
         if (user.role !== "admin" && transferData.sourceCompanyId !== user.companyId) {
-          throw new Error("Só a loja que tem o pneu no estoque pode concluir esta venda.");
+          throw new Error("Só a loja que tem o pneu no estoque pode confirmar esta reserva.");
         }
 
         const items = transferData.items || [];
@@ -2614,6 +2817,15 @@ export default function App() {
                 }
               }
             : {}),
+          // Confirmar E dar baixa sao o mesmo clique numa reserva da propria
+          // loja, entao os dois carimbos saem juntos: quem aprovou e quem
+          // fechou a venda sao a mesma pessoa, no mesmo instante.
+          approvedByUid: user.uid,
+          approvedByName: user.displayName,
+          approvedAt: serverTimestamp(),
+          sourceApprovedByUid: user.uid,
+          sourceApprovedByName: user.displayName,
+          sourceApprovedAt: serverTimestamp(),
           saleCompletedByUid: user.uid,
           saleCompletedByName: user.displayName,
           saleCompletedAt: serverTimestamp(),
@@ -2621,8 +2833,8 @@ export default function App() {
         });
       });
     } catch (err: any) {
-      console.error("Erro ao concluir a venda:", err);
-      throw describeTransferWriteError(err, "Erro ao concluir a venda.");
+      console.error("Erro ao confirmar a reserva:", err);
+      throw describeTransferWriteError(err, "Erro ao confirmar a reserva e dar baixa.");
     }
   };
 
@@ -3035,17 +3247,41 @@ export default function App() {
               </>
             )}
 
+            {/* Reservas fica ANTES de Transferências de propósito: é a fila que
+                tem cliente esperando do outro lado, e a que trava saldo no
+                estoque enquanto ninguém decide. */}
             <button
               type="button"
-              onClick={() => setActiveTab("transfers")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                activeTab === "transfers"
+              onClick={() => setActiveTab("reservations")}
+              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2.5 border ${
+                activeTab === "reservations"
                   ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
                   : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
               }`}
             >
-              <ArrowLeftRight size={14} className="stroke-[2px]" /> {user.role === "vendedor" ? "Minhas Reservas" : "Transferências"}
+              <span className="flex items-center gap-2.5">
+                <ShoppingBag size={14} className="stroke-[2px]" /> {user.role === "vendedor" ? "Minhas Reservas" : "Reservas"}
+              </span>
+              {pendingReservationsCount > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-500 text-slate-900 text-[9px] font-black">
+                  {pendingReservationsCount}
+                </span>
+              )}
             </button>
+
+            {user.role !== "vendedor" && (
+              <button
+                type="button"
+                onClick={() => setActiveTab("transfers")}
+                className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
+                  activeTab === "transfers"
+                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                    : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                }`}
+              >
+                <ArrowLeftRight size={14} className="stroke-[2px]" /> Transferências
+              </button>
+            )}
 
             {canManageUsers && (
               <button
@@ -3265,14 +3501,32 @@ export default function App() {
 
         <button
           type="button"
-          onClick={() => setActiveTab("transfers")}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
-            activeTab === "transfers" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+          onClick={() => setActiveTab("reservations")}
+          className={`relative flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
+            activeTab === "reservations" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
           }`}
         >
-          <ArrowLeftRight size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">{user.role === "vendedor" ? "Reservas" : "Transf."}</span>
+          <ShoppingBag size={18} />
+          {pendingReservationsCount > 0 && (
+            <span className="absolute top-2 right-1/2 translate-x-4 inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full bg-gold-500 text-slate-900 text-[8px] font-black">
+              {pendingReservationsCount}
+            </span>
+          )}
+          <span className="text-[9px] font-extrabold uppercase tracking-wide">Reservas</span>
         </button>
+
+        {user.role !== "vendedor" && (
+          <button
+            type="button"
+            onClick={() => setActiveTab("transfers")}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
+              activeTab === "transfers" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+            }`}
+          >
+            <ArrowLeftRight size={18} />
+            <span className="text-[9px] font-extrabold uppercase tracking-wide">Transf.</span>
+          </button>
+        )}
 
         <button
           type="button"
@@ -3482,6 +3736,18 @@ export default function App() {
               movements={movements}
               companies={companies}
               user={user}
+            />
+          )}
+
+          {activeTab === "reservations" && (
+            <Reservations
+              reservations={reservations}
+              companies={companies}
+              user={user}
+              onConfirmSale={handleCompleteSale}
+              onApproveStep={handleApproveReservationStep}
+              onReject={handleRejectTransferRequest}
+              onCancel={handleCancelTransfer}
             />
           )}
 

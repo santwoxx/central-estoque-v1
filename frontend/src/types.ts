@@ -184,20 +184,22 @@ export type TransferRequestKind = "ENVIO" | "SOLICITACAO";
 // loja para um cliente final — e nao para outra filial. Nao existe documento em
 // `companies` com este id, e nenhum usuario pertence a ele: por isso um pedido
 // com este destino NUNCA entra no fluxo de assinatura/recebimento (ninguem
-// poderia assinar a chegada). Ele nasce SOLICITADO, a loja de ORIGEM aprova
-// (reservando o saldo) e a propria loja de origem o encerra em "Concluir Venda",
-// que da a baixa definitiva no estoque.
+// poderia assinar a chegada). Ele nasce SOLICITADO e JA PRENDE O PNEU: a mesma
+// transacao que grava o pedido soma `reservedQuantity` no documento de estoque,
+// entao o pneu aparece como reservado para todo mundo desde o primeiro segundo.
+// O que a confirmacao faz nao e prender — e dar a BAIXA.
 //
 // EXCECAO — vendedor de outra filial:
 // se quem abriu a reserva pertence a uma loja DIFERENTE da dona do pneu
 // (`requestedByCompanyId != sourceCompanyId`), o pneu esta numa loja e o cliente
 // esta em outra: encerrar a venda na origem nao entregaria nada a ninguem. Nesse
-// caso a APROVACAO troca o destino de 'CLIENTE' para a loja do vendedor, e o
-// pedido deixa de ser reserva de cliente para virar uma transferencia comum —
-// quatro assinaturas, saldo reservado na origem ate o despacho. O `customerName`
-// permanece no documento como registro de para quem o pneu esta indo, e e ele
-// que a tela usa para continuar mostrando "reserva de cliente" depois da
-// conversao (ver `isConvertedCustomerOrder` em TransferOrders.tsx).
+// caso, depois dos DOIS avais (dono da origem + administrador), o destino troca
+// de 'CLIENTE' para a loja do vendedor e o pedido deixa de ser reserva de
+// cliente para virar uma transferencia comum — quatro assinaturas, saldo
+// reservado na origem ate o despacho. O `customerName` permanece no documento
+// como registro de para quem o pneu esta indo, e e ele que a tela usa para
+// continuar mostrando "reserva de cliente" depois da conversao (ver
+// `isReservationOrder` abaixo).
 //
 // `isCustomerReservation` continua respondendo pelo ESTADO ATUAL do pedido:
 // depois da conversao ela e falsa, que e exatamente o que libera as assinaturas.
@@ -210,17 +212,82 @@ export function isCustomerReservation(
   return t?.destinationCompanyId === CLIENTE_COMPANY_ID;
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Reserva de cliente: os DOIS caminhos
+//
+// O que separa um caso do outro e uma unica pergunta: o pneu ja esta na loja
+// onde o vendedor atende?
+//
+//  • MESMA LOJA (`requestedByCompanyId` == `sourceCompanyId`, ou vendedor sem
+//    loja vinculada) — o pneu esta na prateleira do lado. Ele e PRESO no
+//    instante do pedido (reserva ativa + `reservedQuantity` somado no estoque),
+//    fica marcado como reservado para todo mundo, e UMA confirmacao — do dono
+//    da loja ou do administrador — da a BAIXA definitiva e registra a venda.
+//
+//  • OUTRA LOJA (`requestedByCompanyId` != `sourceCompanyId`) — o pneu esta numa
+//    filial e o cliente esta em outra, entao a reserva so serve se o pneu
+//    viajar. Ele tambem e preso no instante do pedido, mas o pedido depende de
+//    DUAS confirmacoes obrigatorias: a do DONO da loja que tem o pneu e a do
+//    ADMINISTRADOR. Quando as duas existem, o destino deixa de ser o balcao e
+//    passa a ser a loja do vendedor: dali em diante e uma transferencia comum,
+//    com as quatro assinaturas, e a baixa acontece no despacho.
+// ─────────────────────────────────────────────────────────────────
+
+// Uma reserva cujo pneu pertence a OUTRA loja — a que exige dupla aprovacao.
+// Responde pelo pedido AINDA EM ANALISE: depois de convertido o destino ja nao
+// e mais 'CLIENTE' e a resposta vira falsa (use `isReservationOrder` para
+// reconhecer o pedido em qualquer fase da vida dele).
+export function isCrossStoreReservation(
+  t: { destinationCompanyId?: string; sourceCompanyId?: string; requestedByCompanyId?: string } | null | undefined
+): boolean {
+  return (
+    isCustomerReservation(t) &&
+    !!t?.requestedByCompanyId &&
+    t.requestedByCompanyId !== t.sourceCompanyId
+  );
+}
+
+// Reserva de cliente em QUALQUER fase — inclusive depois de virar transferencia.
+// O `customerName` e o que denuncia a origem do pedido: transferencia comum
+// nenhuma carrega nome de cliente.
+export function isReservationOrder(
+  t: { destinationCompanyId?: string; customerName?: string } | null | undefined
+): boolean {
+  return isCustomerReservation(t) || !!(t?.customerName || "").trim();
+}
+
+// Quais avais uma reserva ainda precisa para sair do lugar.
+export function reservationApprovalState(t: TransferOrder | null | undefined): {
+  needsDual: boolean;
+  hasSource: boolean;
+  hasAdmin: boolean;
+  complete: boolean;
+} {
+  const needsDual = isCrossStoreReservation(t);
+  const hasSource = !!t?.sourceApprovedByUid;
+  const hasAdmin = !!t?.adminApprovedByUid;
+  return {
+    needsDual,
+    hasSource,
+    hasAdmin,
+    complete: needsDual ? hasSource && hasAdmin : hasSource || hasAdmin
+  };
+}
+
 // Reserva de estoque presa por um pedido de transferencia.
 //
 // Enquanto `active` for true, a quantidade de cada item esta somada em
 // `reservedQuantity` no documento de estoque da ORIGEM, e portanto indisponivel
 // para venda/baixa.
 //
-// Ela NASCE em dois pontos, sempre na mesma transacao que grava o pedido:
+// Ela NASCE em tres pontos, sempre na mesma transacao que grava o pedido:
 //   • na CRIACAO de um ENVIO aberto pela propria loja de origem — o pneu ja sai
 //     do saldo vendavel no instante em que o pedido existe, sem assinatura nenhuma;
-//   • na APROVACAO de uma SOLICITACAO (inclusive reserva de cliente), porque ali
-//     quem abriu o pedido foi o destino, que nao escreve no estoque alheio.
+//   • na CRIACAO de uma RESERVA DE CLIENTE por um vendedor — de qualquer loja,
+//     inclusive de outra filial. E o que faz "o vendedor reservou" ser visivel
+//     para todos na hora, sem depender de ninguem confirmar nada;
+//   • na APROVACAO de uma SOLICITACAO entre filiais aberta pelo DESTINO, que nao
+//     escreve no estoque alheio na hora de pedir.
 //
 // E e liberada no despacho (o pneu sai de verdade), no cancelamento, na
 // liberacao manual pela origem e na exclusao do pedido por um administrador.
@@ -316,10 +383,24 @@ export interface TransferOrder {
   // Reserva de estoque na origem. null/ausente = nada preso.
   reservation?: TransferReservation | null;
 
-  // Quem deu o aval na solicitacao (fluxo SOLICITACAO -> PENDENTE/AGENDADO)
+  // Quem deu o aval na solicitacao (fluxo SOLICITACAO -> PENDENTE/AGENDADO).
+  // Numa reserva de dupla aprovacao, e quem deu o SEGUNDO aval — o que
+  // efetivamente destravou o pedido.
   approvedByUid?: string;
   approvedByName?: string;
   approvedAt?: any;
+
+  // ── Avais de uma reserva aberta por VENDEDOR ──────────────────────
+  // Guardados separados porque a reserva de pneu de OUTRA loja exige os DOIS
+  // (ver isCrossStoreReservation): o dono da loja que tem o pneu confirma que
+  // abre mao dele, e o administrador confirma a transferencia entre filiais.
+  // Enquanto faltar um, o pedido fica em SOLICITADO com o pneu preso.
+  sourceApprovedByUid?: string;   // dono (alimentador) da loja de ORIGEM
+  sourceApprovedByName?: string;
+  sourceApprovedAt?: any;
+  adminApprovedByUid?: string;    // administrador do sistema
+  adminApprovedByName?: string;
+  adminApprovedAt?: any;
 
   // Reserva de cliente (destino CLIENTE_COMPANY_ID): nome do cliente informado
   // pelo vendedor. Vira o `partyName` do movimento de saida quando a venda fecha.
@@ -396,5 +477,5 @@ export interface AppNotification {
   createdAt: number; // epoch millis
   read: boolean;
   refId?: string; // transferId or stockItemId, for click-through context
-  targetTab?: "transfers" | "unified" | "inventory";
+  targetTab?: "transfers" | "reservations" | "unified" | "inventory";
 }

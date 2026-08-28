@@ -22,7 +22,8 @@ import {
   FileSpreadsheet,
   Loader2,
   Camera,
-  Check
+  Check,
+  Lock
 } from "lucide-react";
 
 interface StockTableProps {
@@ -722,7 +723,7 @@ export default function StockTable({
     if (qty > free) {
       setErrorMsg(
         `Quantidade insuficiente em estoque. Disponível para baixa: ${free}` +
-        (reserved > 0 ? ` (${reserved} un reservadas para uma transferência aprovada).` : ".")
+        (reserved > 0 ? ` (${reserved} un reservadas para clientes ou transferências).` : ".")
       );
       return;
     }
@@ -1209,9 +1210,24 @@ export default function StockTable({
                     {paginatedItems.map(item => {
                       const fallbackImg = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZDQ5MzIxIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIyIi8+PHBhdGggZD0iTTEyIDJ2NCBNMTIgMTh2NCBNNC45MyA0LjkzbDIuODMgMi44MyBNMTYuMjQgMTYuMjRsMi44MyAyLjgzIE0yIDEyaDQgTTE4IDEyaDQgTTQuOTMgMTkuMDdsMi44My0yLjgzIE0xNi4yNCA3Ljc2bDIuODMtMi44MyIvPjwvc3ZnPg==";
                       const activeImg = item.imageUrl || fallbackImg;
+                      // Pneu com reserva ativa ganha a linha inteira em ambar e uma
+                      // barra na lateral. O selo pequeno na coluna de quantidade
+                      // continua dizendo QUANTO esta preso; a cor da linha e o que
+                      // faz a pessoa notar de longe, passando o olho pela tabela.
+                      const rowReserved = reservedQuantityOf(item);
                       
                       return (
-                        <tr key={item.id} className="hover:bg-gold-50/10 text-slate-800 transition-all border-b border-slate-100/60">
+                        <tr
+                          key={item.id}
+                          title={rowReserved > 0
+                            ? `${rowReserved} un reservadas — livre para venda: ${availableQuantity(item)} un.`
+                            : undefined}
+                          className={`text-slate-800 transition-all border-b ${
+                            rowReserved > 0
+                              ? "bg-amber-50/70 hover:bg-amber-100/70 border-amber-200/70 border-l-4 border-l-amber-400"
+                              : "hover:bg-gold-50/10 border-slate-100/60"
+                          }`}
+                        >
                           
                           {/* Image Thumbnail Column */}
                           <td className="py-2 px-2 text-center align-middle">
@@ -1276,15 +1292,15 @@ export default function StockTable({
                             }`}>
                               {item.quantity <= 4 && <AlertTriangle size={12} className="text-red-600 shrink-0" />}
                               {item.quantity} un
-                              {reservedQuantityOf(item) > 0 && (
-                                <span
-                                  className="ml-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 py-0.5 uppercase tracking-wider whitespace-nowrap"
-                                  title={`${reservedQuantityOf(item)} un reservadas para uma transferência aprovada — livre: ${availableQuantity(item)} un.`}
-                                >
-                                  {reservedQuantityOf(item)} reserv.
-                                </span>
-                              )}
                             </span>
+                            {rowReserved > 0 && (
+                              <span
+                                className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500 text-white border border-amber-600 text-[9px] font-black uppercase tracking-wider whitespace-nowrap shadow-sm"
+                                title={`${rowReserved} un reservadas para clientes ou transferências — livre: ${availableQuantity(item)} un.`}
+                              >
+                                <Lock size={9} className="stroke-[3px]" /> {rowReserved} reservado{rowReserved > 1 ? "s" : ""}
+                              </span>
+                            )}
                           </td>
 
                           {/* Unit Price columns */}
@@ -1445,7 +1461,7 @@ export default function StockTable({
                             if (availableQuantity(item) <= 0) {
                               alert(
                                 reservedQuantityOf(item) > 0
-                                  ? `Todas as ${reservedQuantityOf(item)} un deste pneu estão reservadas para uma transferência aprovada.`
+                                  ? `Todas as ${reservedQuantityOf(item)} un deste pneu estão reservadas para clientes ou transferências.`
                                   : "Este pneu está com saldo zerado."
                               );
                             } else {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppNotification, NotificationType, StockItem, TransferOrder, TransferStatus, UserRole } from "../types";
+import { AppNotification, NotificationType, StockItem, TransferOrder, TransferStatus, UserRole, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "../types";
 import { toMillis } from "../utils";
 
 const MAX_NOTIFICATIONS = 40;
@@ -36,7 +36,17 @@ function saveStored(uid: string, list: AppNotification[]) {
 function getTransferActorUid(transfer: TransferOrder, prevStatus: TransferStatus | null): string | null {
   if (prevStatus === null) return transfer.requestedByUid || null;
   if (transfer.status === "EM_TRANSITO") return transfer.dispatch?.sender?.signedByUid || transfer.delivery?.signedByUid || null;
-  if (transfer.status === "CONCLUIDO") return transfer.arrival?.receiver?.signedByUid || transfer.receipt?.signedByUid || null;
+  // Reserva de cliente confirmada nao passa por assinatura de chegada: quem a
+  // encerrou esta em saleCompletedByUid. Sem esta linha, quem clicou em
+  // "Confirmar e dar baixa" recebia um sino avisando do proprio clique.
+  if (transfer.status === "CONCLUIDO") {
+    return (
+      transfer.saleCompletedByUid ||
+      transfer.arrival?.receiver?.signedByUid ||
+      transfer.receipt?.signedByUid ||
+      null
+    );
+  }
   if (transfer.status === "CANCELADO") return transfer.cancelledByUid || null;
   if (transfer.status === "RECUSADO") return transfer.rejectedByUid || null;
   if (transfer.status === "PENDENTE" && prevStatus === "SOLICITADO") return transfer.approvedByUid || null;
@@ -56,6 +66,46 @@ function describeTransferEvent(
   const itemsLabel = itemCount === 1 ? "1 item" : `${itemCount} itens`;
   const route = `${transfer.sourceCompanyName} → ${transfer.destinationCompanyName}`;
   const status = transfer.status;
+
+  // ── Reserva de cliente ───────────────────────────────────────────
+  // Ela tem um vocabulário próprio: não é "transferência solicitada", é um pneu
+  // que já está preso na prateleira com o nome de um cliente. E tem uma terceira
+  // ponta que a transferência não tem — a loja DO VENDEDOR, que numa reserva de
+  // outra filial não é nem origem nem destino, e mesmo assim quer saber.
+  const isRequesterStore = !!transfer.requestedByCompanyId && user.companyId === transfer.requestedByCompanyId;
+  const crossStore = isCrossStoreReservation(transfer);
+  const customer = transfer.customerName || "um cliente";
+
+  if (isCustomerReservation(transfer) && status === "SOLICITADO" && prevStatus === null) {
+    const whoNeedsToAct = crossStore
+      ? `Depende do seu aval e do administrador para virar transferência.`
+      : `Confirme para dar a baixa e registrar a venda.`;
+    return {
+      type: isSource || isGlobal ? "TRANSFER_ACTION_REQUIRED" : "TRANSFER_UPDATE",
+      title: crossStore ? "Reserva de outra filial" : "Nova reserva de cliente",
+      message: isSource
+        ? `${transfer.requestedByName} reservou ${itemsLabel} do seu estoque para ${customer}. ` +
+          `O pneu já está preso. ${whoNeedsToAct}`
+        : isGlobal
+        ? `${transfer.requestedByName} reservou ${itemsLabel} em ${transfer.sourceCompanyName} para ${customer}.` +
+          (crossStore ? " Precisa do seu aval como administrador." : "")
+        : isRequesterStore
+        ? `Seu vendedor ${transfer.requestedByName} reservou ${itemsLabel} em ${transfer.sourceCompanyName} para ${customer}.`
+        : `Reserva de ${itemsLabel} aberta em ${transfer.sourceCompanyName} para ${customer}.`
+    };
+  }
+
+  // Confirmação da reserva da casa: SOLICITADO -> CONCLUIDO sem passar por
+  // trânsito nenhum. Sem este ramo cairia no texto de "transferência concluída".
+  if (isCustomerReservation(transfer) && status === "CONCLUIDO" && prevStatus !== "CONCLUIDO") {
+    return {
+      type: "TRANSFER_COMPLETED",
+      title: "Reserva confirmada e baixada",
+      message:
+        `${transfer.saleCompletedByName || transfer.sourceCompanyName} confirmou a reserva de ${customer}: ` +
+        `${itemsLabel} saíram do estoque de ${transfer.sourceCompanyName}.`
+    };
+  }
 
   // Um ENVIO aberto pela loja de origem ja nasce com o saldo preso. Dizer isso na
   // notificacao e o que evita a pergunta seguinte ("o pneu ainda esta la?"): quem
@@ -104,6 +154,23 @@ function describeTransferEvent(
   // Aprovada: a origem reservou os pneus. É o evento mais importante do fluxo —
   // a partir daqui aquele saldo saiu do disponível de quem enviou.
   if ((status === "PENDENTE" || status === "AGENDADO") && prevStatus === "SOLICITADO") {
+    // Reserva de outra filial que juntou os dois avais: ela deixa de ser reserva
+    // e vira transferência agora. Quem lê precisa entender a mudança de regime —
+    // a partir daqui o pneu depende de assinatura, não de aprovação.
+    if (transfer.customerName) {
+      return {
+        type: isSource || isGlobal ? "TRANSFER_ACTION_REQUIRED" : "TRANSFER_UPDATE",
+        title: "Reserva aprovada — virou transferência",
+        message: isSource
+          ? `Os dois avais saíram: ${itemsLabel} reservados para ${transfer.customerName} viram uma ` +
+            `transferência para ${transfer.destinationCompanyName}. Assine o envio quando o pneu sair.`
+          : isDestination
+          ? `${transfer.sourceCompanyName} liberou ${itemsLabel} reservados para ${transfer.customerName}. ` +
+            `Eles vêm para cá — confirme o recebimento quando chegarem.`
+          : `${route}: reserva de ${transfer.customerName} aprovada e convertida em transferência.`
+      };
+    }
+
     const reservedNote = transfer.reservation?.active ? " Os itens foram reservados." : "";
     return {
       type: isSource || isGlobal ? "TRANSFER_ACTION_REQUIRED" : "TRANSFER_UPDATE",
@@ -271,7 +338,10 @@ export function useAppNotifications(
         createdAt: toMillis(t.updatedAt) || Date.now(),
         read: false,
         refId: t.id,
-        targetTab: "transfers"
+        // Reserva de cliente vive na aba Reservas, em qualquer fase — inclusive
+        // depois de virar transferência. Mandar quem clica na notificação para
+        // Transferências levaria o vendedor a uma aba que ele nem enxerga.
+        targetTab: isReservationOrder(t) ? "reservations" : "transfers"
       });
     }
 

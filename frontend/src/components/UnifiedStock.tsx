@@ -524,7 +524,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
             const reserved = reservedQuantityOf(existingDoc);
             if (reserved > 0 && numValue < reserved) {
               throw new Error(
-                `${reserved} un deste pneu estão reservadas para uma transferência aprovada em ` +
+                `${reserved} un deste pneu estão reservadas para clientes ou transferências em ` +
                 `${targetCompany.name}. O saldo não pode ficar abaixo disso — libere a reserva na aba Transferências.`
               );
             }
@@ -1139,6 +1139,22 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         </div>
       )}
 
+      {/* Legenda da cor âmbar. Só aparece quando existe reserva no que está na
+          tela — uma legenda fixa vira ruído, e a cor sem explicação vira dúvida
+          ("por que essa célula está amarela?"). */}
+      {filteredItems.some(item => Object.values(item.docs).some(doc => reservedQuantityOf(doc) > 0)) && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-900">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-white border border-amber-600 text-[8px] font-black uppercase tracking-wider shrink-0">
+            <Lock size={8} className="stroke-[3px]" /> reserv.
+          </span>
+          <span>
+            Célula em âmbar = pneu <strong>reservado</strong> para um cliente ou para uma transferência. Ele
+            continua no estoque físico, mas não pode ser vendido nem baixado até a reserva ser confirmada,
+            recusada ou cancelada — acompanhe na aba <strong>Reservas</strong>.
+          </span>
+        </div>
+      )}
+
       {/* Unified Stock Table - Desktop View */}
       <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-200">
         <table className="w-full border-collapse text-left text-sm font-sans text-slate-850">
@@ -1251,13 +1267,31 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                   {visibleCompanies.map(comp => {
                     const docItem = item.docs[comp.id];
                     const qty = docItem ? docItem.quantity : 0;
+                    // Parte deste saldo pode estar prometida: reserva de cliente
+                    // aberta por um vendedor, ou transferência já aprovada. O
+                    // número grande continua sendo o FÍSICO (é o que está na
+                    // prateleira); o selo abaixo dele diz quanto disso já tem dono.
+                    const reserved = reservedQuantityOf(docItem);
+                    const free = docItem ? availableQuantity(docItem) : 0;
+                    // A célula inteira vira âmbar quando há reserva: numa planilha
+                    // com dezenas de colunas um selo pequeno passa batido — é a cor
+                    // de fundo que faz o olho parar naquele cruzamento pneu × loja
+                    // e entender que aquele saldo já tem dono.
                     const isEditing = editingCell?.sku === item.sku && editingCell?.field === comp.id;
                     const editable = canEditCompany(comp.id);
 
                     return (
                       <td
                         key={comp.id}
-                        className={`group relative border-r border-slate-200 px-1 py-3 text-center ${editable ? "cursor-pointer hover:bg-gold-400/10" : "bg-slate-50/30"}`}
+                        title={reserved > 0
+                          ? `${comp.name}: ${reserved} un reservadas — livre para venda: ${free} un.`
+                          : undefined}
+                        className={`group relative border-r px-1 py-3 text-center ${
+                          reserved > 0
+                            ? "bg-amber-100/70 border-amber-200 ring-1 ring-inset ring-amber-300/70 " +
+                              (editable ? "cursor-pointer hover:bg-amber-200/70" : "")
+                            : `border-slate-200 ${editable ? "cursor-pointer hover:bg-gold-400/10" : "bg-slate-50/30"}`
+                        }`}
                         onClick={() => editable && startEdit(item, comp.id, qty.toString())}
                       >
                         {/* Atalho de movimentação DESTA empresa: aparece ao passar o
@@ -1290,8 +1324,15 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                           />
                         ) : (
                           qty ? (
-                            <span className={`inline-block px-2 py-0.5 rounded-lg border font-black text-xs ${qty > 5 ? "bg-gold-500/10 text-gold-700 border-gold-400/20" : "bg-amber-100/60 text-amber-800 border-amber-300/30"}`}>
-                              {qty} un
+                            <span className="inline-flex flex-col items-center gap-0.5">
+                              <span className={`inline-block px-2 py-0.5 rounded-lg border font-black text-xs ${qty > 5 ? "bg-gold-500/10 text-gold-700 border-gold-400/20" : "bg-amber-100/60 text-amber-800 border-amber-300/30"}`}>
+                                {qty} un
+                              </span>
+                              {reserved > 0 && (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-500 text-white border border-amber-600 text-[8px] font-black uppercase tracking-wider leading-none shadow-xs">
+                                  <Lock size={8} className="stroke-[3px]" /> {reserved} reserv.
+                                </span>
+                              )}
                             </span>
                           ) : (
                             <span className="text-slate-300 font-bold">—</span>
@@ -1402,11 +1443,26 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       <div className="block md:hidden space-y-4">
         {filteredItems.map((item) => {
           const isProcessing = loadingSku === item.sku;
+          // Mesma leitura do desktop, adaptada ao cartão: no celular não existe
+          // grade de células para pintar, então quem carrega a cor é o cartão.
+          const cardReserved = Object.values(item.docs).reduce(
+            (acc, doc) => acc + reservedQuantityOf(doc),
+            0
+          );
           return (
             <div 
               key={item.sku} 
-              className={`bg-slate-50/40 rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3 relative transition-all ${isProcessing ? "opacity-50" : ""}`}
+              className={`rounded-2xl p-4 border shadow-xs space-y-3 relative transition-all ${isProcessing ? "opacity-50" : ""} ${
+                cardReserved > 0
+                  ? "bg-amber-50/70 border-amber-300 border-l-4 border-l-amber-500"
+                  : "bg-slate-50/40 border-slate-200"
+              }`}
             >
+              {cardReserved > 0 && (
+                <span className="absolute top-3 right-3 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-white border border-amber-600 text-[8px] font-black uppercase tracking-wider shadow-sm">
+                  <Lock size={8} className="stroke-[3px]" /> {cardReserved} reserv.
+                </span>
+              )}
               {/* Product Info */}
               <div className="flex justify-between items-start">
                 <div className="space-y-1">
@@ -1506,13 +1562,26 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                   {visibleCompanies.map(comp => {
                     const docItem = item.docs[comp.id];
                     const qty = docItem ? docItem.quantity : 0;
+                    // Parte deste saldo pode estar prometida: reserva de cliente
+                    // aberta por um vendedor, ou transferência já aprovada. O
+                    // número grande continua sendo o FÍSICO (é o que está na
+                    // prateleira); o selo abaixo dele diz quanto disso já tem dono.
+                    const reserved = reservedQuantityOf(docItem);
+                    const free = docItem ? availableQuantity(docItem) : 0;
+                    // Mesma convenção do desktop, no formato do celular: o quadrado
+                    // da loja fica âmbar quando aquele saldo já tem dono.
                     const isEditing = editingCell?.sku === item.sku && editingCell?.field === comp.id;
                     const editable = canEditCompany(comp.id);
 
                     return (
                       <div 
                         key={comp.id} 
-                        className={`p-2 rounded-xl border border-slate-200/80 flex flex-col justify-center items-center text-center ${editable ? "cursor-pointer hover:bg-gold-400/10 bg-white" : "bg-slate-100/50"}`}
+                        title={reserved > 0 ? `${reserved} un reservadas — livre: ${free} un.` : undefined}
+                        className={`p-2 rounded-xl border flex flex-col justify-center items-center text-center ${
+                          reserved > 0
+                            ? `border-amber-300 bg-amber-100/70 ${editable ? "cursor-pointer hover:bg-amber-200/70" : ""}`
+                            : `border-slate-200/80 ${editable ? "cursor-pointer hover:bg-gold-400/10 bg-white" : "bg-slate-100/50"}`
+                        }`}
                         onClick={() => editable && startEdit(item, comp.id, qty.toString())}
                       >
                         <span className="text-[8px] text-slate-500 font-bold block truncate max-w-full uppercase">{comp.name}</span>
@@ -1528,9 +1597,16 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                             className="w-16 px-1 mt-1 text-center outline-none bg-white border border-gold-400 rounded font-bold text-xs"
                           />
                         ) : (
-                          <span className={`mt-1 font-black text-xs ${qty > 0 ? "text-gold-700 font-black" : "text-slate-300"}`}>
-                            {qty ? `${qty} un` : "—"}
-                          </span>
+                          <>
+                            <span className={`mt-1 font-black text-xs ${qty > 0 ? "text-gold-700 font-black" : "text-slate-300"}`}>
+                              {qty ? `${qty} un` : "—"}
+                            </span>
+                            {reserved > 0 && (
+                              <span className="mt-0.5 inline-flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-amber-500 text-white border border-amber-600 text-[7px] font-black uppercase tracking-wider leading-none">
+                                <Lock size={7} className="stroke-[3px]" /> {reserved} reserv.
+                              </span>
+                            )}
+                          </>
                         )}
                       </div>
                     );

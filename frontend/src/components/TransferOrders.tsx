@@ -371,7 +371,7 @@ export default function TransferOrders({
     if (qty > maxQty) {
       setCreateError(
         `Quantidade indisponível. Saldo livre: ${maxQty} un` +
-        (reserved > 0 ? ` (${reserved} un já reservadas para outra transferência).` : ".")
+        (reserved > 0 ? ` (${reserved} un já reservadas para clientes ou transferências).` : ".")
       );
       return;
     }
@@ -504,22 +504,15 @@ export default function TransferOrders({
   // Aprovar já reserva: entre o clique e a reserva não existe janela em que o
   // pneu esteja prometido mas ainda vendável (as duas coisas são uma transação só).
   //
-  // A reserva de cliente de um vendedor de OUTRA filial é o caso em que aprovar
-  // muda o rumo do pedido: ele vira uma transferência para a loja dele e passa a
-  // exigir as quatro assinaturas. Quem aprova tem que saber disso ANTES de clicar.
+  // Só cai aqui a SOLICITAÇÃO entre filiais. Reserva de cliente é decidida na aba
+  // Reservas, que é onde moram a confirmação com baixa e os dois avais.
   const handleApproveClick = async (t: TransferOrder) => {
     if (!onApproveRequest) return;
     const units = totalUnitsOf(t);
-    const becomesTransfer = isCrossStoreRequest(t);
-    const message = becomesTransfer
-      ? `Aprovar a reserva de ${t.requestedByName} para ${t.customerName || "o cliente"}?\n\n` +
-        `${units} un serão RESERVADAS no seu estoque agora, e o pedido vira uma ` +
-        `TRANSFERÊNCIA para ${t.requestedByCompanyName || "a loja do vendedor"} — ` +
-        `com as assinaturas de envio e recebimento normais.\n\n` +
-        `O pneu só sai do seu estoque quando você assinar a saída.`
-      : `Aprovar esta solicitação de ${t.destinationCompanyName}?\n\n` +
-        `${units} un serão RESERVADAS no seu estoque e ficarão bloqueadas para venda ` +
-        `até o envio ser assinado.`;
+    const message =
+      `Aprovar esta solicitação de ${t.destinationCompanyName}?\n\n` +
+      `${units} un serão RESERVADAS no seu estoque e ficarão bloqueadas para venda ` +
+      `até o envio ser assinado.`;
     if (!window.confirm(message)) return;
     setProcessingId(t.id);
     try {
@@ -1594,7 +1587,7 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                           <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
                             Saldo livre: {selectedAvailable} un
                             {selectedReserved > 0 && (
-                              <span className="text-amber-700"> • {selectedReserved} un reservadas para outra transferência</span>
+                              <span className="text-amber-700"> • {selectedReserved} un reservadas para clientes ou transferências</span>
                             )}
                           </div>
                         </div>

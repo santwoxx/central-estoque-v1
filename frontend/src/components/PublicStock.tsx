@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { StockItem, Company, CLIENTE_COMPANY_ID } from "../types";
-import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X } from "lucide-react";
-import { availableQuantity, mapStockDoc, matchesTireSize } from "../utils";
+import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X, Lock } from "lucide-react";
+import { availableQuantity, mapStockDoc, matchesTireSize, reservedQuantityOf } from "../utils";
 
 interface ConsolidatedItem {
   sku: string;
@@ -60,6 +60,14 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
   // admin entra junto porque ele também enxerga esta aba (e as regras do
   // Firestore o autorizam a criar o pedido).
   const canReserve = !!onCreateTransfer && (user?.role === "vendedor" || user?.role === "admin");
+
+  // ── Pneu reservado: quem vê ──────────────────────────────────────
+  // Para QUEM ESTÁ LOGADO, um pneu preso por uma reserva continua na tela, com
+  // o selo de reservado: é isso que faz "o vendedor reservou" ser visível para
+  // todo mundo, e é o que evita a pergunta "cadê o pneu que estava aqui?".
+  // Na rota pública (cliente final, sem login) ele some, como antes: anunciar
+  // ao consumidor um pneu que já tem dono é oferecer o que não dá para vender.
+  const showReserved = !!user;
 
   // A loja do vendedor. Vazio quando a credencial foi criada com "Todas as
   // Empresas" — aí não existe loja "da casa" e todo pedido é uma solicitação.
@@ -143,10 +151,12 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       });
       setReserveDone(
         reserveTarget.own
-          ? `Reserva aberta em ${reserveTarget.companyName}. Ela fica EM ANÁLISE com o dono da sua ` +
-            `loja e só bloqueia o pneu depois que ele confirmar.`
-          : `Solicitação enviada para ${reserveTarget.companyName}. O pneu é daquela loja, então o ` +
-            `dono dela precisa confirmar antes de o pneu ficar reservado.`
+          ? `Pneu RESERVADO em ${reserveTarget.companyName}. Ele já saiu do saldo disponível e ` +
+            `aparece como reservado para todas as lojas. Falta só o dono da loja confirmar — ` +
+            `é a confirmação que dá a baixa e fecha a venda.`
+          : `Pneu RESERVADO em ${reserveTarget.companyName} e já bloqueado para outras vendas. ` +
+            `Como ele é de outra filial, o pedido vira uma TRANSFERÊNCIA e depende de dois avais: ` +
+            `o do dono daquela loja e o do administrador.`
       );
       setReserveTarget(null);
     } catch (err: any) {
@@ -224,13 +234,15 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       
     });
 
-    // Filtra apenas produtos que têm alguma quantidade > 0 em alguma filial
-    // Como é um catálogo de vendas, talvez não faça sentido mostrar itens totalmente esgotados
-    // Se quiser mostrar tudo, basta remover o filtro abaixo.
-    // "Disponível" aqui é o saldo LIVRE: pneu reservado para uma transferência
-    // aprovada já tem dono, e prometê-lo de novo no catálogo é venda que não fecha.
+    // "Disponível" aqui é o saldo LIVRE: pneu reservado já tem dono, e prometê-lo
+    // de novo no catálogo é venda que não fecha. Por isso o cliente final (sem
+    // login) não o vê. Quem está logado vê — com o selo de reservado —, porque
+    // para a equipe a informação útil é justamente que o pneu existe e está
+    // separado, não que ele sumiu.
     const availableItems = Array.from(map.values()).filter(item => {
-      return Object.values(item.docs).some(doc => availableQuantity(doc) > 0);
+      return Object.values(item.docs).some(
+        doc => availableQuantity(doc) > 0 || (showReserved && reservedQuantityOf(doc) > 0)
+      );
     });
 
     // O "a partir de" do rodapé sai da loja mais barata ENTRE AS QUE APARECEM —
@@ -255,7 +267,7 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
         return { ...item, cheapestDoc, priceVaries };
       })
       .sort((a, b) => a.sku.localeCompare(b.sku));
-  }, [stock, companies]);
+  }, [stock, companies, showReserved]);
 
   const filteredItems = useMemo(() => {
     const lower = searchTerm.toLowerCase();
@@ -271,11 +283,14 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
 
     if (!focusCompanyId) return matched;
 
-    // Modo exclusivo: some com o que a loja em foco não tem livre.
+    // Modo exclusivo: some com o que a loja em foco não tem. Para quem está
+    // logado, "tem" inclui o que está reservado — some só o que ela realmente
+    // não possui, senão a reserva desapareceria justo da tela da própria loja.
     if (onlyFocusStore) {
       return matched.filter(item => {
         const doc = item.docs[focusCompanyId];
-        return !!doc && availableQuantity(doc) > 0;
+        if (!doc) return false;
+        return availableQuantity(doc) > 0 || (showReserved && reservedQuantityOf(doc) > 0);
       });
     }
 
@@ -285,10 +300,14 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
     // Nada é escondido — as outras filiais continuam logo abaixo.
     const hasFree = (item: ConsolidatedItem) => {
       const doc = item.docs[focusCompanyId];
-      return doc && availableQuantity(doc) > 0 ? 0 : 1;
+      if (doc && availableQuantity(doc) > 0) return 0;
+      // Reservado fica no meio: interessa mais que o pneu de outra filial (é da
+      // casa, dá para checar com quem reservou), e menos que o que está livre.
+      if (doc && showReserved && reservedQuantityOf(doc) > 0) return 1;
+      return 2;
     };
     return [...matched].sort((a, b) => hasFree(a) - hasFree(b) || a.sku.localeCompare(b.sku));
-  }, [consolidatedItems, searchTerm, focusCompanyId, onlyFocusStore]);
+  }, [consolidatedItems, searchTerm, focusCompanyId, onlyFocusStore, showReserved]);
 
   if (loading) {
     return (
@@ -428,13 +447,26 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
             
-            {filteredItems.map((item) => (
+            {filteredItems.map((item) => {
+              // Quanto deste pneu está reservado, somando todas as filiais. Serve
+              // para o cartão INTEIRO mudar de cor: numa grade de dezenas de
+              // cartões, ninguém lê linha por linha — a borda âmbar é o que
+              // entrega "tem reserva aqui" antes de a pessoa abrir o cartão.
+              const itemReserved = showReserved
+                ? Object.values(item.docs).reduce((acc, doc) => acc + reservedQuantityOf(doc), 0)
+                : 0;
+
+              return (
               // Cartão compacto: sem foto (o estoque não tem imagem de pneu, e o
               // placeholder só ocupava 128px de altura em cada cartão). A hierarquia
               // é a que o vendedor usa para achar o pneu: medida > marca > modelo.
               <div
                 key={item.sku}
-                className="bg-white rounded-2xl border border-slate-200 shadow-xs hover:shadow-md hover:border-slate-300 transition-all flex flex-col"
+                className={`rounded-2xl border shadow-xs hover:shadow-md transition-all flex flex-col ${
+                  itemReserved > 0
+                    ? "bg-amber-50/40 border-amber-300 hover:border-amber-400"
+                    : "bg-white border-slate-200 hover:border-slate-300"
+                }`}
               >
                 {/* Cabeçalho: marca, SKU e a medida em destaque */}
                 <div className="px-4 pt-3.5 pb-3">
@@ -442,12 +474,21 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 truncate">
                       {item.brand}
                     </span>
-                    <span
-                      title={item.sku}
-                      className="shrink-0 max-w-[45%] truncate font-mono text-[9px] text-slate-400 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5"
-                    >
-                      {item.sku}
-                    </span>
+                    {itemReserved > 0 ? (
+                      <span
+                        title={`${itemReserved} un deste pneu estão reservadas para clientes.`}
+                        className="shrink-0 inline-flex items-center gap-0.5 bg-amber-500 text-white border border-amber-600 rounded px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider shadow-sm"
+                      >
+                        <Lock size={9} className="stroke-[3px]" /> {itemReserved} reservado{itemReserved > 1 ? "s" : ""}
+                      </span>
+                    ) : (
+                      <span
+                        title={item.sku}
+                        className="shrink-0 max-w-[45%] truncate font-mono text-[9px] text-slate-400 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5"
+                      >
+                        {item.sku}
+                      </span>
+                    )}
                   </div>
 
                   <h3 className="text-xl font-black text-slate-900 tracking-tight leading-none">
@@ -475,12 +516,21 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
 
                       const stockDoc = item.docs[comp.id];
                       const qty = stockDoc ? availableQuantity(stockDoc) : 0;
-                      if (qty === 0) return null; // Só exibe filiais que tem o pneu livre
+                      const reserved = showReserved ? reservedQuantityOf(stockDoc) : 0;
+                      // Sem saldo livre E sem reserva não há o que mostrar. Com
+                      // reserva a linha fica: o pneu existe, está separado para
+                      // um cliente, e quem vê precisa saber disso.
+                      if (qty === 0 && reserved === 0) return null;
+                      const fullyReserved = qty === 0 && reserved > 0;
+                      // Reservado manda na cor da linha: o âmbar vence o destaque
+                      // dourado da própria loja de propósito. "Este pneu tem dono"
+                      // é a informação que muda a conversa com o cliente — "esta é
+                      // a sua filial" o vendedor já sabe.
 
-                      // Pneu da própria loja: o pedido vai para o dono da casa.
-                      // Pneu de outra filial: vira uma solicitação que depende do
-                      // dono DAQUELA loja. Nos dois casos alguém confirma antes de
-                      // o pneu ser bloqueado — muda quem confirma.
+                      // Pneu da própria loja: uma confirmação do dono da casa e
+                      // vira venda. Pneu de outra filial: vira transferência e
+                      // depende de dois avais. Nos dois casos o pneu é bloqueado
+                      // na hora — o que muda é quem decide o destino dele.
                       const own = isOwnStore(comp.id);
 
                       // O preço é DESTA filial. Duas lojas com o mesmo pneu
@@ -492,10 +542,12 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                       return (
                         <div
                           key={comp.id}
-                          className={`flex flex-col gap-1 pl-2 pr-1.5 py-1.5 rounded-lg border ${
-                            own
-                              ? "bg-gold-50/70 border-gold-200"
-                              : "bg-slate-50 border-slate-100"
+                          className={`flex flex-col gap-1 pl-2 pr-1.5 py-1.5 rounded-lg border-l-4 border ${
+                            reserved > 0
+                              ? "bg-amber-100/80 border-amber-300 border-l-amber-500"
+                              : own
+                              ? "bg-gold-50/70 border-gold-200 border-l-gold-400"
+                              : "bg-slate-50 border-slate-100 border-l-slate-200"
                           }`}
                         >
                           {/* O nome da loja ocupa a linha inteira, com a
@@ -514,9 +566,21 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                               {comp.name}
                             </span>
 
-                            <span className="shrink-0 bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded text-[10px] font-black whitespace-nowrap">
-                              {qty} un
-                            </span>
+                            <div className="shrink-0 flex items-center gap-1">
+                              {qty > 0 && (
+                                <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded text-[10px] font-black whitespace-nowrap">
+                                  {qty} un
+                                </span>
+                              )}
+                              {reserved > 0 && (
+                                <span
+                                  title={`${reserved} un reservadas para clientes — presas no estoque até a loja confirmar ou recusar a reserva.`}
+                                  className="inline-flex items-center gap-0.5 bg-amber-500 text-white border border-amber-600 px-1.5 py-0.5 rounded text-[10px] font-black whitespace-nowrap shadow-sm"
+                                >
+                                  <Lock size={9} className="stroke-[3px]" /> {reserved} reserv.
+                                </span>
+                              )}
+                            </div>
                           </div>
 
                           {/* Preco desta loja e a acao, dividindo a segunda
@@ -535,7 +599,13 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                               <span className="text-[10px] text-slate-300">Sem preço</span>
                             )}
 
-                            {canReserve && (
+                            {fullyReserved && (
+                              <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 border border-amber-400 text-[9px] font-black uppercase tracking-wider">
+                                Todo reservado
+                              </span>
+                            )}
+
+                            {canReserve && qty > 0 && (
                               <button
                                 type="button"
                                 onClick={() => openReserveModal({
@@ -548,8 +618,8 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                                 })}
                                 title={
                                   own
-                                    ? `Reservar este pneu na sua loja para um cliente — o dono de ${comp.name} confirma`
-                                    : `Solicitar este pneu a ${comp.name} — o dono daquela loja precisa confirmar`
+                                    ? `Reservar este pneu para um cliente — ele fica preso na hora, e o dono de ${comp.name} confirma a baixa`
+                                    : `Reservar este pneu de ${comp.name} — ele fica preso na hora, e vira transferência com o aval daquela loja e do administrador`
                                 }
                                 className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-1 rounded-md text-[10px] font-black transition-colors cursor-pointer ${
                                   own
@@ -595,16 +665,18 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
 
           </div>
         )}
       </div>
 
       {/* ============ RESERVA PARA CLIENTE ============ */}
-      {/* O pedido nasce SOLICITADO e não segura nada: o pneu só é bloqueado
-          quando a loja de origem aprovar. É por isso que o texto abaixo é
-          explícito — o vendedor não pode prometer o pneu antes disso. */}
+      {/* O pedido nasce SOLICITADO e JÁ SEGURA o pneu: a mesma gravação que cria
+          a reserva soma reservedQuantity no estoque. O que falta depois disso não
+          é o bloqueio, é a decisão — e ela é diferente nos dois casos, por isso os
+          dois avisos abaixo. */}
       {reserveTarget && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl">
@@ -700,14 +772,16 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
 
             {reserveTarget.own ? (
               <p className="mt-4 text-[11px] bg-gold-50 border border-gold-200 text-gold-800 rounded-xl p-2.5">
-                O pedido fica <strong>em análise</strong> com o dono de {reserveTarget.companyName}. O pneu
-                só sai do saldo disponível depois que ele confirmar — até lá, não prometa a data ao cliente.
+                O pneu fica <strong>reservado na hora</strong> e marcado como tal para todas as lojas —
+                ninguém mais consegue vendê-lo. A <strong>baixa no estoque</strong> só acontece quando o
+                dono de {reserveTarget.companyName} confirmar a reserva.
               </p>
             ) : (
               <p className="mt-4 text-[11px] bg-blue-50 border border-blue-200 text-blue-900 rounded-xl p-2.5">
-                Este pneu é de <strong>outra filial</strong>. A solicitação vai para o dono de{" "}
-                {reserveTarget.companyName}, e é ele quem decide — pode recusar, e a combinação da
-                retirada fica entre você e aquela loja.
+                Este pneu é de <strong>outra filial</strong>. Ele também fica{" "}
+                <strong>reservado na hora</strong>, mas como precisa vir para cá o pedido entra como{" "}
+                <strong>transferência</strong>: depende do aval do dono de {reserveTarget.companyName}{" "}
+                <em>e</em> do administrador. Qualquer um dos dois pode recusar.
               </p>
             )}
 

@@ -214,6 +214,21 @@ service cloud.firestore {
           request.resource.data.get('reservedQuantity', 0) == 0 ||
           request.resource.data.get('quantity', 0) >= request.resource.data.get('reservedQuantity', 0)
         )
+      ) || (
+        // RESERVA DO VENDEDOR: quando ele separa um pneu para um cliente, o pneu
+        // e preso na MESMA transacao que cria o pedido — e por isso ele precisa
+        // somar `reservedQuantity` aqui. Inclusive no estoque de OUTRA loja: e
+        // exatamente o caso "o pneu que meu cliente quer esta na outra filial".
+        //
+        // O que ele NAO pode: tudo o mais. `hasOnly` trava a escrita nesses dois
+        // campos, entao quantidade, preco, empresa e cadastro seguem fechados
+        // para o vendedor — ele consegue prender e soltar pneu, nunca dar baixa.
+        // A baixa continua sendo do dono da loja / administrador.
+        isVendedor() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservedQuantity', 'updatedAt']) &&
+        request.resource.data.get('reservedQuantity', 0) is number &&
+        request.resource.data.get('reservedQuantity', 0) >= 0 &&
+        request.resource.data.get('reservedQuantity', 0) <= request.resource.data.get('quantity', 0)
       );
 
       // Admin can delete anything. Donos/Alimentadores can only delete their own company's items.
@@ -254,7 +269,12 @@ service cloud.firestore {
         return isAdmin() || isVendedor() || (
           isAlimentador() &&
           (data.sourceCompanyId == getUserData().companyId ||
-           data.destinationCompanyId == getUserData().companyId)
+           data.destinationCompanyId == getUserData().companyId ||
+           // Reserva aberta por um vendedor DESTA loja num pneu de outra filial:
+           // enquanto ela esta em analise, nem a origem nem o destino sao a loja
+           // dele — sem esta linha o proprio dono nao enxergaria o pedido que o
+           // vendedor dele abriu, e ele aparece na aba Reservas dos dois lados.
+           (myCompanyId() != '' && data.get('requestedByCompanyId', '') == myCompanyId()))
         );
       }
 
@@ -328,9 +348,19 @@ service cloud.firestore {
         request.resource.data.customerName is string &&
         request.resource.data.customerName.size() > 0 &&
         request.resource.data.customerName.size() <= 200 &&
+        // A loja do vendedor precisa estar declarada no proprio documento: e ela
+        // que decide se a reserva e "da casa" (uma confirmacao, baixa direta) ou
+        // de OUTRA filial (dois avais e vira transferencia). Pode ser vazia —
+        // vendedor cadastrado como "Todas as Empresas" nao tem loja da casa.
+        request.resource.data.requestedByCompanyId is string &&
         request.resource.data.delivery == null &&
         request.resource.data.receipt == null &&
-        request.resource.data.get('reservation', null) == null
+        // RESERVA NO NASCIMENTO: o pedido do vendedor JA PRENDE o pneu, na mesma
+        // transacao que soma `reservedQuantity` no estoque (regra de /stock acima).
+        // Antes ele nascia solto e so prendia quando alguem aprovasse — nesse
+        // intervalo o mesmo pneu podia ser prometido a dois clientes.
+        request.resource.data.reservation.get('active', false) == true &&
+        request.resource.data.reservation.reservedByUid == request.auth.uid
       );
 
       // Updates are split into narrow, field-locked transitions. Each branch only allows
@@ -411,45 +441,81 @@ service cloud.firestore {
         (
           resource.data.get('reservation', null) == null ||
           resource.data.reservation.get('active', false) != true ||
-          (isAlimentador() && resource.data.sourceCompanyId == getUserData().companyId)
+          (isAlimentador() && resource.data.sourceCompanyId == getUserData().companyId) ||
+          // O vendedor tambem: a reserva dele nasce presa, entao sem esta linha
+          // ele nunca mais conseguiria desistir do proprio pedido. Ele consegue
+          // devolver o saldo porque a regra de /stock o deixa mexer em
+          // `reservedQuantity` (e so nele) em qualquer loja.
+          (isVendedor() && resource.data.requestedByUid == request.auth.uid)
         ) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledByUid', 'cancelledByName', 'cancelledAt', 'cancelReason', 'reservation', 'updatedAt'])
       ) || (
-        // (e) A ORIGEM aprova uma solicitacao. O app faz isso na mesma transacao
-        // em que soma `reservedQuantity` nos itens do proprio estoque — entre o
-        // aval e a reserva nao existe janela em que o pneu esteja prometido e
-        // ainda vendavel.
+        // (e) A ORIGEM destrava uma solicitacao, levando-a de SOLICITADO para o
+        // fluxo de assinaturas. Dois casos muito diferentes caem aqui:
+        //
+        //   1. SOLICITACAO comum entre filiais — a loja que tem os pneus aprova
+        //      sozinha, na mesma transacao em que soma `reservedQuantity` nos
+        //      itens do proprio estoque. Destino imutavel, um aval so.
+        //
+        //   2. RESERVA de um vendedor de OUTRA filial virando transferencia — o
+        //      pneu ja esta preso desde a criacao do pedido, e o que falta e
+        //      aval. Aqui sao obrigatorios DOIS: o desta loja (gravado nesta
+        //      escrita ou numa anterior, regra e2) e o do ADMINISTRADOR, que
+        //      precisa ja estar no documento. Sem o aval do admin esta regra
+        //      recusa, e o pedido continua em analise com o pneu reservado.
         isAlimentador() &&
         resource.data.sourceCompanyId == getUserData().companyId &&
         resource.data.status == 'SOLICITADO' &&
         (request.resource.data.status == 'PENDENTE' || request.resource.data.status == 'AGENDADO') &&
         // O destino de um pedido e imutavel, com UMA excecao: a reserva de
         // cliente aberta por um vendedor de OUTRA filial. O pneu esta aqui e o
-        // cliente esta la, entao aprovar tem que colocar o pneu a caminho —
+        // cliente esta la, entao destravar tem que colocar o pneu a caminho —
         // o destino sai do balcao ('CLIENTE') e passa a ser a loja de quem pediu,
         // e o pedido vira uma transferencia comum, com as quatro assinaturas.
         //
         // A troca so pode apontar para a loja registrada no proprio pedido
         // (`requestedByCompanyId`, gravado na criacao): quem aprova nao escolhe
-        // o destino, so confirma o que o vendedor ja tinha declarado.
+        // o destino, so confirma o que o vendedor ja tinha declarado. E so
+        // acontece com o aval do administrador ja gravado.
         (
-          request.resource.data.destinationCompanyId == resource.data.destinationCompanyId || (
+          (
+            resource.data.destinationCompanyId != 'CLIENTE' &&
+            request.resource.data.destinationCompanyId == resource.data.destinationCompanyId
+          ) || (
             resource.data.destinationCompanyId == 'CLIENTE' &&
             resource.data.get('requestedByCompanyId', '') != '' &&
             resource.data.get('requestedByCompanyId', '') != resource.data.sourceCompanyId &&
-            request.resource.data.destinationCompanyId == resource.data.requestedByCompanyId
+            request.resource.data.destinationCompanyId == resource.data.requestedByCompanyId &&
+            request.resource.data.get('adminApprovedByUid', '') != ''
           )
         ) &&
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'reservation', 'approvedByUid', 'approvedByName', 'approvedAt', 'destinationCompanyId', 'destinationCompanyName', 'updatedAt'])
+          .hasOnly(['status', 'reservation', 'approvedByUid', 'approvedByName', 'approvedAt', 'sourceApprovedByUid', 'sourceApprovedByName', 'sourceApprovedAt', 'destinationCompanyId', 'destinationCompanyName', 'updatedAt'])
       ) || (
-        // (f) A ORIGEM recusa a solicitacao. Nada foi reservado, entao e so status.
+        // (e2) AVAL PARCIAL da loja de ORIGEM. Numa reserva que veio de vendedor
+        // de outra filial sao precisos dois avais, e eles quase nunca chegam no
+        // mesmo minuto: esta regra deixa o dono registrar o DELE sem mover o
+        // pedido, que segue em SOLICITADO ate o administrador dar o segundo.
+        // O pneu ja esta preso desde a criacao, entao nada de estoque muda aqui.
+        isAlimentador() &&
+        resource.data.sourceCompanyId == getUserData().companyId &&
+        resource.data.status == 'SOLICITADO' &&
+        request.resource.data.status == 'SOLICITADO' &&
+        request.resource.data.sourceApprovedByUid == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['sourceApprovedByUid', 'sourceApprovedByName', 'sourceApprovedAt', 'updatedAt'])
+      ) || (
+        // (f) A ORIGEM recusa a solicitacao. 'reservation' entra no hasOnly porque
+        // a reserva de um vendedor nasce PRESA: recusar tem que devolver o pneu
+        // ao saldo livre na mesma escrita, senao o estoque ficaria travado por um
+        // pedido que ja morreu. (Numa solicitacao entre filiais nao ha reserva
+        // ainda, e o campo simplesmente nao muda.)
         isAlimentador() &&
         resource.data.sourceCompanyId == getUserData().companyId &&
         resource.data.status == 'SOLICITADO' &&
         request.resource.data.status == 'RECUSADO' &&
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'rejectedByUid', 'rejectedByName', 'rejectedAt', 'rejectReason', 'updatedAt'])
+          .hasOnly(['status', 'reservation', 'rejectedByUid', 'rejectedByName', 'rejectedAt', 'rejectReason', 'updatedAt'])
       ) || (
         // (g) A ORIGEM reserva ou libera os itens de um pedido ja pendente/agendado,
         // sem mexer no status. Serve para segurar mercadoria que ainda vai demorar
@@ -469,13 +535,23 @@ service cloud.firestore {
         // quantity e devolve reservedQuantity no proprio estoque (as regras de
         // stock ja garantem que ela so escreve nos itens dela). O pedido nao passa
         // por EM_TRANSITO: o pneu vai da prateleira direto para a mao do cliente.
+        //
+        // SOLICITADO entra na lista porque a reserva de um pneu DA PROPRIA loja
+        // do vendedor nao passa mais por um estado intermediario: ela nasce presa
+        // e a confirmacao do dono ja e a baixa. As de OUTRA filial ficam de fora
+        // (a condicao de `requestedByCompanyId` abaixo) — aquelas viram
+        // transferencia e so saem do estoque no despacho assinado.
         isAlimentador() &&
         resource.data.destinationCompanyId == 'CLIENTE' &&
         resource.data.sourceCompanyId == getUserData().companyId &&
-        (resource.data.status == 'PENDENTE' || resource.data.status == 'AGENDADO') &&
+        (
+          resource.data.get('requestedByCompanyId', '') == '' ||
+          resource.data.get('requestedByCompanyId', '') == resource.data.sourceCompanyId
+        ) &&
+        (resource.data.status == 'PENDENTE' || resource.data.status == 'AGENDADO' || resource.data.status == 'SOLICITADO') &&
         request.resource.data.status == 'CONCLUIDO' &&
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'reservation', 'saleCompletedByUid', 'saleCompletedByName', 'saleCompletedAt', 'updatedAt'])
+          .hasOnly(['status', 'reservation', 'approvedByUid', 'approvedByName', 'approvedAt', 'sourceApprovedByUid', 'sourceApprovedByName', 'sourceApprovedAt', 'saleCompletedByUid', 'saleCompletedByName', 'saleCompletedAt', 'updatedAt'])
       );
 
       // Only admin can hard-delete a transfer record (e.g. cleaning up test data).
