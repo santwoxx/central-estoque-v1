@@ -167,6 +167,7 @@ export default function TransferOrders({
   const [formStockSearch, setFormStockSearch] = useState("");
   const [formSelectedStockItemId, setFormSelectedStockItemId] = useState("");
   const [formDestinationCompanyId, setFormDestinationCompanyId] = useState("");
+  const [formCustomerName, setFormCustomerName] = useState("");
   const [formQuantity, setFormQuantity] = useState<string>("");
   const [formItems, setFormItems] = useState<{ sourceStockItemId: string; sku: string; brand: string; model: string; size: string; quantity: number; }[]>([]);
   const [formReason, setFormReason] = useState("");
@@ -341,7 +342,8 @@ export default function TransferOrders({
     setFormSourceCompanyId(kind === "ENVIO" && isAlimentador ? user.companyId || "" : "");
     setFormStockSearch("");
     setFormSelectedStockItemId("");
-    setFormDestinationCompanyId(kind === "SOLICITACAO" && !isGlobalAdmin ? user.companyId || "" : "");
+    setFormDestinationCompanyId(isVendedor ? "CLIENTE" : (kind === "SOLICITACAO" && !isGlobalAdmin ? user.companyId || "" : ""));
+    setFormCustomerName("");
     setFormQuantity("");
     setFormItems([]);
     setFormReason("");
@@ -412,6 +414,10 @@ export default function TransferOrders({
       setCreateError("Selecione a empresa de destino.");
       return;
     }
+    if (isVendedor && !formCustomerName.trim()) {
+      setCreateError("Informe o nome do cliente.");
+      return;
+    }
     if (!isGlobalAdmin && effectiveSourceCompanyId !== user.companyId && formDestinationCompanyId !== user.companyId) {
       setCreateError("Você só pode criar transferências que envolvam a sua própria loja.");
       return;
@@ -447,10 +453,11 @@ export default function TransferOrders({
         sourceCompanyId: effectiveSourceCompanyId,
         sourceCompanyName: effectiveSourceCompanyName,
         destinationCompanyId: formDestinationCompanyId,
-        destinationCompanyName: destinationCompany?.name || "",
+        destinationCompanyName: destinationCompany?.name || (formDestinationCompanyId === "CLIENTE" ? "Reserva de Cliente" : ""),
         reason: formReason,
         scheduledFor: scheduledDate,
-        requestKind: formKind
+        requestKind: formKind,
+        customerName: formCustomerName.trim()
       });
       setShowCreateModal(false);
     } catch (err: any) {
@@ -1720,9 +1727,24 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
 
                 <div>
                   <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5 mt-2">
-                    {isSolicitacao ? "Empresa que vai receber *" : "Empresa de Destino *"}
+                    {isVendedor ? "Reserva de Cliente *" : (isSolicitacao ? "Empresa que vai receber *" : "Empresa de Destino *")}
                   </label>
-                  {lockDestination ? (
+                  {isVendedor ? (
+                    <div>
+                      <div className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 flex items-center gap-1.5 mb-2">
+                        <Building2 size={13} className="text-slate-400" />
+                        Balcão / Cliente Final
+                        <span className="ml-auto text-[9px] font-black uppercase tracking-wider text-slate-400">Reserva</span>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Nome do cliente final *"
+                        value={formCustomerName}
+                        onChange={e => setFormCustomerName(e.target.value)}
+                        className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
+                      />
+                    </div>
+                  ) : lockDestination ? (
                     <div className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 flex items-center gap-1.5">
                       <Building2 size={13} className="text-slate-400" />
                       {user.companyName || "Sua empresa"}
