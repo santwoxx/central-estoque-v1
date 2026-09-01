@@ -46,6 +46,64 @@ export function matchesTireSize(itemSize: string, query: string): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Ordenação por MEDIDA (do menor para o maior)
+//
+// A medida é texto livre no cadastro ("205/65R15", "185 R14C",
+// "205/45 ZR17", "LT31x10.50 R15LT"), então ordenar a string direto
+// coloca "31x10.50" antes de "165/70" e joga um pneu de caminhonete
+// para o topo da lista. Aqui a medida vira três números — largura,
+// perfil e aro — e a comparação é numérica, na mesma ordem em que a
+// medida é lida em voz alta.
+//
+// Largura em POLEGADAS (31x10.50) é convertida para mm (31" = 787mm)
+// para caber na mesma régua das métricas. Medida sem perfil declarado
+// ("185 R14C") assume 82, o perfil cheio dos comerciais — assim ela
+// cai depois do 185/80 e antes do 195, que é onde a pessoa procura.
+// Medida que não casa com nenhum formato vai para o fim (Infinity), nunca
+// para o meio da lista sem explicação.
+// ─────────────────────────────────────────────────────────────────
+const NO_PROFILE = 82;
+const INCH_TO_MM = 25.4;
+
+export function tireSizeSortKey(size: string): { width: number; profile: number; rim: number } {
+  const raw = (size || "").toUpperCase().replace(/,/g, ".");
+
+  const rimMatch = raw.match(/R\s*(\d{2}(?:\.\d+)?)/);
+  const rim = rimMatch ? parseFloat(rimMatch[1]) : Infinity;
+
+  // 31x10.50 R15 — polegadas: o segundo número é a largura da banda,
+  // não um perfil; serve só para desempatar dentro do mesmo 31".
+  const inchMatch = raw.match(/(\d{2}(?:\.\d+)?)\s*X\s*(\d+(?:\.\d+)?)/);
+  if (inchMatch) {
+    return {
+      width: parseFloat(inchMatch[1]) * INCH_TO_MM,
+      profile: parseFloat(inchMatch[2]),
+      rim
+    };
+  }
+
+  // "LT205/70 R15" e "P205/70 R15" — o prefixo de aplicação não entra na conta.
+  const widthMatch = raw.match(/(?:^|[^0-9])(\d{3})(?:\s*\/|\s|$|[A-Z])/);
+  const width = widthMatch ? parseFloat(widthMatch[1]) : Infinity;
+
+  const profileMatch = raw.match(/\/\s*(\d{2,3})/);
+  const profile = profileMatch ? parseFloat(profileMatch[1]) : NO_PROFILE;
+
+  return { width, profile, rim };
+}
+
+export function compareTireSize(a: string, b: string): number {
+  const ka = tireSizeSortKey(a);
+  const kb = tireSizeSortKey(b);
+  return (
+    ka.width - kb.width ||
+    ka.profile - kb.profile ||
+    ka.rim - kb.rim ||
+    (a || "").localeCompare(b || "")
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Saldo reservado x saldo livre
 //
 // Um pneu pode estar fisicamente no galpao e mesmo assim nao poder ser vendido:

@@ -4,7 +4,7 @@ import {
   Search, Plus, Minus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon,
   PackagePlus, PackageMinus, AlertTriangle, CheckCircle2, ArrowRight, ArrowRightLeft, Lock
 } from "lucide-react";
-import { availableQuantity, formatBRL, matchesTireSize, parsePriceInput, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import { availableQuantity, compareTireSize, formatBRL, matchesTireSize, parsePriceInput, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
 import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
 
 interface UnifiedStockProps {
@@ -188,6 +188,21 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       .sort((a, b) => a.sku.localeCompare(b.sku));
   }, [items, companies, priceSourceCompanyId]);
 
+  // ── Ordem da CENTRAL AUTOCENTER ───────────────────────────────────
+  // Pedido da loja, e so dela: a lista chega ordenada por SKU (a ordem em
+  // que os pneus foram cadastrados), que nao ajuda ninguem no balcao. Aqui a
+  // vitrine vira a do galpao — quem tem pneu primeiro, medida crescente — e
+  // as outras filiais continuam exatamente como estavam.
+  //
+  // A empresa e reconhecida pelo NOME e nao por um id fixo: o id muda a cada
+  // ambiente (e a cada "inicializar empresas padrao"), o nome nao. Mesmo
+  // criterio ja usado na injecao de estoque em StockTable.
+  const isAutocenterView = useMemo(() => {
+    if (companyFilter === "ALL") return false;
+    const comp = companies.find(c => c.id === companyFilter);
+    return !!comp && comp.name.toUpperCase().includes("AUTOCENTER");
+  }, [companies, companyFilter]);
+
   const filteredItems = useMemo(() => {
     // Com uma empresa escolhida, some tambem a LINHA do pneu que aquela loja
     // nem cadastrou. Sem isso a tabela filtrada viraria uma coluna unica cheia
@@ -196,16 +211,33 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       ? consolidatedItems
       : consolidatedItems.filter(item => !!item.docs[companyFilter]);
 
-    if (!searchTerm) return base;
     const lower = searchTerm.toLowerCase();
-    return base.filter(item =>
+    const searched = !searchTerm ? base : base.filter(item =>
       item.sku.toLowerCase().includes(lower) ||
       item.description.toLowerCase().includes(lower) ||
       item.brand.toLowerCase().includes(lower) ||
       item.size.toLowerCase().includes(lower) ||
       matchesTireSize(item.size, lower)
     );
-  }, [consolidatedItems, searchTerm, companyFilter]);
+
+    if (!isAutocenterView) return searched;
+
+    // Zerado vai para o fim. O criterio e o saldo FISICO (o mesmo numero que a
+    // celula mostra): pneu reservado continua na prateleira e continua no meio
+    // da lista — quem esta zerado e so quem nao tem nenhum para vender hoje.
+    // Dentro de cada grupo, medida do menor para o maior.
+    return [...searched].sort((a, b) => {
+      const qtyA = Number(a.docs[companyFilter]?.quantity) || 0;
+      const qtyB = Number(b.docs[companyFilter]?.quantity) || 0;
+      const emptyA = qtyA <= 0 ? 1 : 0;
+      const emptyB = qtyB <= 0 ? 1 : 0;
+      return (
+        emptyA - emptyB ||
+        compareTireSize(a.size, b.size) ||
+        a.sku.localeCompare(b.sku)
+      );
+    });
+  }, [consolidatedItems, searchTerm, companyFilter, isAutocenterView]);
 
   // Export Unified Stock to CSV
   const exportUnifiedToCSV = () => {
