@@ -1,4 +1,4 @@
-import { StockFlowType, StockItem } from "./types";
+import { StockFlowType, StockItem, Suggestion } from "./types";
 
 // ──────────────────────────────────────────────────────────────
 // Motivos sugeridos para movimentação de pneus, por tipo de operação.
@@ -296,4 +296,51 @@ export function exportToCSV(data: any[], columns: { key: string; label: string }
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+}
+
+// ──────────────────────────────────────────────────────────────
+// Sugestão de compra: leitura tolerante do documento do Firestore.
+//
+// Compartilhada por quem escreve (o catálogo do vendedor, que lista de volta o
+// que ele mesmo mandou) e por quem recebe (a aba Sugestões do dono da loja) —
+// as duas telas leem a MESMA coleção, e um mapeamento por tela deixaria uma
+// delas sem campo assim que o documento ganhasse mais um.
+// ──────────────────────────────────────────────────────────────
+// Instante de uma sugestão para ordenar a lista. O documento recém-gravado
+// volta do cache local com `createdAt` ainda nulo (o serverTimestamp só chega
+// no segundo snapshot) — e `toMillis` daria 0, jogando para o FIM da lista
+// justamente a sugestão que a pessoa acabou de mandar. Sem carimbo ainda é o
+// mesmo que "agora": vai para o topo.
+export function suggestionTime(s: { createdAt?: any }): number {
+  return toMillis(s.createdAt) || Number.MAX_SAFE_INTEGER;
+}
+
+export function mapSuggestionDoc(id: string, data: any): Suggestion {
+  const raw = data || {};
+  return {
+    id,
+    companyId: raw.companyId || "",
+    companyName: raw.companyName || "",
+    size: raw.size || "",
+    brand: raw.brand || "",
+    model: raw.model || "",
+    quantity: Number(raw.quantity) || 1,
+    customerName: raw.customerName || "",
+    customerContact: raw.customerContact || "",
+    note: raw.note || "",
+    requestedByUid: raw.requestedByUid || "",
+    requestedByName: raw.requestedByName || "",
+    requestedByEmail: raw.requestedByEmail || "",
+    requestedByRole: raw.requestedByRole,
+    requestedByCompanyId: raw.requestedByCompanyId || "",
+    requestedByCompanyName: raw.requestedByCompanyName || "",
+    createdAt: raw.createdAt,
+    // Documento antigo (ou gravado sem status) conta como pendente: o pior
+    // desfecho seria uma sugestão sumir da fila por falta de um campo.
+    status: raw.status === "ATENDIDA" || raw.status === "ARQUIVADA" ? raw.status : "ABERTA",
+    resolvedAt: raw.resolvedAt,
+    resolvedByUid: raw.resolvedByUid || "",
+    resolvedByName: raw.resolvedByName || "",
+    resolutionNote: raw.resolutionNote || ""
+  };
 }

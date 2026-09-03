@@ -1,11 +1,12 @@
 import React, { useState } from "react";
-import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp } from "lucide-react";
+import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp, Lightbulb } from "lucide-react";
 
 export default function HowToUse() {
   const [activeSection, setActiveSection] = useState<string>("intro");
 
   const sections = [
     { id: "intro", title: "Introdução", icon: Award },
+    { id: "suggestions", title: "Sugestões de Compra", icon: Lightbulb },
     { id: "stock-flow", title: "Entradas e Saídas", icon: ArrowDownUp },
     { id: "dashboard", title: "Painel & Indicadores", icon: BarChart2 },
     { id: "unified", title: "Estoque Unificado", icon: Layers },
@@ -67,6 +68,36 @@ export default function HowToUse() {
               <p className="text-xs text-slate-500 italic">
                 Selecione um tópico na barra lateral para começar o tour.
               </p>
+            </div>
+          )}
+
+          {activeSection === "suggestions" && (
+            <div className="space-y-4 animate-scaleUp text-xs text-slate-650 leading-relaxed">
+              <h4 className="text-base font-black text-slate-900">💡 Sugestões de Compra (Pneus em Falta)</h4>
+              <p>
+                A demanda que o estoque não atendeu agora vira oportunidade de venda registrada. O vendedor é quem ouve o cliente no balcão e encaminha o pedido diretamente para o **Dono da Loja** e para o **Administrador**.
+              </p>
+
+              <div className="p-3 bg-white border border-slate-200 rounded-2xl space-y-2">
+                <strong className="text-slate-900 block">Como o Vendedor registra:</strong>
+                <ol className="list-decimal pl-5 space-y-1.5">
+                  <li>No catálogo, se a busca não encontrar o pneu (ou se faltar a marca procurada), clique em <strong className="text-gold-700">"Sugerir compra"</strong>.</li>
+                  <li>Informe a <strong>Medida</strong> do pneu (obrigatória), a quantidade desejada, marca/modelo se houver preferência.</li>
+                  <li>Adicione os dados do <strong>Cliente</strong> (nome e telefone/WhatsApp) para poder avisá-lo assim que o pneu chegar.</li>
+                  <li>No campo <strong>Observação</strong>, insira detalhes importantes (ex: prazos, aceitação de outra marca, urgência).</li>
+                  <li>Acompanhe o status na aba <strong className="text-slate-900">Minhas Sugestões</strong> (Em aberto, Atendida ou Arquivada).</li>
+                </ol>
+              </div>
+
+              <div className="p-3 bg-white border border-slate-200 rounded-2xl space-y-2">
+                <strong className="text-slate-900 block">Como o Dono da Loja e Admin gerenciam:</strong>
+                <ul className="list-disc pl-5 space-y-1.5">
+                  <li>Abra a nova aba <strong className="text-slate-900">Sugestões</strong> no menu lateral ou inferior.</li>
+                  <li>Veja os <strong>Indicadores de Demanda</strong> e o ranking das <strong>Medidas mais procuradas</strong>.</li>
+                  <li>Clique em <strong>Marcar atendida</strong> ao providenciar o pedido de compra, com opção de deixar recado para o vendedor.</li>
+                  <li>Use o botão <strong>Exportar CSV</strong> para gerar relatórios de compras e cotações com distribuidores.</li>
+                </ul>
+              </div>
             </div>
           )}
 

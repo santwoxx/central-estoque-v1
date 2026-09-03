@@ -14,7 +14,7 @@ import {
   writeBatch
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { UserCredential, UserRole, Company } from "../types";
+import { UserCredential, UserRole, Company, StockItem } from "../types";
 import { 
   Users, 
   UserPlus, 
@@ -50,9 +50,16 @@ interface UsersAdminProps {
   // repetem cada um desses limites do lado do servidor, então esconder o botão
   // aqui é conveniência, não é a trava.
   currentUser: { role: UserRole; companyId?: string; companyName?: string };
+
+  // Estoque completo, ja transmitido pelo App. Serve para UMA coisa aqui:
+  // impedir que uma empresa com pneus cadastrados seja apagada (ver
+  // handleDeleteCompany). Vem por prop em vez de uma consulta propria porque
+  // abrir um segundo listener em `stock` dobraria a leitura mais cara do
+  // sistema so para contar documentos.
+  stock: StockItem[];
 }
 
-export default function UsersAdmin({ companies, currentUser }: UsersAdminProps) {
+export default function UsersAdmin({ companies, currentUser, stock }: UsersAdminProps) {
   // Modo "dono da empresa": tela enxuta, travada na própria loja e no papel Vendedor.
   const isAdminView = currentUser.role === "admin";
   const ownerCompanyId = currentUser.companyId || "";
@@ -701,6 +708,28 @@ export default function UsersAdmin({ companies, currentUser }: UsersAdminProps) 
     const linkedOperatorsCount = credentials.filter(cred => cred.companyId === comp.id).length;
     if (linkedOperatorsCount > 0) {
       alert(`Impossível remover! Existem ${linkedOperatorsCount} operadores vinculados a esta empresa ("${comp.name}"). Remova os operadores ou altere as empresas das credenciais antes de prosseguir.`);
+      return;
+    }
+
+    // Empresa com pneu cadastrado NAO pode ser apagada.
+    //
+    // Apagar a empresa nao apaga o estoque dela: os documentos continuam em
+    // `stock` com um companyId que nao existe mais. Como toda a tela desenha as
+    // colunas a partir da lista de empresas, aqueles pneus somem de todas as
+    // telas de uma vez — sem erro, sem aviso, e sem nenhum lugar no app que os
+    // mostre de volta. Parece exclusao em massa e nao e; e pior, porque o unico
+    // jeito de recuperar e recriar a empresa com o MESMO id (impossivel pela
+    // interface) ou reescrever cada documento no console do Firebase.
+    const linkedStockCount = stock.filter(item => item.companyId === comp.id).length;
+    if (linkedStockCount > 0) {
+      alert(
+        `Impossível remover! A empresa "${comp.name}" ainda tem ${linkedStockCount} ` +
+        `${linkedStockCount === 1 ? "produto cadastrado" : "produtos cadastrados"} no estoque.\n\n` +
+        `Apagar a empresa agora faria esses produtos sumirem de todas as telas sem apagar nada do banco — ` +
+        `eles ficariam órfãos e inacessíveis pelo sistema.\n\n` +
+        `Antes de remover a empresa: transfira os produtos para outra filial ou apague o estoque dela ` +
+        `na aba Estoque (botão "Apagar Estoque", escolhendo esta empresa).`
+      );
       return;
     }
 

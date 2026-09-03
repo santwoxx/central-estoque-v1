@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.cloudfunctions.net;" />
+<title>Fechamento do Dia</title>
+<style>
+  :root {
+    --gold: #b8860b;
+    --gold-dark: #8f6a09;
+    --slate: #1e293b;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --bg: #f8fafc;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 22px;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: var(--bg); color: var(--slate);
+    font-size: 13px; user-select: none;
+  }
+  h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .04em; text-transform: uppercase; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
+  .card {
+    background: #fff; border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px; margin-bottom: 12px;
+  }
+  label { display: block; font-weight: 700; font-size: 11px; text-transform: uppercase;
+          letter-spacing: .05em; color: var(--muted); margin-bottom: 5px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px;
+    font-size: 13px; font-family: inherit; outline: none; background: #fff; color: var(--slate);
+  }
+  input[type=text]:focus, input[type=password]:focus { border-color: var(--gold); }
+  .field { margin-bottom: 12px; }
+  button {
+    font-family: inherit; font-size: 12px; font-weight: 800; border-radius: 10px;
+    padding: 10px 16px; border: 1px solid transparent; cursor: pointer;
+  }
+  .primary { background: var(--gold); color: #fff; width: 100%; }
+  .primary:hover { background: var(--gold-dark); }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .ghost { background: #fff; border-color: var(--line); color: var(--muted); }
+  .ghost:hover { background: var(--bg); }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .counters { display: grid; gap: 7px; }
+  .counter {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px;
+  }
+  .counter span:first-child { color: var(--muted); font-weight: 600; }
+  .counter span:last-child { font-weight: 800; font-size: 15px; }
+  .path {
+    font-family: Consolas, monospace; font-size: 11px; color: var(--slate);
+    word-break: break-all; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 9px; user-select: text;
+  }
+  .msg { border-radius: 10px; padding: 10px 12px; font-weight: 600; font-size: 12px; margin-bottom: 12px; }
+  .msg.error { background: #fef2f2; color: #b91c1c; border-left: 4px solid #dc2626; }
+  .msg.ok { background: #ecfdf5; color: #065f46; border-left: 4px solid #059669; }
+  .msg.warn { background: #fffbeb; color: #92400e; border-left: 4px solid #d97706; }
+  .files { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 5px; }
+  .files li { font-family: Consolas, monospace; font-size: 11px; color: var(--muted);
+              background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
+              word-break: break-all; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .check input { width: 15px; height: 15px; accent-color: var(--gold); }
+  .who { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .who b { display: block; font-size: 13px; color: var(--slate); }
+  .who small { color: var(--muted); font-size: 11px; }
+  .link { background: none; border: none; color: var(--gold-dark); font-size: 11px;
+          text-decoration: underline; padding: 0; cursor: pointer; font-weight: 700; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<h1>Fechamento do Dia</h1>
+<div class="sub" id="subtitle">Cópia diária do estoque e do movimento da sua loja.</div>
+
+<!-- LOGIN -->
+<section id="view-login">
+  <div class="card">
+    <div id="login-msg"></div>
+    <div class="field">
+      <label for="username">Usuário</label>
+      <input type="text" id="username" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="field">
+      <label for="password">Senha</label>
+      <input type="password" id="password" autocomplete="off" />
+    </div>
+    <div class="field check">
+      <input type="checkbox" id="remember" checked />
+      <label for="remember" style="margin:0; text-transform:none; letter-spacing:0; font-size:12px;">
+        Manter conectado neste computador
+      </label>
+    </div>
+    <button class="primary" id="btn-login">Entrar</button>
+  </div>
+</section>
+
+<!-- FECHAMENTO -->
+<section id="view-main" class="hidden">
+  <div class="card">
+    <div class="who">
+      <div>
+        <b id="who-company">—</b>
+        <small id="who-user">—</small>
+      </div>
+      <button class="link" id="btn-logout">Trocar usuário</button>
+    </div>
+
+    <div id="main-msg"></div>
+
+    <div class="counters" id="counters">
+      <div class="counter"><span>Produtos no estoque</span><span id="c-stock">…</span></div>
+      <div class="counter"><span>Movimentações de hoje</span><span id="c-mov">…</span></div>
+      <div class="counter"><span>Transferências de hoje</span><span id="c-transf">…</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Salvar na pasta</label>
+    <div class="path" id="folder">…</div>
+    <div style="margin-top:8px; display:flex; justify-content:space-between; align-items:center;">
+      <button class="link" id="btn-folder">Trocar pasta</button>
+      <span class="check">
+        <input type="checkbox" id="autostart" />
+        <label for="autostart" style="margin:0; text-transform:none; letter-spacing:0; font-size:11px;">
+          Abrir com o Windows e avisar às 18h
+        </label>
+      </span>
+    </div>
+  </div>
+
+  <button class="primary" id="btn-save" disabled>Carregando dados do dia…</button>
+</section>
+
+<!-- SUCESSO -->
+<section id="view-done" class="hidden">
+  <div class="card">
+    <div class="msg ok" id="done-msg">Dia guardado com segurança.</div>
+    <div class="path" id="done-folder">—</div>
+    <ul class="files" id="done-files"></ul>
+  </div>
+  <div class="row">
+    <button class="ghost" id="btn-open">Abrir pasta</button>
+    <button class="primary" id="btn-close">Concluir</button>
+  </div>
+</section>
+
+<script src="bundle.js"></script>
+</body>
+</html>

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../firebase";
-import { StockItem, Company, CLIENTE_COMPANY_ID } from "../types";
-import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X, Lock } from "lucide-react";
-import { availableQuantity, mapStockDoc, matchesTireSize, reservedQuantityOf } from "../utils";
+import { StockItem, Company, Suggestion, CLIENTE_COMPANY_ID } from "../types";
+import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X, Lock, Lightbulb, Check, Archive } from "lucide-react";
+import { availableQuantity, formatDate, mapStockDoc, mapSuggestionDoc, matchesTireSize, reservedQuantityOf, suggestionTime } from "../utils";
 
 interface ConsolidatedItem {
   sku: string;
@@ -38,11 +38,24 @@ function formatPrice(value: number): string {
 interface PublicStockProps {
   // Ausente na rota pública (consulta sem login): sem usuário, a tela é só
   // catálogo. Com um vendedor logado, cada loja ganha o botão de reservar.
-  user?: { uid: string; displayName: string; role: string; companyId?: string };
+  user?: { uid: string; displayName: string; role: string; companyId?: string; companyName?: string };
   onCreateTransfer?: (data: any) => Promise<void>;
+  // Recado de compra para o dono da loja: o pneu que o cliente pediu e o
+  // catálogo não tem. Ausente na rota pública, pela mesma razão do de cima.
+  onCreateSuggestion?: (data: {
+    companyId: string;
+    companyName: string;
+    size: string;
+    brand?: string;
+    model?: string;
+    quantity: number;
+    customerName?: string;
+    customerContact?: string;
+    note?: string;
+  }) => Promise<void>;
 }
 
-export default function PublicStock({ user, onCreateTransfer }: PublicStockProps = {}) {
+export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion }: PublicStockProps = {}) {
   const [stock, setStock] = useState<StockItem[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,10 +69,37 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
   const [reserveError, setReserveError] = useState("");
   const [reserveDone, setReserveDone] = useState("");
 
+  // ── Sugestão de compra ────────────────────────────────────────────
+  // O cliente pediu, o catálogo não tinha, e o vendedor é a única pessoa que
+  // ouviu. Sem isto a informação morre no balcão: o dono da loja compra pelo
+  // que vendeu, nunca pelo que deixou de vender.
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestCompanyId, setSuggestCompanyId] = useState("");
+  const [suggestSize, setSuggestSize] = useState("");
+  const [suggestBrand, setSuggestBrand] = useState("");
+  const [suggestModel, setSuggestModel] = useState("");
+  const [suggestQty, setSuggestQty] = useState(4);
+  const [suggestCustomer, setSuggestCustomer] = useState("");
+  const [suggestContact, setSuggestContact] = useState("");
+  const [suggestNote, setSuggestNote] = useState("");
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestError, setSuggestError] = useState("");
+  const [suggestDone, setSuggestDone] = useState("");
+
+  // O que ESTE vendedor já mandou, com o desfecho que o dono deu. Carregado só
+  // enquanto o painel está aberto — é a diferença entre uma leitura por clique
+  // e um listener aceso a sessão inteira numa tela que quase nunca é aberta.
+  const [mySuggestions, setMySuggestions] = useState<Suggestion[]>([]);
+  const [mySuggestionsLoading, setMySuggestionsLoading] = useState(false);
+
   // Quem pode separar um pneu para um cliente. O vendedor é o caso normal; o
   // admin entra junto porque ele também enxerga esta aba (e as regras do
   // Firestore o autorizam a criar o pedido).
   const canReserve = !!onCreateTransfer && (user?.role === "vendedor" || user?.role === "admin");
+
+  // Quem manda sugestão. O vendedor é o caso que motiva a tela; o admin entra
+  // junto porque enxerga esta aba e também atende cliente no balcão.
+  const canSuggest = !!onCreateSuggestion && (user?.role === "vendedor" || user?.role === "admin");
 
   // ── Pneu reservado: quem vê ──────────────────────────────────────
   // Para QUEM ESTÁ LOGADO, um pneu preso por uma reserva continua na tela, com
@@ -165,6 +205,93 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       setReserveLoading(false);
     }
   };
+
+  // Abre o painel já preenchido com o que o vendedor acabou de digitar na
+  // busca: a sugestão nasce exatamente do termo que não devolveu nada, e
+  // redigitar "205/55 R16" é o passo em que a pessoa desiste de registrar.
+  const openSuggestModal = () => {
+    setSuggestCompanyId(ownCompanyId || (companies.length === 1 ? companies[0].id : ""));
+    setSuggestSize(searchTerm.trim());
+    setSuggestBrand("");
+    setSuggestModel("");
+    setSuggestQty(4);
+    setSuggestCustomer("");
+    setSuggestContact("");
+    setSuggestNote("");
+    setSuggestError("");
+    setSuggestOpen(true);
+  };
+
+  const submitSuggestion = async () => {
+    if (!onCreateSuggestion) return;
+    const size = suggestSize.trim();
+    if (!size) {
+      setSuggestError("Informe a medida do pneu que o cliente procurou.");
+      return;
+    }
+    if (!suggestCompanyId) {
+      setSuggestError("Escolha a loja que deve receber esta sugestão.");
+      return;
+    }
+    const qty = Number(suggestQty);
+    if (!Number.isInteger(qty) || qty < 1) {
+      setSuggestError("Informe quantas unidades o cliente queria (pelo menos 1).");
+      return;
+    }
+
+    setSuggestLoading(true);
+    setSuggestError("");
+    try {
+      const company = companies.find(c => c.id === suggestCompanyId);
+      await onCreateSuggestion({
+        companyId: suggestCompanyId,
+        companyName: company?.name || user?.companyName || "",
+        size,
+        brand: suggestBrand,
+        model: suggestModel,
+        quantity: qty,
+        customerName: suggestCustomer,
+        customerContact: suggestContact,
+        note: suggestNote
+      });
+      setSuggestOpen(false);
+      setSuggestDone(
+        `Sugestão enviada para ${company?.name || "a loja"}. Ela aparece na aba Sugestões do dono ` +
+        `da loja, com a medida, o cliente e o seu nome. Nenhum pneu foi reservado — isto é um ` +
+        `recado de compra, não uma reserva.`
+      );
+    } catch (err: any) {
+      setSuggestError(err?.message || "Erro ao enviar a sugestão.");
+    } finally {
+      setSuggestLoading(false);
+    }
+  };
+
+  // Listener das PRÓPRIAS sugestões, ligado só com o painel aberto. Uma
+  // igualdade em requestedByUid — mesma forma que as regras do Firestore
+  // autorizam para quem escreveu, e sem índice composto.
+  useEffect(() => {
+    if (!suggestOpen || !user?.uid) {
+      setMySuggestions([]);
+      return;
+    }
+    setMySuggestionsLoading(true);
+    const unsub = onSnapshot(
+      query(collection(db, "suggestions"), where("requestedByUid", "==", user.uid)),
+      (snapshot) => {
+        const list: Suggestion[] = [];
+        snapshot.forEach(docSnap => list.push(mapSuggestionDoc(docSnap.id, docSnap.data())));
+        list.sort((a, b) => suggestionTime(b) - suggestionTime(a));
+        setMySuggestions(list);
+        setMySuggestionsLoading(false);
+      },
+      (error) => {
+        console.error("Erro ao ler as sugestões do vendedor:", error);
+        setMySuggestionsLoading(false);
+      }
+    );
+    return unsub;
+  }, [suggestOpen, user?.uid]);
 
   useEffect(() => {
     const unsubCompanies = onSnapshot(collection(db, "companies"), (snapshot) => {
@@ -360,10 +487,23 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
       {/* RESULTADOS / GRID DE PRODUTOS */}
       <div className="max-w-7xl mx-auto px-4 md:px-6 mt-6">
         
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold text-slate-600">
             {filteredItems.length} {filteredItems.length === 1 ? 'Produto Encontrado' : 'Produtos Encontrados'}
           </h2>
+          {/* Sempre visível, não só quando a busca zera: metade dos pedidos que
+              o estoque não atende aparece no meio de uma lista cheia ("tem essa
+              medida, mas na marca X"). */}
+          {canSuggest && (
+            <button
+              type="button"
+              onClick={openSuggestModal}
+              title="Registrar um pneu que o cliente procurou e a loja não tem"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gold-300 bg-gold-50 text-gold-800 hover:bg-gold-100 text-[11px] font-black uppercase tracking-wider transition-all cursor-pointer"
+            >
+              <Lightbulb size={13} /> Sugerir compra
+            </button>
+          )}
         </div>
 
         {/* ── Loja em foco ────────────────────────────────────────────────
@@ -443,6 +583,24 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
             <Package size={48} className="mx-auto text-slate-300 mb-4" />
             <h3 className="text-xl font-bold text-slate-700 mb-2">Pneu não encontrado</h3>
             <p className="text-slate-500 font-medium">Não temos essa medida ou modelo disponível no momento.</p>
+            {/* É exatamente aqui que a venda é perdida — e o único instante em
+                que o vendedor ainda tem o cliente na frente dele para anotar a
+                medida e o telefone. */}
+            {canSuggest && (
+              <div className="mt-6 max-w-md mx-auto bg-gold-50 border border-gold-200 rounded-2xl p-4">
+                <p className="text-xs font-bold text-gold-800 mb-3">
+                  O cliente está procurando este pneu? Avise o dono da loja — a medida entra na
+                  lista de compras dele.
+                </p>
+                <button
+                  type="button"
+                  onClick={openSuggestModal}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gold-600 text-white font-black text-xs uppercase tracking-wider hover:bg-gold-700 transition-all cursor-pointer"
+                >
+                  <Lightbulb size={14} /> Sugerir compra deste pneu
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
@@ -826,6 +984,271 @@ export default function PublicStock({ user, onCreateTransfer }: PublicStockProps
                   : "Enviar solicitação"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============ SUGESTÃO DE COMPRA ============ */}
+      {/* Não reserva, não trava saldo, não cria transferência: grava um recado
+          endereçado ao dono de uma loja. O pneu nem existe no estoque — é
+          justamente essa a informação. */}
+      {suggestOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                  <Lightbulb size={18} className="text-gold-600" /> Sugerir compra
+                </h3>
+                <p className="text-[11px] text-slate-500 font-semibold mt-0.5">
+                  O pneu que o cliente pediu e a loja não tem.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSuggestOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* A loja é o endereço do recado. Já vem na do vendedor; ele só
+                  escolhe quando a credencial dele não tem loja fixa. */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Loja que recebe</label>
+                <select
+                  value={suggestCompanyId}
+                  onChange={(e) => { setSuggestCompanyId(e.target.value); setSuggestError(""); }}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400 text-sm font-semibold text-slate-800 bg-white cursor-pointer"
+                >
+                  <option value="">Selecione a loja...</option>
+                  {companies.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{isOwnStore(c.id) ? " (sua loja)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                  Medida <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={suggestSize}
+                  onChange={(e) => { setSuggestSize(e.target.value); setSuggestError(""); }}
+                  placeholder="Ex: 205/55 R16"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400 font-mono font-bold"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    Marca <span className="text-slate-400 normal-case font-semibold">(opcional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={suggestBrand}
+                    onChange={(e) => setSuggestBrand(e.target.value)}
+                    placeholder="Ex: Pirelli"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    Modelo <span className="text-slate-400 normal-case font-semibold">(opcional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={suggestModel}
+                    onChange={(e) => setSuggestModel(e.target.value)}
+                    placeholder="Ex: Cinturato P7"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantidade que o cliente queria</label>
+                <div className="flex items-center gap-2">
+                  {[1, 2, 4].map(n => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => { setSuggestQty(n); setSuggestError(""); }}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-black border transition-all cursor-pointer ${
+                        suggestQty === n
+                          ? "bg-slate-900 text-gold-400 border-slate-900"
+                          : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      {n} un
+                    </button>
+                  ))}
+                  <input
+                    type="number"
+                    min={1}
+                    value={suggestQty}
+                    onChange={(e) => { setSuggestQty(parseInt(e.target.value) || 0); setSuggestError(""); }}
+                    className="w-20 px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400 text-sm font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    Cliente <span className="text-slate-400 normal-case font-semibold">(opcional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={suggestCustomer}
+                    onChange={(e) => setSuggestCustomer(e.target.value)}
+                    placeholder="Ex: João da Silva"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    Contato <span className="text-slate-400 normal-case font-semibold">(opcional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={suggestContact}
+                    onChange={(e) => setSuggestContact(e.target.value)}
+                    placeholder="Ex: (75) 99999-0000"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                  Observação <span className="text-slate-400 normal-case font-semibold">(opcional)</span>
+                </label>
+                <textarea
+                  value={suggestNote}
+                  onChange={(e) => setSuggestNote(e.target.value)}
+                  rows={2}
+                  placeholder="Ex: cliente leva os 4 se tiver até sexta; aceita outra marca na mesma medida"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400 resize-none"
+                />
+              </div>
+            </div>
+
+            <p className="mt-4 text-[11px] bg-slate-50 border border-slate-200 text-slate-600 rounded-xl p-2.5">
+              Isto <strong>não reserva pneu nenhum</strong> — é um recado de compra. Ele aparece na aba{" "}
+              <strong>Sugestões</strong> do dono da loja com o seu nome, e você acompanha o desfecho aqui embaixo.
+            </p>
+
+            {suggestError && (
+              <p className="mt-3 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-2.5">
+                {suggestError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => setSuggestOpen(false)}
+                disabled={suggestLoading}
+                className="px-4 py-2 border border-slate-200 rounded-xl text-slate-500 font-bold hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={submitSuggestion}
+                disabled={suggestLoading}
+                className="px-4 py-2 bg-gold-600 text-white rounded-xl font-bold hover:bg-gold-700 disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
+              >
+                {suggestLoading ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                {suggestLoading ? "Enviando..." : "Enviar sugestão"}
+              </button>
+            </div>
+
+            {/* ── O que eu já mandei ────────────────────────────────
+                Fecha o ciclo para o vendedor: sem isto ele não sabe se o dono
+                leu, e o cliente que ligar de volta ouve "vou verificar". */}
+            <div className="mt-6 pt-5 border-t border-slate-100">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">
+                Minhas sugestões enviadas
+              </h4>
+              {mySuggestionsLoading ? (
+                <div className="flex items-center gap-2 text-xs text-slate-400 font-semibold">
+                  <Loader2 size={13} className="animate-spin" /> Carregando...
+                </div>
+              ) : mySuggestions.length === 0 ? (
+                <p className="text-xs text-slate-400 font-semibold">
+                  Você ainda não enviou nenhuma sugestão.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  {mySuggestions.slice(0, 20).map(sug => (
+                    <div
+                      key={sug.id}
+                      className="border border-slate-200 rounded-xl px-3 py-2 flex items-start justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-slate-800 font-mono truncate">
+                          {sug.size}
+                          <span className="font-sans font-bold text-slate-500 ml-1.5">
+                            {sug.quantity} un
+                          </span>
+                        </p>
+                        <p className="text-[10px] text-slate-400 font-semibold truncate">
+                          {sug.companyName} · {formatDate(sug.createdAt)}
+                        </p>
+                        {sug.resolutionNote && (
+                          <p className="text-[11px] text-emerald-800 font-bold mt-1">“{sug.resolutionNote}”</p>
+                        )}
+                      </div>
+                      <span
+                        className={`shrink-0 px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider border inline-flex items-center gap-1 ${
+                          sug.status === "ATENDIDA"
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : sug.status === "ARQUIVADA"
+                            ? "bg-slate-100 text-slate-500 border-slate-200"
+                            : "bg-gold-50 text-gold-800 border-gold-200"
+                        }`}
+                      >
+                        {sug.status === "ATENDIDA" ? (
+                          <><Check size={9} /> Atendida</>
+                        ) : sug.status === "ARQUIVADA" ? (
+                          <><Archive size={9} /> Arquivada</>
+                        ) : (
+                          "Em aberto"
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmação da sugestão enviada */}
+      {suggestDone && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl text-center max-h-[90vh] overflow-y-auto">
+            <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-gold-50 border border-gold-200 flex items-center justify-center">
+              <Lightbulb size={22} className="text-gold-600" />
+            </div>
+            <h3 className="text-base font-black text-slate-900 mb-2">Sugestão enviada</h3>
+            <p className="text-sm text-slate-600">{suggestDone}</p>
+            <button
+              type="button"
+              onClick={() => setSuggestDone("")}
+              className="mt-5 w-full px-4 py-2 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 cursor-pointer"
+            >
+              Entendi
+            </button>
           </div>
         </div>
       )}

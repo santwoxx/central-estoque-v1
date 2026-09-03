@@ -60,10 +60,12 @@ import {
   SignatureMethod,
   TransferStatus,
   TransferRequestKind,
-  TransferSyncResult
+  TransferSyncResult,
+  Suggestion,
+  SuggestionStatus
 } from "./types";
 import { CLIENTE_COMPANY_ID, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "./types";
-import { availableQuantity, formatDate, mapStockDoc, reservedQuantityOf, toMillis } from "./utils";
+import { availableQuantity, formatDate, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, suggestionTime, toMillis } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
 // Components
@@ -84,6 +86,7 @@ const DashboardAnalytics = lazy(() => import("./components/DashboardAnalytics"))
 const HowToUse = lazy(() => import("./components/HowToUse"));
 const TransferOrders = lazy(() => import("./components/TransferOrders"));
 const Reservations = lazy(() => import("./components/Reservations"));
+const Suggestions = lazy(() => import("./components/Suggestions"));
 const StockFlow = lazy(() => import("./components/StockFlow"));
 const ApkInstaller = lazy(() =>
   import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
@@ -113,7 +116,8 @@ import {
   ShoppingBag,
   Smartphone,
   DollarSign,
-  Search
+  Search,
+  Lightbulb
 } from "lucide-react";
 
 // Quantos registros de movimentacao ficam em memoria. 400 (e nao 150) porque o
@@ -224,6 +228,12 @@ export default function App() {
   // history as a flood of "new transfer" alerts — see useAppNotifications.
   const [transfersReady, setTransfersReady] = useState(false);
 
+  // Sugestões de compra vindas do balcão (o pneu que o cliente pediu e a loja
+  // não tinha). Coleção própria, sem relação com estoque ou transferência: é a
+  // caixa de entrada do dono da loja. O vendedor NÃO recebe este feed — ele só
+  // escreve, e acompanha o que mandou dentro do próprio catálogo.
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+
   // Support and Error Report State
   const [showReportModal, setShowReportModal] = useState(false);
   const [errorComment, setErrorComment] = useState("");
@@ -236,7 +246,7 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
 
   // Active Tab/View state
-  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo">("analytics");
+  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions">("analytics");
 
   // Authentication Status listener
   useEffect(() => {
@@ -685,6 +695,42 @@ export default function App() {
     };
   }, [user]);
 
+  // ── Sugestões de compra ────────────────────────────────────────────
+  // Caixa de entrada do DONO DA LOJA. Uma consulta só, por igualdade em
+  // companyId, ordenada em memória — mesmo padrão de stock/movements, e sem
+  // índice composto novo. O ADMIN lê a coleção inteira.
+  //
+  // O vendedor não entra aqui de propósito: ele escreve a sugestão e acompanha
+  // o que mandou dentro do próprio catálogo, com um listener que só existe
+  // enquanto o painel dele está aberto. Manter um feed ligado a sessão inteira
+  // dele seria leitura paga por uma tela que ele quase nunca abre.
+  useEffect(() => {
+    // Sem loja não existe caixa de entrada para filtrar, e uma leitura da
+    // coleção inteira seria recusada pelas regras (só o admin lê tudo) — o
+    // painel abriria vazio com um erro no console em vez de uma explicação.
+    // Mesma condição de `canSeeSuggestions`, que esconde a aba nesse caso.
+    if (!user || !(user.role === "admin" || (user.role === "alimentador" && user.companyId))) {
+      setSuggestions([]);
+      return;
+    }
+
+    const suggestionsRef = collection(db, "suggestions");
+    const suggestionsQuery = user.role === "admin"
+      ? suggestionsRef
+      : query(suggestionsRef, where("companyId", "==", user.companyId));
+
+    const unsub = onSnapshot(suggestionsQuery, (snapshot) => {
+      const list: Suggestion[] = [];
+      snapshot.forEach(docSnap => list.push(mapSuggestionDoc(docSnap.id, docSnap.data())));
+      list.sort((a, b) => suggestionTime(b) - suggestionTime(a));
+      setSuggestions(list);
+    }, (error) => {
+      console.error("Erro ao ler sugestões:", error);
+    });
+
+    return unsub;
+  }, [user]);
+
   // Merge + dedupe the two transfer listeners into a single sorted list.
   // (For a global viewer, transfersAsDestination is always empty, so this is a no-op merge.)
   const transfers = useMemo(() => {
@@ -761,6 +807,23 @@ export default function App() {
   // dele estiver vinculada a uma empresa: sem loja não há vendedor para vincular.
   const canManageUsers =
     user?.role === "admin" || (user?.role === "alimentador" && !!user?.companyId);
+
+  // Quem abre a aba SUGESTÕES. TODO dono de empresa tem esta aba — inclusive o
+  // dono sem loja vinculada, que cai no mesmo feed global do admin (não existe
+  // "a minha loja" para filtrar). O vendedor fica de fora: ele é quem manda o
+  // recado, não quem decide a compra.
+  // Vinculada a uma loja pela mesma razão de `canManageUsers` logo acima: a
+  // aba é a caixa de entrada DE UMA LOJA, e uma credencial criada como "Todas
+  // as Empresas" não tem loja para receber nada.
+  const canSeeSuggestions =
+    user?.role === "admin" || (user?.role === "alimentador" && !!user?.companyId);
+
+  // Selo do menu: sugestões ainda sem desfecho. `suggestions` já chega filtrado
+  // pela loja de quem está logado (ver o listener acima), então basta contar.
+  const pendingSuggestionsCount = useMemo(
+    () => suggestions.filter(s => s.status === "ABERTA").length,
+    [suggestions]
+  );
 
   // O vendedor só opera duas telas. Qualquer caminho que tente levá-lo a outra
   // (clique em notificação, estado antigo restaurado) volta para o catálogo, em
@@ -1579,6 +1642,87 @@ export default function App() {
         });
       }
     });
+  };
+
+  // ─────────────────────────────────────────────────────────────────
+  // Sugestões de compra (o que o balcão pediu e o estoque não tinha)
+  //
+  // Nada aqui toca em estoque, saldo ou reserva: é um recado com fila e
+  // desfecho. Quem escreve é o vendedor (e o admin); quem fecha é o dono da
+  // loja destinatária. As regras do Firestore repetem essa divisão — este
+  // arquivo só se antecipa aos erros para não devolver um "Missing or
+  // insufficient permissions" seco na cara do vendedor.
+  // ─────────────────────────────────────────────────────────────────
+  const handleCreateSuggestion = async (data: {
+    companyId: string;
+    companyName: string;
+    size: string;
+    brand?: string;
+    model?: string;
+    quantity: number;
+    customerName?: string;
+    customerContact?: string;
+    note?: string;
+  }) => {
+    if (!user) return;
+
+    const size = (data.size || "").trim();
+    if (!size) {
+      throw new Error("Informe pelo menos a medida do pneu que o cliente procurou.");
+    }
+    // A loja é o endereço do recado: sem ela nenhum dono recebe a sugestão, e o
+    // documento ficaria órfão no banco (nenhuma consulta da aba o alcançaria).
+    if (!data.companyId) {
+      throw new Error("Escolha a loja que deve receber esta sugestão.");
+    }
+    const quantity = Number(data.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new Error("Informe quantas unidades o cliente queria (pelo menos 1).");
+    }
+
+    await addDoc(collection(db, "suggestions"), {
+      companyId: data.companyId,
+      companyName: data.companyName || "",
+      size,
+      brand: (data.brand || "").trim(),
+      model: (data.model || "").trim(),
+      quantity,
+      customerName: (data.customerName || "").trim(),
+      customerContact: (data.customerContact || "").trim(),
+      note: (data.note || "").trim(),
+      requestedByUid: user.uid,
+      requestedByName: user.displayName,
+      requestedByEmail: user.email,
+      requestedByRole: user.role,
+      requestedByCompanyId: user.companyId || "",
+      requestedByCompanyName: user.companyName || "",
+      status: "ABERTA",
+      createdAt: serverTimestamp()
+    });
+  };
+
+  // Desfecho dado pelo dono da loja. "Reabrir" volta para ABERTA e por isso
+  // limpa quem resolveu: senão o cartão continuaria exibindo "atendida por
+  // Fulano" embaixo de uma sugestão que está de novo na fila.
+  const handleResolveSuggestion = async (
+    id: string,
+    status: SuggestionStatus,
+    note: string
+  ) => {
+    if (!user) return;
+    const reopening = status === "ABERTA";
+    await updateDoc(doc(db, "suggestions", id), {
+      status,
+      resolvedAt: reopening ? null : serverTimestamp(),
+      resolvedByUid: reopening ? "" : user.uid,
+      resolvedByName: reopening ? "" : user.displayName,
+      resolutionNote: reopening ? "" : (note || "").trim()
+    });
+  };
+
+  const handleDeleteSuggestion = async (id: string) => {
+    if (!user) return;
+    await deleteDoc(doc(db, "suggestions", id));
   };
 
   // ─────────────────────────────────────────────────────────────────
@@ -3443,6 +3587,31 @@ export default function App() {
               )}
             </button>
 
+            {/* Sugestões: a fila que vem DEPOIS da venda que não aconteceu.
+                Fica colada em Reservas de propósito — as duas são demanda de
+                cliente trazida pelo vendedor; a diferença é que aqui o pneu
+                nem existe no estoque ainda. */}
+            {canSeeSuggestions && (
+              <button
+                type="button"
+                onClick={() => setActiveTab("suggestions")}
+                className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2.5 border ${
+                  activeTab === "suggestions"
+                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                    : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  <Lightbulb size={14} className="stroke-[2px]" /> Sugestões
+                </span>
+                {pendingSuggestionsCount > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-500 text-slate-900 text-[9px] font-black">
+                    {pendingSuggestionsCount}
+                  </span>
+                )}
+              </button>
+            )}
+
             {user.role !== "vendedor" && (
               <button
                 type="button"
@@ -3689,6 +3858,24 @@ export default function App() {
           <span className="text-[9px] font-extrabold uppercase tracking-wide">Reservas</span>
         </button>
 
+        {canSeeSuggestions && (
+          <button
+            type="button"
+            onClick={() => setActiveTab("suggestions")}
+            className={`relative flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
+              activeTab === "suggestions" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+            }`}
+          >
+            <Lightbulb size={18} />
+            {pendingSuggestionsCount > 0 && (
+              <span className="absolute top-2 right-1/2 translate-x-4 inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full bg-gold-500 text-slate-900 text-[8px] font-black">
+                {pendingSuggestionsCount}
+              </span>
+            )}
+            <span className="text-[9px] font-extrabold uppercase tracking-wide">Sugestões</span>
+          </button>
+        )}
+
         {user.role !== "vendedor" && (
           <button
             type="button"
@@ -3832,7 +4019,11 @@ export default function App() {
           </div>
         }>
           {activeTab === "catalogo" && (
-            <PublicStock user={user} onCreateTransfer={handleCreateTransfer} />
+            <PublicStock
+              user={user}
+              onCreateTransfer={handleCreateTransfer}
+              onCreateSuggestion={handleCreateSuggestion}
+            />
           )}
 
 
@@ -3940,6 +4131,16 @@ export default function App() {
             />
           )}
 
+          {activeTab === "suggestions" && canSeeSuggestions && (
+            <Suggestions
+              suggestions={suggestions}
+              companies={companies}
+              user={user}
+              onResolve={handleResolveSuggestion}
+              onDelete={handleDeleteSuggestion}
+            />
+          )}
+
           {activeTab === "transfers" && (
             <TransferOrders
               transfers={transfers}
@@ -3966,6 +4167,7 @@ export default function App() {
             <UsersAdmin
               companies={companies}
               currentUser={{ role: user.role, companyId: user.companyId, companyName: user.companyName }}
+              stock={stock}
             />
           )}
 

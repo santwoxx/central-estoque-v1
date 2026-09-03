@@ -1,0 +1,42 @@
+{
+  "name": "fechamento-central-estoque",
+  "version": "1.0.0",
+  "description": "Baixa o estoque e o movimento do dia da sua loja para uma pasta do computador.",
+  "author": "Central Estoque",
+  "main": "electron/main.js",
+  "scripts": {
+    "build:renderer": "esbuild renderer/app.js --bundle --outfile=renderer/bundle.js --format=iife --target=chrome120",
+    "start": "npm run build:renderer && electron .",
+    "dist": "npm run build:renderer && electron-builder"
+  },
+  "dependencies": {
+    "firebase": "^11.10.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0"
+  },
+  "build": {
+    "appId": "com.centralestoque.fechamento",
+    "productName": "Fechamento Central Estoque",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/index.html",
+      "renderer/bundle.js",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Fechamento do Dia"
+    }
+  }
+}

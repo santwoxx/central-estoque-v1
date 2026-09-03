@@ -479,3 +479,52 @@ export interface AppNotification {
   refId?: string; // transferId or stockItemId, for click-through context
   targetTab?: "transfers" | "reservations" | "unified" | "inventory";
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Sugestões de compra (o que o cliente procurou e a loja não tinha)
+//
+// O vendedor é a única pessoa que ouve o pedido que o estoque não
+// atendeu — e essa informação morria no balcão. Aqui ela vira um
+// documento endereçado ao DONO DA LOJA (`companyId`), que é quem
+// decide o que comprar. Não mexe em estoque nem em saldo: é um
+// recado com fila e desfecho, não uma reserva.
+// ─────────────────────────────────────────────────────────────────
+export type SuggestionStatus = "ABERTA" | "ATENDIDA" | "ARQUIVADA";
+
+export interface Suggestion {
+  id: string;
+
+  // Loja que RECEBE o recado. É o dono dela que vê a aba Sugestões —
+  // normalmente a loja do vendedor, mas ele pode endereçar a outra
+  // filial (ou ser um vendedor sem loja fixa, e aí precisa escolher).
+  companyId: string;
+  companyName: string;
+
+  // O pneu procurado. Só a medida é obrigatória: é o que o cliente
+  // sempre sabe dizer, e o mínimo para o dono cotar com o fornecedor.
+  size: string;
+  brand?: string;
+  model?: string;
+  quantity: number;
+
+  // O cliente, para a loja conseguir retornar quando o pneu chegar.
+  customerName?: string;
+  customerContact?: string;
+  note?: string;
+
+  // Quem mandou
+  requestedByUid: string;
+  requestedByName: string;
+  requestedByEmail?: string;
+  requestedByRole?: UserRole;
+  requestedByCompanyId?: string;   // a loja de origem do vendedor
+  requestedByCompanyName?: string;
+  createdAt: any;
+
+  // Desfecho, dado pelo dono da loja
+  status: SuggestionStatus;
+  resolvedAt?: any;
+  resolvedByUid?: string;
+  resolvedByName?: string;
+  resolutionNote?: string;
+}

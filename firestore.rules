@@ -581,6 +581,66 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // Sugestoes de compra (o que o cliente pediu e o estoque nao tinha)
+    //
+    // Colecao de RECADOS: nao encosta em stock, movements nem transfers, e
+    // nenhuma regra de saldo depende dela. O que ela precisa garantir e a
+    // divisao de papeis: o vendedor ESCREVE e acompanha o proprio recado; o
+    // DONO DA LOJA destinataria e o unico que decide o desfecho dele.
+    //
+    // `companyId` e o endereco do recado — a loja que recebe, nao a de quem
+    // escreveu (um vendedor pode sugerir compra para outra filial). Toda a
+    // leitura do dono passa por ele.
+    // ─────────────────────────────────────────────────────────────
+    match /suggestions/{suggestionId} {
+
+      // Dono da loja DESTINATARIA. `myCompanyId() != ''` importa: uma
+      // credencial criada como "Todas as Empresas" tem companyId vazio, e sem
+      // esta linha ela casaria com todo documento gravado sem loja.
+      function isTargetOwner(data) {
+        return isAlimentador() &&
+          myCompanyId() != '' &&
+          data.get('companyId', '') == myCompanyId();
+      }
+
+      // Le quem decide (admin e dono da loja) e quem escreveu (o vendedor
+      // acompanha o desfecho do que mandou, dentro do proprio catalogo).
+      // Cada uma destas tres formas corresponde a uma consulta do app:
+      // colecao inteira (admin), where companyId (dono), where requestedByUid
+      // (vendedor) — nenhuma outra consulta passa.
+      allow read: if isAdmin() ||
+        isTargetOwner(resource.data) ||
+        (isAuth() && resource.data.get('requestedByUid', '') == request.auth.uid);
+
+      // Escrevem os que atendem no balcao: vendedor, dono da loja e admin.
+      // A sugestao nasce SEMPRE em aberto e assinada por quem esta logado —
+      // ninguem cria um recado ja resolvido, nem em nome de outra pessoa.
+      allow create: if (isAdmin() || isVendedor() || isAlimentador()) &&
+        request.resource.data.requestedByUid == request.auth.uid &&
+        request.resource.data.status == 'ABERTA' &&
+        request.resource.data.companyId is string &&
+        request.resource.data.companyId != '' &&
+        request.resource.data.size is string &&
+        request.resource.data.size.size() > 0 &&
+        request.resource.data.size.size() <= 60 &&
+        request.resource.data.quantity is int &&
+        request.resource.data.quantity > 0 &&
+        request.resource.data.quantity <= 999;
+
+      // So o desfecho muda, e so quem recebe o recado o da. O vendedor NAO
+      // reescreve o que mandou depois de enviado (o dono ja pode ter comprado
+      // em cima daquela medida), e ninguem reendereça a sugestao para outra
+      // loja trocando companyId — por isso a lista fechada de campos.
+      allow update: if (isAdmin() || isTargetOwner(resource.data)) &&
+        request.resource.data.companyId == resource.data.companyId &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'resolvedAt', 'resolvedByUid', 'resolvedByName', 'resolutionNote']);
+
+      // Faxina da propria caixa de entrada.
+      allow delete: if isAdmin() || isTargetOwner(resource.data);
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Signature Requests: link publico de assinatura do motorista
     //
     // O motorista NAO tem login. Ele abre um link com um token aleatorio de
