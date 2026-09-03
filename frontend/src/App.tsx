@@ -709,15 +709,15 @@ export default function App() {
     // coleção inteira seria recusada pelas regras (só o admin lê tudo) — o
     // painel abriria vazio com um erro no console em vez de uma explicação.
     // Mesma condição de `canSeeSuggestions`, que esconde a aba nesse caso.
-    if (!user || !(user.role === "admin" || (user.role === "alimentador" && user.companyId))) {
+    if (!user || !(user.role === "admin" || user.role === "alimentador")) {
       setSuggestions([]);
       return;
     }
 
     const suggestionsRef = collection(db, "suggestions");
-    const suggestionsQuery = user.role === "admin"
+    const suggestionsQuery = user.role === "admin" || !user.companyId
       ? suggestionsRef
-      : query(suggestionsRef, where("companyId", "==", user.companyId));
+      : query(suggestionsRef, where("companyId", "in", [user.companyId, "ALL"]));
 
     const unsub = onSnapshot(suggestionsQuery, (snapshot) => {
       const list: Suggestion[] = [];
@@ -816,7 +816,7 @@ export default function App() {
   // aba é a caixa de entrada DE UMA LOJA, e uma credencial criada como "Todas
   // as Empresas" não tem loja para receber nada.
   const canSeeSuggestions =
-    user?.role === "admin" || (user?.role === "alimentador" && !!user?.companyId);
+    user?.role === "admin" || user?.role === "alimentador";
 
   // Selo do menu: sugestões ainda sem desfecho. `suggestions` já chega filtrado
   // pela loja de quem está logado (ver o listener acima), então basta contar.

@@ -136,10 +136,9 @@ export default function Suggestions({
     });
   }, [sorted, view, companyFilter, searchTerm]);
 
-  // Quem decide o destino do recado: o admin, ou o dono da loja destinatária.
-  // Um dono não fecha a sugestão endereçada à filial do vizinho.
+  // Quem decide o destino do recado: o admin, ou o dono da loja destinatária (ou qualquer dono se for ALL).
   const canDecide = (s: Suggestion) =>
-    isAdmin || (user.role === "alimentador" && (!user.companyId || s.companyId === user.companyId));
+    isAdmin || (user.role === "alimentador" && (!user.companyId || s.companyId === "ALL" || s.companyId === user.companyId));
 
   const runResolve = async (id: string, status: SuggestionStatus, note: string) => {
     setProcessingId(id);
@@ -324,6 +323,7 @@ export default function Suggestions({
               className="text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl px-3 py-2 outline-none cursor-pointer focus:border-gold-500"
             >
               <option value="">Todas as lojas</option>
+              <option value="ALL">Geral (Todas as Lojas)</option>
               {companies.map(c => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -387,7 +387,14 @@ export default function Suggestions({
                   {/* Linha 2: de onde veio o recado */}
                   <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] font-semibold text-slate-600">
                     <span className="inline-flex items-center gap-1.5">
-                      <Store size={12} className="text-slate-400" /> {s.companyName || "Loja não informada"}
+                      <Store size={12} className={s.companyId === "ALL" ? "text-gold-600" : "text-slate-400"} />
+                      {s.companyId === "ALL" ? (
+                        <span className="font-black text-gold-800 bg-gold-50 border border-gold-300 px-2 py-0.5 rounded-md text-[10px] uppercase tracking-wider">
+                          Todas as Lojas (Geral)
+                        </span>
+                      ) : (
+                        s.companyName || "Loja não informada"
+                      )}
                     </span>
                     <span className="inline-flex items-center gap-1.5">
                       <User size={12} className="text-slate-400" /> {s.requestedByName}

@@ -594,13 +594,11 @@ service cloud.firestore {
     // ─────────────────────────────────────────────────────────────
     match /suggestions/{suggestionId} {
 
-      // Dono da loja DESTINATARIA. `myCompanyId() != ''` importa: uma
-      // credencial criada como "Todas as Empresas" tem companyId vazio, e sem
-      // esta linha ela casaria com todo documento gravado sem loja.
+      // Dono da loja DESTINATARIA. Aceita a própria loja ou recados gerais ('ALL').
       function isTargetOwner(data) {
         return isAlimentador() &&
-          myCompanyId() != '' &&
-          data.get('companyId', '') == myCompanyId();
+          (data.get('companyId', '') == 'ALL' ||
+           (myCompanyId() != '' && data.get('companyId', '') == myCompanyId()));
       }
 
       // Le quem decide (admin e dono da loja) e quem escreveu (o vendedor

@@ -210,7 +210,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
   // busca: a sugestão nasce exatamente do termo que não devolveu nada, e
   // redigitar "205/55 R16" é o passo em que a pessoa desiste de registrar.
   const openSuggestModal = () => {
-    setSuggestCompanyId(ownCompanyId || (companies.length === 1 ? companies[0].id : ""));
+    setSuggestCompanyId(ownCompanyId || "ALL");
     setSuggestSize(searchTerm.trim());
     setSuggestBrand("");
     setSuggestModel("");
@@ -242,10 +242,13 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
     setSuggestLoading(true);
     setSuggestError("");
     try {
+      const isAll = suggestCompanyId === "ALL";
       const company = companies.find(c => c.id === suggestCompanyId);
+      const companyName = isAll ? "Todas as Lojas" : (company?.name || user?.companyName || "");
+
       await onCreateSuggestion({
         companyId: suggestCompanyId,
-        companyName: company?.name || user?.companyName || "",
+        companyName,
         size,
         brand: suggestBrand,
         model: suggestModel,
@@ -256,9 +259,9 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
       });
       setSuggestOpen(false);
       setSuggestDone(
-        `Sugestão enviada para ${company?.name || "a loja"}. Ela aparece na aba Sugestões do dono ` +
-        `da loja, com a medida, o cliente e o seu nome. Nenhum pneu foi reservado — isto é um ` +
-        `recado de compra, não uma reserva.`
+        isAll
+          ? `Sugestão enviada para TODAS as lojas. Ela aparece na aba Sugestões de todos os donos de empresa e administradores.`
+          : `Sugestão enviada para ${company?.name || "a loja"}. Ela aparece na aba Sugestões do dono da loja, com a medida, o cliente e o seu nome. Nenhum pneu foi reservado — isto é um recado de compra.`
       );
     } catch (err: any) {
       setSuggestError(err?.message || "Erro ao enviar a sugestão.");
@@ -1024,6 +1027,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-gold-400 text-sm font-semibold text-slate-800 bg-white cursor-pointer"
                 >
                   <option value="">Selecione a loja...</option>
+                  <option value="ALL">Todas as Lojas (Geral)</option>
                   {companies.map(c => (
                     <option key={c.id} value={c.id}>
                       {c.name}{isOwnStore(c.id) ? " (sua loja)" : ""}
