@@ -611,7 +611,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
               // cartões, ninguém lê linha por linha — a borda âmbar é o que
               // entrega "tem reserva aqui" antes de a pessoa abrir o cartão.
               const itemReserved = showReserved
-                ? Object.values(item.docs).reduce((acc, doc) => acc + reservedQuantityOf(doc), 0)
+                ? Object.values(item.docs).reduce<number>((acc, doc) => acc + reservedQuantityOf(doc), 0)
                 : 0;
 
               return (

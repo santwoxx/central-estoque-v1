@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
+import React, { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 
 // Hook into console to capture logs for error reporting
@@ -1595,7 +1595,7 @@ export default function App() {
           pending.push({ ref: null, log, after: 0, exists: false });
           continue;
         }
-        const current = Number(fresh.data()?.quantity) || 0;
+        const current = Number((fresh.data() as any)?.quantity) || 0;
         // O movimento original já vem com sinal (+ entrada / − saída): estornar é somar o inverso.
         const after = current - (Number(log.quantity) || 0);
         if (after < 0) {

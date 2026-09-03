@@ -1477,7 +1477,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           const isProcessing = loadingSku === item.sku;
           // Mesma leitura do desktop, adaptada ao cartão: no celular não existe
           // grade de células para pintar, então quem carrega a cor é o cartão.
-          const cardReserved = Object.values(item.docs).reduce(
+          const cardReserved = Object.values(item.docs).reduce<number>(
             (acc, doc) => acc + reservedQuantityOf(doc),
             0
           );

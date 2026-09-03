@@ -139,7 +139,7 @@ export default function Suggestions({
   // Quem decide o destino do recado: o admin, ou o dono da loja destinatária.
   // Um dono não fecha a sugestão endereçada à filial do vizinho.
   const canDecide = (s: Suggestion) =>
-    isAdmin || (user.role === "alimentador" && !!user.companyId && s.companyId === user.companyId);
+    isAdmin || (user.role === "alimentador" && (!user.companyId || s.companyId === user.companyId));
 
   const runResolve = async (id: string, status: SuggestionStatus, note: string) => {
     setProcessingId(id);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { doc, setDoc, onSnapshot, updateDoc, serverTimestamp, Timestamp, collection } from "firebase/firestore";
 import SignatureCanvas from "react-signature-canvas";
 import { db } from "../firebase";

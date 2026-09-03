@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord, SignatureMethod, TransferRequestKind, isCustomerReservation } from "../types";
 import { availableQuantity, exportToCSV, formatDate, matchesTireSize, reservedQuantityOf, toMillis } from "../utils";
 import SignaturePad from "./SignaturePad";
