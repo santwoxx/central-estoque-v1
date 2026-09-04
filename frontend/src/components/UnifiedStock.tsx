@@ -28,6 +28,12 @@ interface ConsolidatedItem {
   size: string;
   priceCash: number;
   priceInstallment: number;
+  // Custo da mesma loja de onde saiu o preco. NAO tem coluna nesta tela — o
+  // vendedor abre a planilha unificada e custo nao e assunto dele. Existe aqui
+  // so para os dois caminhos que CRIAM um documento de estoque a partir da
+  // linha (abrir saldo numa filial que ainda nao tinha o pneu): sem isso, o
+  // documento novo nasceria sem custo nenhum.
+  costPrice: number;
   docs: Record<string, StockItem>; // Keyed by companyId
   // De QUAL loja saiu o preco exibido nesta linha, e se as lojas divergem.
   // A linha e unica mas os documentos sao varios: sem saber a origem, editar
@@ -56,6 +62,10 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
   const [newProductSize, setNewProductSize] = useState("");
   const [newProductPriceCash, setNewProductPriceCash] = useState("");
   const [newProductPriceInst, setNewProductPriceInst] = useState("");
+  // Custo de compra. Esta planilha cadastra o MESMO pneu em varias filiais de
+  // uma vez, entao o custo digitado aqui vale para todas elas — quem comprou
+  // mais caro numa loja corrige depois na ficha do produto (Cadastros e Ajustes).
+  const [newProductPriceCost, setNewProductPriceCost] = useState("");
   const [newProductQuantities, setNewProductQuantities] = useState<Record<string, number>>({});
   const [addProductLoading, setAddProductLoading] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -133,6 +143,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           description: `${item.size} ${item.brand} ${item.model}`.trim(),
           priceCash: 0,
           priceInstallment: 0,
+          costPrice: 0,
           priceCompanyId: "",
           priceVaries: false,
           docs: {}
@@ -181,6 +192,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           ...cons,
           priceCash: cashOf(src),
           priceInstallment: instOf(src),
+          costPrice: Number(src?.costPrice) || 0,
           priceCompanyId: sourceId,
           priceVaries
         };
@@ -575,6 +587,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
               price: item.priceCash,
               priceCash: item.priceCash,
               priceInstallment: item.priceInstallment,
+              costPrice: item.costPrice,
               quantity: numValue,
               notes: "Criado via planilha unificada",
               companyId: targetCompany.id,
@@ -704,6 +717,10 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       const size = newProductSize.trim() || "—";
       const priceCash = parseFloat(newProductPriceCash) || 0;
       const priceInstallment = parseFloat(newProductPriceInst) || priceCash || 0;
+      const costPrice = parseFloat(newProductPriceCost) || 0;
+      if (!(costPrice > 0)) {
+        throw new Error("Informe o preço de custo (quanto a loja pagou neste produto).");
+      }
 
       let addedAtLeastOne = false;
       for (const comp of companies) {
@@ -719,6 +736,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
             price: priceCash,
             priceCash,
             priceInstallment,
+            costPrice,
             notes: "Cadastrado via planilha geral",
             description: `${size} ${brand} ${model}`.trim(),
             imageUrl: "",
@@ -743,6 +761,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           price: priceCash,
           priceCash,
           priceInstallment,
+          costPrice,
           notes: "Cadastrado com estoque zero",
           description: `${size} ${brand} ${model}`.trim(),
           imageUrl: "",
@@ -760,6 +779,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       setNewProductSize("");
       setNewProductPriceCash("");
       setNewProductPriceInst("");
+      setNewProductPriceCost("");
       setNewProductQuantities({});
     } catch (err: any) {
       alert(err.message || "Erro ao adicionar produto.");
@@ -962,6 +982,9 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           price: unitPrice || flowItem.priceCash,
           priceCash: flowItem.priceCash,
           priceInstallment: flowItem.priceInstallment,
+          // Numa ENTRADA o valor unitario digitado E o custo desta compra —
+          // melhor fonte que copiar o custo da filial vizinha.
+          costPrice: unitPrice || flowItem.costPrice,
           description: `${flowItem.size} ${flowItem.brand} ${flowItem.model}`.trim(),
           imageUrl: "",
           notes: `Entrada pela planilha unificada — ${flowEffectiveReason}`,
@@ -2256,6 +2279,22 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                     value={newProductModel}
                     onChange={(e) => setNewProductModel(e.target.value)}
                     className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-amber-600 uppercase tracking-wider mb-1.5">
+                    Preço de Custo (R$) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    required
+                    placeholder="Quanto a loja pagou"
+                    value={newProductPriceCost}
+                    onChange={(e) => setNewProductPriceCost(e.target.value)}
+                    className="w-full px-3 py-2 text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-xl outline-none focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 transition-all font-semibold"
                   />
                 </div>
 

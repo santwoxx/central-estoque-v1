@@ -45,6 +45,38 @@ interface StockTableProps {
 // explicit, deliberate choice instead of an empty selection defaulting to "all".
 const CLEAR_ALL_COMPANIES = "__ALL_COMPANIES__";
 
+// Quanto sobra da venda a vista depois de pagar o custo. Fica embaixo dos tres
+// campos porque e ali que o erro aparece: custo digitado com uma casa a mais (ou
+// preco de venda abaixo do custo) vira um numero visivelmente errado ANTES de
+// alguem gravar. So aparece quando os dois valores existem — sem custo nao ha
+// margem para mostrar, e um "0%" mudo seria pior que nada.
+function MarginHint({ cost, cash }: { cost: string; cash: string }) {
+  const costValue = parsePriceInput(cost);
+  const cashValue = parsePriceInput(cash);
+  if (costValue === null || cashValue === null || costValue <= 0 || cashValue <= 0) return null;
+
+  const profit = cashValue - costValue;
+  const marginPct = (profit / cashValue) * 100;
+  const negative = profit < 0;
+
+  return (
+    <div
+      className={`flex items-center justify-between px-3 py-2 rounded border text-[11px] font-bold ${
+        negative
+          ? "bg-red-50 border-red-200 text-red-700"
+          : "bg-slate-50 border-slate-200 text-slate-700"
+      }`}
+    >
+      <span className="uppercase tracking-wider text-[10px] font-black">
+        {negative ? "Venda abaixo do custo" : "Lucro por unidade (à vista)"}
+      </span>
+      <span className={negative ? "text-red-700" : "text-emerald-700"}>
+        {formatBRL(profit)} · {marginPct.toFixed(1).replace(".", ",")}%
+      </span>
+    </div>
+  );
+}
+
 export default function StockTable({ 
   items, 
   isAdmin, 
@@ -97,6 +129,10 @@ export default function StockTable({
   // mandava ZERO para o banco. Ver parsePriceInput em utils.
   const [formPriceCash, setFormPriceCash] = useState("");
   const [formPriceInstallment, setFormPriceInstallment] = useState("");
+  // Custo de compra. Fica em branco de proposito no cadastro: um valor sugerido
+  // aqui seria gravado como verdade por quem so passou o olho, e custo chutado
+  // e pior do que custo em branco.
+  const [formPriceCost, setFormPriceCost] = useState("");
 
   // Confirmação do que FOI GRAVADO, mostrada fora do modal (que fecha no
   // sucesso). Sem ela, "salvou" e "não salvou" são visualmente idênticos: o
@@ -511,13 +547,14 @@ export default function StockTable({
   const exportToCSV = () => {
     if (filteredItems.length === 0) return;
 
-    const headers = ["SKU", "Marca", "Modelo", "Medida", "Quantidade", "Preco a Vista", "Preco a Prazo", "Empresa", "Anotacoes", "Descricao"];
+    const headers = ["SKU", "Marca", "Modelo", "Medida", "Quantidade", "Preco de Custo", "Preco a Vista", "Preco a Prazo", "Empresa", "Anotacoes", "Descricao"];
     const rows = filteredItems.map(item => [
       item.sku,
       item.brand,
       item.model,
       item.size,
       item.quantity,
+      item.costPrice || 0,
       item.priceCash || item.price || 0,
       item.priceInstallment || item.price || 0,
       item.companyName || "N/A",
@@ -555,6 +592,9 @@ export default function StockTable({
     setFormQuantity(item.quantity);
     setFormPriceCash(String(item.priceCash || item.price || 0).replace(".", ","));
     setFormPriceInstallment(String(item.priceInstallment || item.price || 0).replace(".", ","));
+    // Custo ausente/zero volta como campo VAZIO, nao como "0,00": o pneu antigo
+    // que nunca teve custo informado precisa parecer pendente, e nao custar zero.
+    setFormPriceCost(Number(item.costPrice) > 0 ? String(item.costPrice).replace(".", ",") : "");
     setFormNotes(item.notes);
     setFormDescription(item.description || "");
     setFormImageUrl(item.imageUrl || "");
@@ -574,6 +614,7 @@ export default function StockTable({
     setFormQuantity(4);
     setFormPriceCash("399,00");
     setFormPriceInstallment("420,00");
+    setFormPriceCost("");
     setFormNotes("");
     setFormDescription("");
     setFormImageUrl("");
@@ -603,6 +644,16 @@ export default function StockTable({
       return;
     }
 
+    // O custo e OBRIGATORIO no cadastro. Depois que o pneu entra na prateleira
+    // ninguem volta para preencher, e um estoque sem custo nao responde quanto
+    // dinheiro esta parado nem quanto se ganha na venda. E a unica hora em que
+    // quem cadastra tem a nota do fornecedor na mao.
+    const costPrice = parsePriceInput(formPriceCost);
+    if (costPrice === null) {
+      setErrorMsg("Informe o preço de custo (quanto a loja pagou neste produto). Ex: 289,90.");
+      return;
+    }
+
     setSubmitting(true);
     setErrorMsg("");
 
@@ -616,6 +667,7 @@ export default function StockTable({
         price: priceCash,
         priceCash,
         priceInstallment,
+        costPrice,
         notes: formNotes,
         description: formDescription,
         imageUrl: formImageUrl,
@@ -652,6 +704,17 @@ export default function StockTable({
       return;
     }
 
+    // Na EDICAO o custo pode ficar em branco — e o que permite corrigir a nota
+    // ou a prateleira de um pneu antigo sem ter que inventar um custo que
+    // ninguem sabe. Branco grava 0, que as telas leem como "nao informado";
+    // texto invalido continua sendo erro.
+    const costRaw = formPriceCost.trim();
+    const costPrice = costRaw === "" ? 0 : parsePriceInput(costRaw);
+    if (costPrice === null) {
+      setErrorMsg("Confira o preço de custo: use apenas números, com vírgula nos centavos (ex: 289,90).");
+      return;
+    }
+
     setSubmitting(true);
     setErrorMsg("");
 
@@ -665,6 +728,7 @@ export default function StockTable({
         price: priceCash,
         priceCash,
         priceInstallment,
+        costPrice,
         notes: formNotes,
         description: formDescription,
         imageUrl: formImageUrl,
@@ -676,8 +740,8 @@ export default function StockTable({
       await onUpdateItem(editingItem.id, updatedFields, movementReason || "Edição de cadastro", quantityDiff);
       setShowEditModal(false);
       setSavedMsg(
-        `${formBrand} ${formModel} (${formSize}) gravado — à vista ${formatBRL(priceCash)}, ` +
-        `a prazo ${formatBRL(priceInstallment)}, ${Number(formQuantity)} un.`
+        `${formBrand} ${formModel} (${formSize}) gravado — custo ${costPrice > 0 ? formatBRL(costPrice) : "não informado"}, ` +
+        `à vista ${formatBRL(priceCash)}, a prazo ${formatBRL(priceInstallment)}, ${Number(formQuantity)} un.`
       );
     } catch (err: any) {
       setErrorMsg(err.message || "Erro ao atualizar dados.");
@@ -1200,6 +1264,7 @@ export default function StockTable({
                       <th className="py-3 px-2 border-b border-slate-100 font-black">Produto & Especificações</th>
                       {isAdmin && <th className="py-3 px-2 border-b border-slate-100 w-[120px] font-black">Proprietário</th>}
                       <th className="py-3 px-2 border-b border-slate-100 w-[90px] text-center font-black">Estoque</th>
+                      <th className="py-3 px-2 border-b border-slate-100 w-[85px] text-right font-black">Custo</th>
                       <th className="py-3 px-2 border-b border-slate-100 w-[85px] text-right font-black">À Vista</th>
                       <th className="py-3 px-2 border-b border-slate-100 w-[85px] text-right font-black">A Prazo</th>
                       <th className="py-3 px-2 border-b border-slate-100 w-[150px] font-black">Anotações</th>
@@ -1301,6 +1366,15 @@ export default function StockTable({
                                 <Lock size={9} className="stroke-[3px]" /> {rowReserved} reservado{rowReserved > 1 ? "s" : ""}
                               </span>
                             )}
+                          </td>
+
+                          {/* Cost column — só existe nesta tela, que é de quem
+                              responde pela loja. Não vai para o catálogo público
+                              nem para o estoque unificado, que o vendedor abre. */}
+                          <td className="py-2 px-2 text-right font-bold text-amber-700 align-middle whitespace-nowrap text-xs">
+                            {Number(item.costPrice) > 0
+                              ? formatBRL(item.costPrice as number)
+                              : <span className="text-slate-300 font-normal" title="Custo ainda não informado — abra a ficha do produto para preencher.">—</span>}
                           </td>
 
                           {/* Unit Price columns */}
@@ -1438,6 +1512,12 @@ export default function StockTable({
                     <div className="flex items-center justify-between pt-2 border-t border-slate-100">
                       
                       <div className="flex gap-4">
+                        <div>
+                          <span className="text-[9px] text-amber-600 block font-bold uppercase leading-none">Custo</span>
+                          <span className="font-black text-amber-700 text-sm">
+                            {Number(item.costPrice) > 0 ? formatBRL(item.costPrice as number) : "—"}
+                          </span>
+                        </div>
                         <div>
                           <span className="text-[9px] text-emerald-600 block font-bold uppercase leading-none">À Vista</span>
                           <span className="font-black text-emerald-700 text-sm">
@@ -1677,29 +1757,44 @@ export default function StockTable({
                     className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-center outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
                   />
                 </div>
-                <div className="flex gap-2">
-                  <div className="w-1/2">
-                    <label className="block text-xs font-semibold text-emerald-700 mb-1">À Vista (R$)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={formPriceCash}
-                      onChange={(e) => setFormPriceCash(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-emerald-500 bg-emerald-50 text-emerald-800"
-                    />
-                  </div>
-                  <div className="w-1/2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">A Prazo (R$)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={formPriceInstallment}
-                      onChange={(e) => setFormPriceInstallment(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-amber-700 mb-1">Preço de Custo (R$) *</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    required
+                    placeholder="Ex: 289,90"
+                    value={formPriceCost}
+                    onChange={(e) => setFormPriceCost(e.target.value)}
+                    className="w-full px-3 py-2 border border-amber-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-amber-500 bg-amber-50 text-amber-900"
+                  />
                 </div>
               </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-emerald-700 mb-1">À Vista (R$)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formPriceCash}
+                    onChange={(e) => setFormPriceCash(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-emerald-500 bg-emerald-50 text-emerald-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">A Prazo (R$)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formPriceInstallment}
+                    onChange={(e) => setFormPriceInstallment(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
+                  />
+                </div>
+              </div>
+
+              <MarginHint cost={formPriceCost} cash={formPriceCash} />
 
               {/* Field: Company Selector (Visible to Admin only) */}
               {isAdmin && companies.length > 0 && (
@@ -1874,29 +1969,43 @@ export default function StockTable({
                     className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-mono font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
                   />
                 </div>
-                <div className="flex gap-2">
-                  <div className="w-1/2">
-                    <label className="block text-xs font-semibold text-emerald-700 mb-1">À Vista (R$)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={formPriceCash}
-                      onChange={(e) => setFormPriceCash(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-emerald-500 bg-emerald-50 text-emerald-800"
-                    />
-                  </div>
-                  <div className="w-1/2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">A Prazo (R$)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={formPriceInstallment}
-                      onChange={(e) => setFormPriceInstallment(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-amber-700 mb-1">Preço de Custo (R$)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="Não informado"
+                    value={formPriceCost}
+                    onChange={(e) => setFormPriceCost(e.target.value)}
+                    className="w-full px-3 py-2 border border-amber-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-amber-500 bg-amber-50 text-amber-900"
+                  />
                 </div>
               </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-emerald-700 mb-1">À Vista (R$)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formPriceCash}
+                    onChange={(e) => setFormPriceCash(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-emerald-500 bg-emerald-50 text-emerald-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">A Prazo (R$)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formPriceInstallment}
+                    onChange={(e) => setFormPriceInstallment(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-right outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
+                  />
+                </div>
+              </div>
+
+              <MarginHint cost={formPriceCost} cash={formPriceCash} />
 
               {/* Field: Company Selector (Visible to Admin only) */}
               {isAdmin && companies.length > 0 && (

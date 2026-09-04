@@ -44,6 +44,14 @@ export interface StockItem {
   price: number; // Legacy or base price
   priceCash?: number;
   priceInstallment?: number;
+  // Quanto a loja PAGOU no pneu — nao e preco de venda e nunca aparece no
+  // catalogo publico nem para o vendedor. Quem preenche e quem responde pela
+  // loja (o alimentador dono da empresa, ou o admin), na tela de Cadastros e
+  // Ajustes: e o numero que transforma "capital imobilizado" e margem em conta
+  // de verdade, em vez de repetir o preco de venda.
+  // Ausente em todo o estoque cadastrado antes deste campo — sempre leia com
+  // `?? 0` e trate 0 como "custo nao informado", nunca como custo zero.
+  costPrice?: number;
   notes: string;
   description?: string; // Product description
   imageUrl?: string; // Product image url

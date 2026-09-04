@@ -1335,6 +1335,7 @@ export default function App() {
           price: Number(item.price) || 0,
           priceCash: Number(item.priceCash || item.price) || 0,
           priceInstallment: Number(item.priceInstallment || item.price) || 0,
+          costPrice: Number(item.costPrice) || 0,
           notes: item.notes || "",
           description: item.description || "Restaurado via backup",
           imageUrl: item.imageUrl || "",
@@ -3428,7 +3429,19 @@ export default function App() {
   // um pneu com 6 un, 5 delas reservadas, tem 1 un vendável e é caso de compra.
   // Enquanto esta conta usava `quantity`, o alerta ficava mudo justo nesse caso.
   const lowStockItems = filteredKpiStock.filter(item => availableQuantity(item) <= 4).length;
-  const totalCostValue = filteredKpiStock.reduce((acc, item) => acc + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
+  // Capital imobilizado se mede pelo que a loja PAGOU, nao pelo que espera
+  // receber — enquanto esta conta usava o preco de venda, o numero na tela era
+  // o faturamento potencial do estoque com o nome de capital parado. O preco de
+  // venda continua como reserva para o pneu antigo que ainda nao tem custo
+  // informado: trocar por zero derrubaria o indicador de todo mundo no dia da
+  // atualizacao. Ver `costPrice` em types.ts.
+  const totalCostValue = filteredKpiStock.reduce(
+    (acc, item) => acc + ((Number(item.costPrice) || Number(item.price) || 0) * (Number(item.quantity) || 0)),
+    0
+  );
+  // Quantos itens ainda estao entrando nessa conta pelo preco de venda. E o que
+  // separa "capital imobilizado" de "estimativa" na tela.
+  const itemsWithoutCost = filteredKpiStock.filter(item => !(Number(item.costPrice) > 0)).length;
 
   // ── Visão Geral do vendedor: só o alerta de reposição ────────────────
   // O vendedor enxerga o estoque de TODAS as filiais (é o que permite achar o
@@ -3998,6 +4011,14 @@ export default function App() {
                 <p className="text-xl font-black text-emerald-600 tracking-tight">
                   {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalCostValue)}
                 </p>
+                {/* Sem esta linha, um total inflado pelo preco de venda seria
+                    indistinguivel de um total real — e a conta so fica certa
+                    quando o custo de cada produto estiver preenchido. */}
+                {itemsWithoutCost > 0 && (
+                  <span className="text-[10px] font-bold text-amber-600 block leading-tight">
+                    {itemsWithoutCost} produto{itemsWithoutCost > 1 ? "s" : ""} sem custo informado — contando pelo preço de venda
+                  </span>
+                )}
               </div>
               <div className="h-11 w-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shadow-inner">
                 <DollarSign size={20} className="stroke-[1.8]" />
