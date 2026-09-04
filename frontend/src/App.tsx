@@ -65,7 +65,7 @@ import {
   SuggestionStatus
 } from "./types";
 import { CLIENTE_COMPANY_ID, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "./types";
-import { availableQuantity, formatDate, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, suggestionTime, toMillis } from "./utils";
+import { availableQuantity, formatDate, mapMovementDoc, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, suggestionTime, toMillis } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
 // Components
@@ -88,6 +88,7 @@ const TransferOrders = lazy(() => import("./components/TransferOrders"));
 const Reservations = lazy(() => import("./components/Reservations"));
 const Suggestions = lazy(() => import("./components/Suggestions"));
 const PriceComparison = lazy(() => import("./components/PriceComparison"));
+const SizeHistory = lazy(() => import("./components/SizeHistory"));
 const StockFlow = lazy(() => import("./components/StockFlow"));
 const ApkInstaller = lazy(() =>
   import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
@@ -101,6 +102,7 @@ import {
   Warehouse,
   Layers,
   Scale,
+  Ruler,
   FileUp,
   Activity,
   User,
@@ -248,7 +250,7 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
 
   // Active Tab/View state
-  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions" | "price-comparison">("analytics");
+  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions" | "price-comparison" | "size-history">("analytics");
 
   // Authentication Status listener
   useEffect(() => {
@@ -373,37 +375,8 @@ export default function App() {
     // ainda nao existe (ver o onError logo abaixo).
     const applyMovementsSnapshot = (snapshot: any) => {
       const logsList: MovementLog[] = [];
-      snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        logsList.push({
-          id: docSnap.id,
-          sku: data.sku || "",
-          brand: data.brand || "",
-          model: data.model || "",
-          size: data.size || "",
-          type: data.type || "ENTRADA",
-          quantity: data.quantity ?? 0,
-          balanceAfter: data.balanceAfter ?? 0,
-          userId: data.userId || "",
-          userEmail: data.userEmail || "",
-          companyId: data.companyId || "",
-          companyName: data.companyName || "",
-          timestamp: data.timestamp,
-          reason: data.reason || "",
-          // Campos do modulo de Entrada e Saida (ausentes nos registros antigos)
-          operationId: data.operationId || "",
-          operationReason: data.operationReason || "",
-          docNumber: data.docNumber || "",
-          partyName: data.partyName || "",
-          partyDoc: data.partyDoc || "",
-          vehiclePlate: data.vehiclePlate || "",
-          observation: data.observation || "",
-          unitPrice: data.unitPrice ?? 0,
-          totalAmount: data.totalAmount ?? 0,
-          reversalOf: data.reversalOf || "",
-          transferId: data.transferId || "",
-          rebuilt: data.rebuilt === true
-        });
+      snapshot.forEach((docSnap: any) => {
+        logsList.push(mapMovementDoc(docSnap.id, docSnap.data()));
       });
 
       // Sort logs by newest first in memory
@@ -3615,6 +3588,22 @@ export default function App() {
                 >
                   <Activity size={14} className="stroke-[2px]" /> Auditoria & Histórico
                 </button>
+
+                {/* Fica colada em Auditoria de propósito: as duas leem a mesma
+                    coleção. A diferença é o eixo — lá é movimento a movimento,
+                    aqui é por MEDIDA, que é a unidade em que pneu é comprado. */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("size-history")}
+                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border text-left ${
+                    activeTab === "size-history"
+                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                  }`}
+                >
+                  <Ruler size={14} className="stroke-[2px] shrink-0" />
+                  <span className="leading-tight">Histórico por Medida</span>
+                </button>
               </>
             )}
 
@@ -3872,6 +3861,19 @@ export default function App() {
               >
                 <Scale size={18} />
                 <span className="text-[9px] font-extrabold uppercase tracking-wide">Custo</span>
+              </button>
+            )}
+
+            {user.role !== "vendedor" && (
+              <button
+                type="button"
+                onClick={() => setActiveTab("size-history")}
+                className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
+                  activeTab === "size-history" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+                }`}
+              >
+                <Ruler size={18} />
+                <span className="text-[9px] font-extrabold uppercase tracking-wide">Medidas</span>
               </button>
             )}
 
@@ -4166,6 +4168,10 @@ export default function App() {
                 onUpdateItem={handleUpdateItem}
               />
             </div>
+          )}
+
+          {activeTab === "size-history" && user.role !== "vendedor" && (
+            <SizeHistory stock={stock} companies={companies} user={user} />
           )}
 
           {activeTab === "stock-flow" && (

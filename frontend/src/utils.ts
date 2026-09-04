@@ -1,4 +1,4 @@
-import { StockFlowType, StockItem, Suggestion } from "./types";
+import { MovementLog, StockFlowType, StockItem, Suggestion } from "./types";
 
 // ──────────────────────────────────────────────────────────────
 // Motivos sugeridos para movimentação de pneus, por tipo de operação.
@@ -165,6 +165,43 @@ export function mapStockDoc(id: string, data: any): StockItem {
     companyName: data.companyName || "",
     createdAt: data.createdAt,
     updatedAt: data.updatedAt
+  };
+}
+
+// Conversao unica de um documento de `movements`. Compartilhada porque DUAS
+// telas leem essa colecao por caminhos diferentes: o listener do App (janela
+// curta, tempo real) e o Historico por Medida (busca propria, por periodo). Uma
+// copia manual em cada lugar ja deixou campo para tras antes — ver o comentario
+// de `mapStockDoc` logo acima.
+export function mapMovementDoc(id: string, data: any): MovementLog {
+  return {
+    id,
+    sku: data.sku || "",
+    brand: data.brand || "",
+    model: data.model || "",
+    size: data.size || "",
+    type: data.type || "ENTRADA",
+    quantity: data.quantity ?? 0,
+    balanceAfter: data.balanceAfter ?? 0,
+    userId: data.userId || "",
+    userEmail: data.userEmail || "",
+    companyId: data.companyId || "",
+    companyName: data.companyName || "",
+    timestamp: data.timestamp,
+    reason: data.reason || "",
+    // Campos do modulo de Entrada e Saida (ausentes nos registros antigos)
+    operationId: data.operationId || "",
+    operationReason: data.operationReason || "",
+    docNumber: data.docNumber || "",
+    partyName: data.partyName || "",
+    partyDoc: data.partyDoc || "",
+    vehiclePlate: data.vehiclePlate || "",
+    observation: data.observation || "",
+    unitPrice: data.unitPrice ?? 0,
+    totalAmount: data.totalAmount ?? 0,
+    reversalOf: data.reversalOf || "",
+    transferId: data.transferId || "",
+    rebuilt: data.rebuilt === true
   };
 }
 
