@@ -752,6 +752,26 @@ export default function App() {
     [transfers]
   );
 
+  // O que a aba TRANSFERÊNCIAS pode ver. Reserva é reserva e transferência é
+  // transferência: um pneu separado no balcão para um cliente nunca viaja entre
+  // filiais, não tem as quatro assinaturas e não é histórico de transferência
+  // nenhum — ele lotava a lista e o relatório impresso com pedidos que não
+  // pertenciam ali. A vida inteira dele acontece na aba Reservas, que já tem
+  // todas as ações (aprovar, recusar, concluir venda, destravar, excluir).
+  //
+  // O corte é pelo ESTADO ATUAL (`isCustomerReservation`), não pela origem
+  // (`isReservationOrder`), e a diferença é uma só: a reserva de pneu de OUTRA
+  // filial, depois dos dois avais, deixa de ter o balcão como destino e vira uma
+  // transferência de verdade entre as duas lojas. A partir daí ela É uma
+  // transferência — precisa de despacho, chegada e as quatro assinaturas, que só
+  // existem nesta aba. Tirá-la daqui prenderia o pneu para sempre. Ela continua
+  // aparecendo em Reservas também, porque é lá que o vendedor acompanha o pneu
+  // do cliente dele; cada aba mostra a sua metade.
+  const stockTransfers = useMemo(
+    () => transfers.filter(t => !isCustomerReservation(t)),
+    [transfers]
+  );
+
   // Selo do menu: quantas reservas dependem de uma decisão de QUEM ESTÁ LOGADO.
   // O vendedor conta as próprias reservas ainda em análise (é o que ele quer
   // saber: "já liberaram meu pneu?"); quem decide conta as que travam o estoque
@@ -4164,7 +4184,7 @@ export default function App() {
 
           {activeTab === "transfers" && (
             <TransferOrders
-              transfers={transfers}
+              transfers={stockTransfers}
               stock={stock}
               companies={companies}
               user={user}
@@ -4178,7 +4198,6 @@ export default function App() {
               onCompleteDispatch={handleCompleteDispatch}
               onSignReceiverArrival={handleSignReceiverArrival}
               onCompleteArrival={handleCompleteArrival}
-              onCompleteSale={handleCompleteSale}
               onReverseTransfer={handleReverseInTransitTransfer}
               onDeleteTransfer={handleDeleteTransfer}
             />

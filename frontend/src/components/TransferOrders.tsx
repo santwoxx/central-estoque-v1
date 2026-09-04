@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord, SignatureMethod, TransferRequestKind, isCustomerReservation } from "../types";
+import { StockItem, Company, TransferOrder, TransferStatus, UserRole, SignatureRecord, SignatureMethod, TransferRequestKind } from "../types";
 import { availableQuantity, exportToCSV, formatDate, matchesTireSize, reservedQuantityOf, toMillis } from "../utils";
 import SignaturePad from "./SignaturePad";
 import DriverSignature from "./DriverSignature";
@@ -63,8 +63,6 @@ interface TransferOrdersProps {
   onCompleteDispatch: (transferId: string, driverSignature: string, driverName: string, method: SignatureMethod) => Promise<void>;
   onSignReceiverArrival: (transferId: string, signatureDataUrl: string) => Promise<void>;
   onCompleteArrival: (transferId: string, driverSignature: string, driverName: string, method: SignatureMethod) => Promise<void>;
-  // Fecha uma reserva de cliente: baixa o pneu do estoque da loja de origem.
-  onCompleteSale?: (transferId: string) => Promise<void>;
   onReverseTransfer?: (transferId: string) => Promise<void>;
   onDeleteTransfer?: (transferId: string) => Promise<void>;
 }
@@ -111,7 +109,6 @@ export default function TransferOrders({
   onCompleteDispatch,
   onSignReceiverArrival,
   onCompleteArrival,
-  onCompleteSale,
   onReverseTransfer,
   onDeleteTransfer
 }: TransferOrdersProps) {
@@ -167,7 +164,6 @@ export default function TransferOrders({
   const [formStockSearch, setFormStockSearch] = useState("");
   const [formSelectedStockItemId, setFormSelectedStockItemId] = useState("");
   const [formDestinationCompanyId, setFormDestinationCompanyId] = useState("");
-  const [formCustomerName, setFormCustomerName] = useState("");
   const [formQuantity, setFormQuantity] = useState<string>("");
   const [formItems, setFormItems] = useState<{ sourceStockItemId: string; sku: string; brand: string; model: string; size: string; quantity: number; }[]>([]);
   const [formReason, setFormReason] = useState("");
@@ -186,47 +182,37 @@ export default function TransferOrders({
     !isVendedor && (isGlobalAdmin || user.companyId === t.sourceCompanyId);
   const isDestinationOf = (t: TransferOrder) =>
     !isVendedor && (isGlobalAdmin || user.companyId === t.destinationCompanyId);
-  // Reserva de cliente: o pneu vai para o balcão, não para outra filial. Não há
-  // lado de destino (ninguém pertence à empresa sentinela CLIENTE), logo nenhuma
-  // das quatro assinaturas se aplica — o pedido é encerrado com "Concluir Venda".
-  const isCustomerOrder = (t: TransferOrder) => isCustomerReservation(t);
+  // INVARIANTE DESTA TELA: nenhuma reserva de cliente chega aqui.
+  //
+  // O App entrega em `transfers` apenas pedidos que NÃO são reserva de balcão
+  // (ver `stockTransfers` em App.tsx). Reserva é reserva e transferência é
+  // transferência: um pneu separado para um cliente não viaja entre filiais,
+  // não tem as quatro assinaturas, e toda a vida dele — aprovar, recusar,
+  // concluir a venda, destravar, excluir — acontece na aba Reservas.
+  //
+  // Por isso não existe mais nem `isCustomerOrder` nem "Concluir Venda" neste
+  // arquivo: eram ramos que a lista nunca mais alcança. Se um dia voltarem a
+  // fazer falta aqui, o lugar de mexer é o filtro do App, não este comentário.
 
-  // Uma reserva de cliente nasce de duas formas, e a diferença importa para as
-  // duas pontas: o vendedor pediu um pneu da PRÓPRIA loja (fica em análise com o
-  // dono da casa) ou pediu um pneu de OUTRA filial (aquela loja é que decide).
-  // Vendedor sem empresa vinculada não tem loja "da casa": tudo é solicitação.
-  const isCrossStoreRequest = (t: TransferOrder) =>
-    isCustomerOrder(t) &&
-    !!t.requestedByCompanyId &&
-    t.requestedByCompanyId !== t.sourceCompanyId;
+  // A ÚNICA reserva que passa por esta tela — e passa porque deixou de ser
+  // reserva. Ao aprovar o pedido de um vendedor de outra filial, o destino deixa
+  // de ser o balcão e passa a ser a loja dele: daí em diante o pedido percorre
+  // as quatro assinaturas como qualquer transferência, e este é o único lugar
+  // onde elas podem ser coletadas. O `customerName` é o que denuncia a origem:
+  // transferência comum nenhuma carrega nome de cliente.
+  const isConvertedCustomerOrder = (t: TransferOrder) => !!t.customerName;
 
-  // Reserva de cliente que JÁ virou transferência: ao aprovar um pedido de
-  // vendedor de outra filial, o destino deixa de ser o balcão e passa a ser a
-  // loja dele — daí em diante o pedido percorre as quatro assinaturas como
-  // qualquer transferência. O `customerName` é o que denuncia a origem do
-  // pedido: transferência comum nenhuma carrega nome de cliente.
-  const isConvertedCustomerOrder = (t: TransferOrder) =>
-    !isCustomerOrder(t) && !!t.customerName;
-
-  // "Este pneu tem dono" — vale nos dois formatos, antes e depois da conversão.
-  const hasCustomer = (t: TransferOrder) => isCustomerOrder(t) || isConvertedCustomerOrder(t);
-
-  // O que o VENDEDOR lê no lugar de "Aguardando Aprovação": o pedido dele está
-  // em análise com a loja dona do pneu.
-  const statusLabelFor = (t: TransferOrder) => {
-    if (isVendedor && isCustomerOrder(t) && t.status === "SOLICITADO") return "Em Análise";
-    return STATUS_LABELS[t.status];
-  };
+  const statusLabelFor = (t: TransferOrder) => STATUS_LABELS[t.status];
 
   // Cada ponta tem duas etapas: assinar (interna) e coletar a via do motorista.
   const canSignSender = (t: TransferOrder) =>
-    !isCustomerOrder(t) && t.status === "PENDENTE" && isSourceOf(t) && !t.dispatch?.sender;
+    t.status === "PENDENTE" && isSourceOf(t) && !t.dispatch?.sender;
   const canCollectDispatchDriver = (t: TransferOrder) =>
-    !isCustomerOrder(t) && t.status === "PENDENTE" && isSourceOf(t) && !!t.dispatch?.sender && !t.dispatch?.driver;
+    t.status === "PENDENTE" && isSourceOf(t) && !!t.dispatch?.sender && !t.dispatch?.driver;
   const canSignReceiver = (t: TransferOrder) =>
-    !isCustomerOrder(t) && t.status === "EM_TRANSITO" && isDestinationOf(t) && !t.arrival?.receiver;
+    t.status === "EM_TRANSITO" && isDestinationOf(t) && !t.arrival?.receiver;
   const canCollectArrivalDriver = (t: TransferOrder) =>
-    !isCustomerOrder(t) && t.status === "EM_TRANSITO" && isDestinationOf(t) && !!t.arrival?.receiver && !t.arrival?.driver;
+    t.status === "EM_TRANSITO" && isDestinationOf(t) && !!t.arrival?.receiver && !t.arrival?.driver;
 
   // "Aguardando minha ação" cobre as quatro etapas.
   const canSignDelivery = (t: TransferOrder) => canSignSender(t) || canCollectDispatchDriver(t);
@@ -238,14 +224,9 @@ export default function TransferOrders({
   const isReserved = (t: TransferOrder) => t.reservation?.active === true;
   const canDecideRequest = (t: TransferOrder) => t.status === "SOLICITADO" && isSourceOf(t);
   const canReserve = (t: TransferOrder) =>
-    !isCustomerOrder(t) && (t.status === "AGENDADO" || t.status === "PENDENTE") && isSourceOf(t) && !isReserved(t);
+    (t.status === "AGENDADO" || t.status === "PENDENTE") && isSourceOf(t) && !isReserved(t);
   const canRelease = (t: TransferOrder) =>
-    !isCustomerOrder(t) && (t.status === "AGENDADO" || t.status === "PENDENTE") && isSourceOf(t) && isReserved(t);
-
-  // Concluir a venda é o passo final de uma reserva de cliente já aprovada: a
-  // loja de origem entregou o pneu e agora dá a baixa definitiva no estoque.
-  const canCompleteSale = (t: TransferOrder) =>
-    isCustomerOrder(t) && (t.status === "PENDENTE" || t.status === "AGENDADO") && isSourceOf(t);
+    (t.status === "AGENDADO" || t.status === "PENDENTE") && isSourceOf(t) && isReserved(t);
 
   // Um pedido com reserva ativa segura pneus no estoque da origem, e só a origem
   // consegue devolvê-los — por isso o destino não cancela um pedido reservado
@@ -342,8 +323,7 @@ export default function TransferOrders({
     setFormSourceCompanyId(kind === "ENVIO" && isAlimentador ? user.companyId || "" : "");
     setFormStockSearch("");
     setFormSelectedStockItemId("");
-    setFormDestinationCompanyId(isVendedor ? "CLIENTE" : (kind === "SOLICITACAO" && !isGlobalAdmin ? user.companyId || "" : ""));
-    setFormCustomerName("");
+    setFormDestinationCompanyId(kind === "SOLICITACAO" && !isGlobalAdmin ? user.companyId || "" : "");
     setFormQuantity("");
     setFormItems([]);
     setFormReason("");
@@ -414,10 +394,6 @@ export default function TransferOrders({
       setCreateError("Selecione a empresa de destino.");
       return;
     }
-    if (isVendedor && !formCustomerName.trim()) {
-      setCreateError("Informe o nome do cliente.");
-      return;
-    }
     if (!isGlobalAdmin && effectiveSourceCompanyId !== user.companyId && formDestinationCompanyId !== user.companyId) {
       setCreateError("Você só pode criar transferências que envolvam a sua própria loja.");
       return;
@@ -453,11 +429,10 @@ export default function TransferOrders({
         sourceCompanyId: effectiveSourceCompanyId,
         sourceCompanyName: effectiveSourceCompanyName,
         destinationCompanyId: formDestinationCompanyId,
-        destinationCompanyName: destinationCompany?.name || (formDestinationCompanyId === "CLIENTE" ? "Reserva de Cliente" : ""),
+        destinationCompanyName: destinationCompany?.name || "",
         reason: formReason,
         scheduledFor: scheduledDate,
-        requestKind: formKind,
-        customerName: formCustomerName.trim()
+        requestKind: formKind
       });
       setShowCreateModal(false);
     } catch (err: any) {
@@ -540,24 +515,6 @@ export default function TransferOrders({
       await onRejectRequest(t.id, reason);
     } catch (err: any) {
       alert(err.message || "Erro ao recusar a solicitação.");
-    } finally {
-      setProcessingId("");
-    }
-  };
-
-  const handleCompleteSaleClick = async (t: TransferOrder) => {
-    if (!onCompleteSale) return;
-    const units = totalUnitsOf(t);
-    if (!window.confirm(
-      `Concluir a venda de ${units} un para ${t.customerName || "o cliente"}?\n\n` +
-      `O pneu sai definitivamente do estoque de ${t.sourceCompanyName} e a saída fica ` +
-      `registrada em Entradas e Saídas. Só faça isso depois de entregar.`
-    )) return;
-    setProcessingId(t.id);
-    try {
-      await onCompleteSale(t.id);
-    } catch (err: any) {
-      alert(err.message || "Erro ao concluir a venda.");
     } finally {
       setProcessingId("");
     }
@@ -1069,19 +1026,17 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                       <span className={`inline-block px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider ${STATUS_BADGE_STYLES[t.status]}`}>
                         {statusLabelFor(t)}
                       </span>
-                      {hasCustomer(t) ? (
+                      {isConvertedCustomerOrder(t) ? (
                         <>
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-blue-50 text-blue-700 border-blue-200">
-                            <ShoppingBag size={10} /> Reserva de cliente{t.customerName ? `: ${t.customerName}` : ""}
+                            <ShoppingBag size={10} /> Pneu de cliente: {t.customerName}
                           </span>
-                          {(isCrossStoreRequest(t) || isConvertedCustomerOrder(t)) && (
-                            <span
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-300"
-                              title={`Pedido aberto por um vendedor de ${t.requestedByCompanyName || "outra filial"}`}
-                            >
-                              <Send size={10} /> De outra filial
-                            </span>
-                          )}
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-300"
+                            title={`Pedido aberto por um vendedor de ${t.requestedByCompanyName || "outra filial"}`}
+                          >
+                            <Send size={10} /> De outra filial
+                          </span>
                         </>
                       ) : t.requestKind === "SOLICITACAO" ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black border uppercase tracking-wider bg-violet-50 text-violet-700 border-violet-200">
@@ -1119,16 +1074,7 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                     <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 flex-wrap mt-2">
                       <Building2 size={13} className="text-slate-400 shrink-0" /> {t.sourceCompanyName}
                       <ArrowRight size={13} className="text-gold-500 shrink-0" />
-                      {isCustomerOrder(t) ? (
-                        <>
-                          <ShoppingBag size={13} className="text-blue-500 shrink-0" />
-                          {t.customerName || "Cliente final"}
-                        </>
-                      ) : (
-                        <>
-                          <Building2 size={13} className="text-slate-400 shrink-0" /> {t.destinationCompanyName}
-                        </>
-                      )}
+                      <Building2 size={13} className="text-slate-400 shrink-0" /> {t.destinationCompanyName}
                     </div>
                   </div>
 
@@ -1246,49 +1192,10 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                   <div className="flex items-start gap-1.5 text-[11px] text-violet-800 bg-violet-50 border border-violet-200 rounded-xl p-2.5">
                     <Inbox size={13} className="shrink-0 mt-0.5" />
                     <span>
-                      {isCustomerOrder(t) ? (
-                        isSourceOf(t) ? (
-                          isCrossStoreRequest(t)
-                            ? <><strong>{t.requestedByName}</strong>, vendedor de <strong>{t.requestedByCompanyName || "outra filial"}</strong>, está pedindo um pneu do SEU estoque para <strong>{t.customerName || "um cliente"}</strong>. Ao aprovar, ele fica reservado aqui e o pedido vira uma <strong>transferência para {t.requestedByCompanyName || "a loja dele"}</strong> — o pneu só sai quando você assinar o envio.</>
-                            : <><strong>{t.requestedByName}</strong> reservou estes pneus para <strong>{t.customerName || "um cliente"}</strong>. Ao aprovar, eles ficam bloqueados no seu estoque até a venda ser concluída.</>
-                        ) : isCrossStoreRequest(t) ? (
-                          <>Solicitação <strong>em análise</strong> com <strong>{t.sourceCompanyName}</strong> — o pneu é daquela filial e o dono dela decide. Até confirmar, o pneu segue disponível para outras vendas.</>
-                        ) : (
-                          <>Reserva <strong>em análise</strong> com o dono de <strong>{t.sourceCompanyName}</strong>. Até ele confirmar, o pneu segue disponível para outras vendas.</>
-                        )
-                      ) : isSourceOf(t) ? (
+                      {isSourceOf(t) ? (
                         <><strong>{t.destinationCompanyName}</strong> está pedindo estes pneus. Ao aprovar, eles ficam reservados no seu estoque e bloqueados para venda.</>
                       ) : (
                         <>Aguardando <strong>{t.sourceCompanyName}</strong> aprovar e reservar os pneus.</>
-                      )}
-                    </span>
-                  </div>
-                )}
-
-                {/* Reserva de cliente já aprovada: o próximo passo não é assinar
-                    envio nenhum — é entregar o pneu e fechar a venda. */}
-                {isCustomerOrder(t) && (t.status === "PENDENTE" || t.status === "AGENDADO") && (
-                  <div className="flex items-start gap-1.5 text-[11px] text-blue-800 bg-blue-50 border border-blue-200 rounded-xl p-2.5">
-                    <ShoppingBag size={13} className="shrink-0 mt-0.5" />
-                    <span>
-                      {isSourceOf(t) ? (
-                        <>
-                          Reserva confirmada{isReserved(t) ? " e bloqueada no seu estoque" : ""}
-                          {isCrossStoreRequest(t) && <> para um cliente de <strong>{t.requestedByCompanyName || "outra filial"}</strong></>}.
-                          {" "}Quando o pneu sair para <strong>{t.customerName || "o cliente"}</strong>, use{" "}
-                          <strong>Concluir Venda</strong> — é isso que dá a baixa definitiva no estoque.
-                        </>
-                      ) : isCrossStoreRequest(t) ? (
-                        <>
-                          <strong>{t.sourceCompanyName}</strong> confirmou e separou o pneu para{" "}
-                          <strong>{t.customerName || "o cliente"}</strong>. Ele está no estoque daquela filial:
-                          combine a retirada com eles. Quem dá a baixa é a loja, na entrega.
-                        </>
-                      ) : (
-                        <>
-                          <strong>{t.sourceCompanyName}</strong> confirmou e separou os pneus para{" "}
-                          <strong>{t.customerName || "o cliente"}</strong>. A baixa acontece quando a loja entregar.
-                        </>
                       )}
                     </span>
                   </div>
@@ -1333,15 +1240,10 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                       <button
                         disabled={isProcessing}
                         onClick={() => handleApproveClick(t)}
-                        title={
-                          isCrossStoreRequest(t)
-                            ? `Aprovar, reservar os pneus e abrir a transferência para ${t.requestedByCompanyName || "a loja do vendedor"}`
-                            : "Aprovar a solicitação e reservar os pneus no seu estoque"
-                        }
+                        title="Aprovar a solicitação e reservar os pneus no seu estoque"
                         className="flex items-center gap-1.5 px-3.5 py-2 bg-violet-600 hover:bg-violet-700 text-white font-black rounded-xl text-[11px] shadow-sm transition-all cursor-pointer disabled:opacity-50"
                       >
-                        {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}{" "}
-                        {isCrossStoreRequest(t) ? "Aprovar e Transferir" : "Aprovar e Reservar"}
+                        {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Aprovar e Reservar
                       </button>
                     )}
                     {canDecideRequest(t) && onRejectRequest && (
@@ -1351,16 +1253,6 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
                         className="flex items-center gap-1.5 px-3.5 py-2 border border-rose-200 text-rose-600 hover:bg-rose-50 font-bold rounded-xl text-[11px] transition-all cursor-pointer disabled:opacity-50"
                       >
                         <Ban size={13} /> Recusar
-                      </button>
-                    )}
-                    {canCompleteSale(t) && onCompleteSale && (
-                      <button
-                        disabled={isProcessing}
-                        onClick={() => handleCompleteSaleClick(t)}
-                        title="Confirmar a entrega ao cliente e baixar o pneu do estoque"
-                        className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-[11px] shadow-sm transition-all cursor-pointer disabled:opacity-50"
-                      >
-                        {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <ShoppingBag size={13} />} Concluir Venda
                       </button>
                     )}
                     {canReserve(t) && onReserveItems && (
@@ -1727,24 +1619,9 @@ Este pedido tem ${totalUnitsOf(t)} un RESERVADAS em ${t.sourceCompanyName}. ` +
 
                 <div>
                   <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5 mt-2">
-                    {isVendedor ? "Reserva de Cliente *" : (isSolicitacao ? "Empresa que vai receber *" : "Empresa de Destino *")}
+                    {isSolicitacao ? "Empresa que vai receber *" : "Empresa de Destino *"}
                   </label>
-                  {isVendedor ? (
-                    <div>
-                      <div className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 flex items-center gap-1.5 mb-2">
-                        <Building2 size={13} className="text-slate-400" />
-                        Balcão / Cliente Final
-                        <span className="ml-auto text-[9px] font-black uppercase tracking-wider text-slate-400">Reserva</span>
-                      </div>
-                      <input
-                        type="text"
-                        placeholder="Nome do cliente final *"
-                        value={formCustomerName}
-                        onChange={e => setFormCustomerName(e.target.value)}
-                        className="w-full px-3 py-2 text-xs text-slate-800 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-gold-500/10 focus:border-gold-500 transition-all font-semibold"
-                      />
-                    </div>
-                  ) : lockDestination ? (
+                  {lockDestination ? (
                     <div className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 flex items-center gap-1.5">
                       <Building2 size={13} className="text-slate-400" />
                       {user.companyName || "Sua empresa"}
