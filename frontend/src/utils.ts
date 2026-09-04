@@ -151,6 +151,11 @@ export function mapStockDoc(id: string, data: any): StockItem {
     price: data.price ?? 0,
     priceCash: data.priceCash ?? data.price ?? 0,
     priceInstallment: data.priceInstallment ?? data.price ?? 0,
+    // SEM fallback para `price`: custo e preco de venda sao coisas diferentes, e
+    // um pneu que nunca teve custo informado tem que continuar dizendo isso
+    // (0 = nao informado). Herdar o preco de venda aqui faria toda margem
+    // aparecer como zero e o capital imobilizado mentir de novo.
+    costPrice: data.costPrice ?? 0,
     notes: data.notes || "",
     description: data.description || "",
     imageUrl: data.imageUrl || "",

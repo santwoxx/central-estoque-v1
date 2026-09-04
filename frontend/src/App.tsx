@@ -87,6 +87,7 @@ const HowToUse = lazy(() => import("./components/HowToUse"));
 const TransferOrders = lazy(() => import("./components/TransferOrders"));
 const Reservations = lazy(() => import("./components/Reservations"));
 const Suggestions = lazy(() => import("./components/Suggestions"));
+const PriceComparison = lazy(() => import("./components/PriceComparison"));
 const StockFlow = lazy(() => import("./components/StockFlow"));
 const ApkInstaller = lazy(() =>
   import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
@@ -99,6 +100,7 @@ import {
   LogOut,
   Warehouse,
   Layers,
+  Scale,
   FileUp,
   Activity,
   User,
@@ -246,7 +248,7 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
 
   // Active Tab/View state
-  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions">("analytics");
+  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions" | "price-comparison">("analytics");
 
   // Authentication Status listener
   useEffect(() => {
@@ -3560,6 +3562,24 @@ export default function App() {
                   </button>
                 )}
 
+                {/* Custo vs preços de venda. Mesmo público de Cadastros e
+                    Ajustes — quem responde pela loja. O vendedor não abre: custo
+                    e margem não são assunto de balcão. */}
+                {(user.role === "alimentador" || user.role === "admin") && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("price-comparison")}
+                    className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border text-left ${
+                      activeTab === "price-comparison"
+                        ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                        : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+                    }`}
+                  >
+                    <Scale size={14} className="stroke-[2px] shrink-0" />
+                    <span className="leading-tight">Custo vs À Vista vs A Prazo</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setActiveTab("stock-flow")}
@@ -3842,6 +3862,19 @@ export default function App() {
               </button>
             )}
 
+            {(user.role === "alimentador" || user.role === "admin") && (
+              <button
+                type="button"
+                onClick={() => setActiveTab("price-comparison")}
+                className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
+                  activeTab === "price-comparison" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+                }`}
+              >
+                <Scale size={18} />
+                <span className="text-[9px] font-extrabold uppercase tracking-wide">Custo</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setActiveTab("stock-flow")}
@@ -4110,6 +4143,27 @@ export default function App() {
                 onDeleteItem={handleDeleteItem}
                 onClearStock={handleClearCompanyStock}
                 onRestoreBackup={handleRestoreBackup}
+              />
+            </div>
+          )}
+
+          {/* Custo vs À Vista vs A Prazo. Recebe `ownScopedStock` pela mesma
+              razão de Cadastros e Ajustes: o dono compara os pneus da loja
+              dele, o administrador compara os de todas. */}
+          {activeTab === "price-comparison" && (user.role === "admin" || user.role === "alimentador") && (
+            <div className="space-y-4">
+              {loadingData && (
+                <div className="bg-blue-50 border border-blue-100/60 text-blue-800 px-4 py-3 rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm animate-fadeIn">
+                  <div className="h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                  Sincronizando estoque operacional em tempo real...
+                </div>
+              )}
+              <PriceComparison
+                items={ownScopedStock}
+                companies={companies}
+                user={user}
+                isAdmin={user.role === "admin"}
+                onUpdateItem={handleUpdateItem}
               />
             </div>
           )}
