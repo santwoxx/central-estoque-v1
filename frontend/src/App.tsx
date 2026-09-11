@@ -37,6 +37,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   runTransaction,
   serverTimestamp,
@@ -134,7 +135,19 @@ import {
 // modulo de Entrada e Saida reagrupa esses mesmos documentos por operationId:
 // uma unica operacao com 10 pneus consome 10 registros, entao uma janela curta
 // apagaria o historico do dia rapido demais.
+// Quantos movimentos o listener ao vivo carrega de uma vez. NAO e o tamanho do
+// historico — e o tamanho da JANELA. O historico inteiro num listener ao vivo
+// custaria uma leitura por documento a cada reconexao, e numa loja movimentada
+// isso e a maior fonte de leitura paga do projeto.
+//
+// O problema nunca foi o limite, foi ele ser INVISIVEL: a tela mostrava 400
+// registros sem dizer que havia mais, e um relatorio montado em cima disso
+// perdia movimento sem ninguem perceber. Agora a janela cresce sob demanda
+// (`movementsLimit`) e a tela avisa quando esta cortando (`movementsTruncated`).
 const MOVEMENTS_WINDOW = 400;
+
+// De quanto em quanto a janela cresce quando alguem pede "carregar mais".
+const MOVEMENTS_STEP = 800;
 
 // Helper: maps a raw Firestore transfer document into a typed TransferOrder
 function mapTransferDoc(docSnap: any): TransferOrder {
@@ -197,6 +210,91 @@ function mapTransferDoc(docSnap: any): TransferOrder {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────
+// De onde vem o papel de quem entrou
+//
+// UMA função só, usada pelos DOIS caminhos que abrem sessão: o login
+// (`onAuthSuccess`) e a volta de uma sessão já existente (`onAuthStateChanged`,
+// a cada F5). Antes cada um resolvia o papel do seu jeito — o login usava a
+// credencial que ele mesmo casou no cliente, e o reload usava um JSON do
+// `localStorage`. Editar esse JSON pelo console promovia a interface a
+// administrador.
+//
+// Agora os dois leem `users/{uid}` do SERVIDOR. Esse documento não é escolha do
+// cliente: a regra de escrita exige que o papel e a empresa batam com os de uma
+// credencial que existe de verdade (o login manda o `credentialId` que usou, e a
+// regra confere no servidor).
+//
+// Não trava ninguém do lado de fora: as próprias regras do Firestore leem
+// `users/{uid}` para decidir tudo (isAdmin, isVendedor, isAlimentador). Uma
+// sessão sem esse documento já não escrevia nada — exigir o documento não tira
+// acesso de quem tinha.
+// ─────────────────────────────────────────────────────────────────
+
+// Contas de administração reconhecidas pelo e-mail do token do Firebase, que vem
+// assinado e o cliente não forja. Mesma lista de `isAdminEmail()` nas regras, e é
+// o que sustenta as credenciais de emergência, que não existem no banco.
+const ADMIN_EMAILS = [
+  "brisasofc@gmail.com",
+  "natandsantosmarinho10@gmail.com",
+  "isaacbomfim.te@gmail.com",
+  "isaacbomfim.00@gmail.com"
+];
+
+type SessionUser = {
+  uid: string;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  companyId?: string;
+  companyName?: string;
+  credentialId?: string;
+};
+
+async function resolveSessionProfile(firebaseUser: {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+}): Promise<SessionUser | null> {
+  const targetEmail = (firebaseUser.email || "").toLowerCase().trim();
+  const isAdminEmail = ADMIN_EMAILS.includes(targetEmail);
+
+  // `getDocFromServer` de propósito: o cache offline do Firestore mora no
+  // navegador, e um cache adulterado devolveria a mesma mentira que o
+  // localStorage devolvia. Se a rede falhar, cai para o cache — sem isso o
+  // sistema pararia de abrir offline, que é um modo de uso real aqui — e a
+  // sessão segue com o que foi validado da última vez.
+  let profile: any = null;
+  try {
+    const snap = await getDocFromServer(doc(db, "users", firebaseUser.uid));
+    if (snap.exists()) profile = snap.data();
+  } catch {
+    try {
+      const cached = await getDoc(doc(db, "users", firebaseUser.uid));
+      if (cached.exists()) profile = cached.data();
+    } catch {
+      profile = null;
+    }
+  }
+
+  if (!profile && !isAdminEmail) return null;
+
+  // `role` legado: contas antigas foram gravadas como "user".
+  let role: UserRole = (profile?.role === "user" ? "alimentador" : profile?.role) || "alimentador";
+  if (isAdminEmail) role = "admin";
+
+  return {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email || profile?.email || "",
+    displayName: profile?.displayName || firebaseUser.displayName || "Usuário comum",
+    role,
+    companyId: profile?.companyId || "",
+    companyName: profile?.companyName || "",
+    credentialId: profile?.credentialId || ""
+  };
+}
+
+
 export default function App() {
   // O caminho chega com a barra final quando alguem copia o link do navegador
   // ou o WhatsApp "arruma" a URL. Sem normalizar, '/consulta/' nao batia com
@@ -222,6 +320,10 @@ export default function App() {
   // Data State
   const [stock, setStock] = useState<StockItem[]>([]);
   const [movements, setMovements] = useState<MovementLog[]>([]);
+  // Tamanho atual da janela de historico e se ela esta cortando algo. Ver
+  // MOVEMENTS_WINDOW no topo do arquivo.
+  const [movementsLimit, setMovementsLimit] = useState(MOVEMENTS_WINDOW);
+  const [movementsTruncated, setMovementsTruncated] = useState(false);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loadingData, setLoadingData] = useState(false);
 
@@ -265,61 +367,44 @@ export default function App() {
   // Active Tab/View state
   const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions" | "price-comparison" | "size-history" | "exit-approvals">("analytics");
 
-  // Authentication Status listener
+  // Authentication Status listener. O papel NAO sai mais do localStorage —
+  // ver resolveSessionProfile acima.
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
           const secAuthKey = `sec_auth_${firebaseUser.uid}`;
           const isSecAuthed = sessionStorage.getItem(secAuthKey) === "true" || localStorage.getItem(secAuthKey) === "true";
-          
+
           if (!isSecAuthed) {
             setUser(null);
             setAuthLoading(false);
             return;
           }
 
-          // Get the stored user credential details
-          const cachedUserStr = sessionStorage.getItem(`${secAuthKey}_user`) || localStorage.getItem(`${secAuthKey}_user`);
-          let role: UserRole = "alimentador";
-          let displayName = firebaseUser.displayName || "Usuário comum";
-          let companyId = "";
-          let companyName = "";
-          let credentialId = "";
+          const resolved = await resolveSessionProfile(firebaseUser);
 
-          if (cachedUserStr) {
-            try {
-              const cachedUser = JSON.parse(cachedUserStr);
-              let parsedRole = cachedUser.role || "alimentador";
-              if (parsedRole === "user") parsedRole = "alimentador"; // Map legacy users
-              role = parsedRole;
-              displayName = cachedUser.displayName || displayName;
-              companyId = cachedUser.companyId || "";
-              companyName = cachedUser.companyName || "";
-              credentialId = cachedUser.id || "";
-            } catch (e) {
-              console.error("Failed to parse cached secondary credentials", e);
-            }
+          if (!resolved) {
+            // Sem perfil no servidor nao ha papel que se possa provar — e uma
+            // sessao assim nao escreve nada mesmo, porque as regras do Firestore
+            // leem este documento para autorizar. Melhor dizer isso agora do que
+            // deixar a pessoa clicando em botoes que so devolvem erro.
+            console.error("Perfil do usuário não encontrado no servidor:", firebaseUser.uid);
+            sessionStorage.removeItem(secAuthKey);
+            localStorage.removeItem(secAuthKey);
+            setUser(null);
+            setAuthLoading(false);
+            await signOut(auth).catch(() => {});
+            alert(
+              "Não foi possível confirmar seu perfil de acesso no servidor. " +
+              "Entre novamente — se o problema continuar, peça para o administrador " +
+              "recadastrar sua credencial."
+            );
+            return;
           }
 
-          // Safe guards for administrative emails
-          const targetEmail = (firebaseUser.email || "").toLowerCase().trim();
-          if (targetEmail === "brisasofc@gmail.com" || targetEmail === "isaacbomfim.te@gmail.com" || targetEmail === "isaacbomfim.00@gmail.com") {
-            role = "admin";
-          }
-
-          setUser({
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || "",
-            displayName,
-            role,
-            companyId,
-            companyName,
-            credentialId
-          });
-
-          // Default tab logic based on role
-          setActiveTab(role === "vendedor" ? "catalogo" : "unified");
+          setUser(resolved);
+          setActiveTab(resolved.role === "vendedor" ? "catalogo" : "unified");
         } catch (profileError) {
           console.error("Erro ao recuperar perfil:", profileError);
           setUser(null);
@@ -354,8 +439,8 @@ export default function App() {
     const stockQuery = stockCollectionRef;
 
     const movementsQuery = (user.role === "admin" || user.role === "vendedor" || !user.companyId)
-      ? query(movementsCollectionRef, orderBy("timestamp", "desc"), limit(MOVEMENTS_WINDOW))
-      : query(movementsCollectionRef, where("companyId", "==", user.companyId), orderBy("timestamp", "desc"), limit(MOVEMENTS_WINDOW));
+      ? query(movementsCollectionRef, orderBy("timestamp", "desc"), limit(movementsLimit))
+      : query(movementsCollectionRef, where("companyId", "==", user.companyId), orderBy("timestamp", "desc"), limit(movementsLimit));
 
     // Listen to inventory changes
     const unsubStock = onSnapshot(stockQuery, (snapshot) => {
@@ -399,9 +484,14 @@ export default function App() {
         return timeB - timeA;
       });
 
+      // Se voltou exatamente o tamanho da janela, quase certamente ha mais
+      // historico atras dela. E esse o aviso que faltava: sem ele a tela mostra
+      // 400 registros com a mesma cara de quem esta mostrando tudo.
+      setMovementsTruncated(sortedLogs.length >= movementsLimit);
+
       // O corte final acontece aqui (e nao so no limit da consulta) porque a
       // consulta alternativa abaixo nao usa limit — ela traz a empresa inteira.
-      setMovements(sortedLogs.slice(0, MOVEMENTS_WINDOW));
+      setMovements(sortedLogs.slice(0, movementsLimit));
     };
 
     const movementUnsubs: (() => void)[] = [];
@@ -421,7 +511,12 @@ export default function App() {
         );
         movementUnsubs.push(onSnapshot(
           query(movementsCollectionRef, where("companyId", "==", user.companyId)),
-          applyMovementsSnapshot,
+          (snap: any) => {
+            applyMovementsSnapshot(snap);
+            // Esta consulta traz a empresa INTEIRA, sem limit — o unico corte e o
+            // slice em memoria. Se ele nao cortou, nao ha nada atras.
+            setMovementsTruncated(snap.size > movementsLimit);
+          },
           (fallbackError) => console.error("Error fetching movements (fallback):", fallbackError)
         ));
         return;
@@ -433,7 +528,10 @@ export default function App() {
       unsubStock();
       movementUnsubs.forEach(unsub => unsub());
     };
-  }, [user]);
+    // `movementsLimit` entra aqui de proposito: pedir "carregar mais" refaz o
+    // listener com a janela maior. E a unica forma de crescer sem manter duas
+    // fontes de verdade para a mesma lista.
+  }, [user, movementsLimit]);
 
   // Mirrors `stock` for the two timers below, which fire on a schedule (not on
   // every stock edit) and just need "whatever stock looks like right now" at
@@ -1015,16 +1113,11 @@ export default function App() {
         updatedAt: serverTimestamp()
       });
       
-      // Update local storage cached credentials
-      const secAuthKey = `sec_auth_${user.uid}`;
-      const cachedStr = sessionStorage.getItem(`${secAuthKey}_user`) || localStorage.getItem(`${secAuthKey}_user`);
-      if (cachedStr) {
-        const cached = JSON.parse(cachedStr);
-        cached.password = newPassword.trim();
-        sessionStorage.setItem(`${secAuthKey}_user`, JSON.stringify(cached));
-        localStorage.setItem(`${secAuthKey}_user`, JSON.stringify(cached));
-      }
-      
+      // A copia da credencial em `localStorage` deixou de existir (ver
+      // resolveSessionProfile): o papel vem do servidor e nada mais precisa
+      // dela. Ela guardava a SENHA em texto puro no navegador, entao sumir com
+      // ela e ganho puro — nao ha o que sincronizar aqui.
+
       alert("Senha atualizada com sucesso!");
       setShowChangePasswordModal(false);
       setNewPassword("");
@@ -4014,7 +4107,30 @@ export default function App() {
 
   // Not signed-in -> render Auth Screen
   if (!user) {
-    return <AuthScreen onAuthSuccess={(profile) => setUser(profile)} />;
+    // O perfil que a tela de login monta NAO e usado para definir o papel: ela
+    // casou a credencial no cliente, e quem decide isso e o servidor. A sessao
+    // so comeca depois que `users/{uid}` confirma quem e a pessoa — mesmo
+    // caminho do F5, para nao existirem duas verdades sobre o mesmo usuario.
+    return (
+      <AuthScreen
+        onAuthSuccess={async () => {
+          const current = auth.currentUser;
+          if (!current) return;
+          const resolved = await resolveSessionProfile(current);
+          if (!resolved) {
+            await signOut(auth).catch(() => {});
+            alert(
+              "Não foi possível confirmar seu perfil de acesso no servidor. " +
+              "Tente entrar novamente — se o problema continuar, peça para o " +
+              "administrador recadastrar sua credencial."
+            );
+            return;
+          }
+          setUser(resolved);
+          setActiveTab(resolved.role === "vendedor" ? "catalogo" : "unified");
+        }}
+      />
+    );
   }
 
   // Calculate overview metrics for top panel header (own company's stock only —
@@ -4242,10 +4358,14 @@ export default function App() {
                 Fica colada em Reservas de propósito — as duas são demanda de
                 cliente trazida pelo vendedor; a diferença é que aqui o pneu
                 nem existe no estoque ainda. */}
-            {/* A fila de baixa aparece para TODO MUNDO que opera estoque: quem
-                decide vê o que precisa conferir, quem pede acompanha o próprio
-                pedido. Um vendedor sem esta aba não saberia se a baixa dele
-                saiu, e pediria de novo. */}
+            {/* Fila de baixa: só para quem decide. O vendedor NÃO entra aqui —
+                ele não tem como abrir um pedido de baixa (as duas telas dele são
+                o catálogo e Minhas Reservas), então a aba estaria sempre vazia,
+                com um rótulo dizendo que ele aprova algo que não aprova. Pior:
+                o guarda de rota logo acima devolvia ele ao catálogo no clique.
+                O equivalente dele já existe e é a RESERVA de cliente, que o dono
+                da loja confirma — mesma ideia de duas pessoas, outro caminho. */}
+            {user.role !== "vendedor" && (
             <button
               type="button"
               onClick={() => setActiveTab("exit-approvals")}
@@ -4264,6 +4384,7 @@ export default function App() {
                 </span>
               )}
             </button>
+            )}
 
             {canSeeSuggestions && (
               <button
@@ -4558,6 +4679,7 @@ export default function App() {
           <span className="text-[9px] font-extrabold uppercase tracking-wide">Reservas</span>
         </button>
 
+        {user.role !== "vendedor" && (
         <button
           type="button"
           onClick={() => setActiveTab("exit-approvals")}
@@ -4573,6 +4695,7 @@ export default function App() {
           )}
           <span className="text-[9px] font-extrabold uppercase tracking-wide">Baixas</span>
         </button>
+        )}
 
         {canSeeSuggestions && (
           <button
@@ -4831,6 +4954,7 @@ export default function App() {
             <StockFlow
               stock={stock}
               movements={movements}
+              movementsTruncated={movementsTruncated}
               companies={companies}
               user={user}
               transfers={transfers}
@@ -4859,6 +4983,9 @@ export default function App() {
               isAdmin={user.role === "admin"}
               onDeleteLog={handleDeleteMovementLog}
               onClearLogs={handleClearMovementLogs}
+              truncated={movementsTruncated}
+              loadingMore={loadingData}
+              onLoadMore={() => setMovementsLimit(prev => prev + MOVEMENTS_STEP)}
             />
           )}
 
@@ -4866,6 +4993,7 @@ export default function App() {
             <DashboardAnalytics
               items={stock}
               movements={movements}
+              movementsTruncated={movementsTruncated}
               companies={companies}
               user={user}
             />
@@ -4885,7 +5013,7 @@ export default function App() {
             />
           )}
 
-          {activeTab === "exit-approvals" && (
+          {activeTab === "exit-approvals" && user.role !== "vendedor" && (
             <ExitApprovals
               exits={stockExits}
               stock={stock}

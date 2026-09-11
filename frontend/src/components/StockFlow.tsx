@@ -46,6 +46,10 @@ import {
 interface StockFlowProps {
   stock: StockItem[];
   movements: MovementLog[];
+  // A lista chega cortada por uma janela (ver MOVEMENTS_WINDOW em App.tsx).
+  // Precisa ser dito na tela: os numeros daqui sao os da JANELA, nao os do
+  // historico inteiro.
+  movementsTruncated?: boolean;
   companies: Company[];
   user: { uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string };
   // Pedidos de transferência já assinados — usados só para conferir se cada um
@@ -114,7 +118,7 @@ interface FlowOperation {
   rebuilt: boolean;
 }
 
-export default function StockFlow({ stock, movements, companies, user, transfers = [], onRegister, onReverse, onSyncTransfers }: StockFlowProps) {
+export default function StockFlow({ stock, movements, movementsTruncated, companies, user, transfers = [], onRegister, onReverse, onSyncTransfers }: StockFlowProps) {
   const isAdmin = user.role === "admin";
   const canOperate = isAdmin || user.role === "alimentador";
 
@@ -1044,6 +1048,16 @@ export default function StockFlow({ stock, movements, companies, user, transfers
             <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-black font-mono">
               {filteredOperations.length}
             </span>
+            {/* Sem isto, "Historico de Operacoes" promete mais do que entrega:
+                a lista e a janela carregada, nao o historico da loja. */}
+            {movementsTruncated && (
+              <span
+                className="px-2 py-0.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 text-[9px] font-black uppercase tracking-wider"
+                title="A lista mostra os movimentos mais recentes. Para ver mais para tras, use a aba Auditoria e Historico e carregue mais."
+              >
+                Janela recente
+              </span>
+            )}
           </div>
 
           <div className="relative flex-1 min-w-0">

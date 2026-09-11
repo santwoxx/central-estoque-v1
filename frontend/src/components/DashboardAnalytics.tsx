@@ -6,11 +6,15 @@ import { TrendingUp, TrendingDown, Package, AlertTriangle, RefreshCw, BarChart2,
 interface DashboardAnalyticsProps {
   items: StockItem[];
   movements: MovementLog[];
+  // A lista chega cortada por uma janela (ver MOVEMENTS_WINDOW em App.tsx).
+  // Precisa ser dito na tela: os numeros daqui sao os da JANELA, nao os do
+  // historico inteiro.
+  movementsTruncated?: boolean;
   companies: Company[];
   user: { role: string; companyId?: string };
 }
 
-export default function DashboardAnalytics({ items, movements, companies, user }: DashboardAnalyticsProps) {
+export default function DashboardAnalytics({ items, movements, movementsTruncated, companies, user }: DashboardAnalyticsProps) {
   const [hoveredSegment, setHoveredSegment] = useState<number | null>(null);
   const [timeRange, setTimeRange] = useState<7 | 15 | 30>(7);
   const [showAllSuggestions, setShowAllSuggestions] = useState(false);
@@ -262,7 +266,22 @@ export default function DashboardAnalytics({ items, movements, companies, user }
 
   return (
     <div className="space-y-6 animate-fadeIn font-sans">
-      
+
+      {/* O painel calcula tudo em cima da janela de movimentos carregada. Num
+          periodo longo numa loja movimentada, a janela pode nao alcancar o
+          inicio do periodo — e os graficos ficariam mostrando menos movimento
+          do que houve, sem nada indicando isso. */}
+      {movementsTruncated && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl px-4 py-2.5 text-[11px] font-bold flex items-start gap-2">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+          <span>
+            Os números abaixo cobrem os <b>{movements.length} movimentos mais recentes</b>, que é o que
+            está carregado — não necessariamente o período inteiro. Para uma conta fechada, carregue
+            mais histórico na aba <b>Auditoria e Histórico</b>.
+          </span>
+        </div>
+      )}
+
       {/* Time range selection bar */}
       <div className="flex items-center justify-between bg-white px-5 py-3 rounded-2xl border border-slate-200 shadow-sm">
         <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">

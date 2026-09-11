@@ -220,13 +220,12 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       // Successful Two-Factor / Dual validation!
       const secAuthKey = `sec_auth_${googleUser.uid}`;
       sessionStorage.setItem(secAuthKey, "true");
-      sessionStorage.setItem(`${secAuthKey}_user`, JSON.stringify(matchedCred));
-      localStorage.setItem(secAuthKey, "true"); // Persist local too for better session experience
-      // O perfil precisa ir para o localStorage junto com a flag. Sem isso,
-      // ao reabrir o navegador a flag voltava mas o perfil nao, e o App caia
-      // no padrao "alimentador sem empresa" — App.tsx le dos dois lugares e o
-      // logout limpa os dois; so a gravacao estava faltando.
-      localStorage.setItem(`${secAuthKey}_user`, JSON.stringify(matchedCred));
+      // A flag diz apenas "esta sessao passou pela segunda etapa". O PAPEL nao
+      // mora mais aqui: o App le users/{uid} do servidor a cada abertura (ver
+      // resolveSessionProfile em App.tsx). Antes uma copia da credencial ia
+      // junto para o localStorage — com a senha em texto puro — e era dela que
+      // a interface tirava o papel, o que dava para editar pelo console.
+      localStorage.setItem(secAuthKey, "true");
 
       // Update the user's role in Firebase Firestore "users" collection so Firestore rules recognize them
       try {
@@ -244,7 +243,18 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           updatedAt: new Date()
         });
       } catch (syncErr) {
-        console.warn("Could not sync user profile to DB, proceeding with session:", syncErr);
+        // Este documento NAO e um detalhe: as regras do Firestore leem
+        // users/{uid} para decidir tudo (isAdmin, isVendedor, isAlimentador), e
+        // o App le dele o papel da sessao. Sem ele a pessoa entra numa sessao
+        // que nao consegue escrever nada — e ate agora isso passava como um
+        // aviso no console, e o erro so aparecia depois, em cada botao que
+        // devolvia "permission denied". Falhar aqui diz a verdade na hora certa.
+        console.error("Falha ao gravar o perfil da sessao:", syncErr);
+        throw new Error(
+          "Entrada recusada: não foi possível registrar seu perfil de acesso no servidor. " +
+          "Verifique a conexão e tente de novo — se continuar, peça para o administrador " +
+          "conferir sua credencial."
+        );
       }
 
       onAuthSuccess({
@@ -312,11 +322,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
       const secAuthKey = `sec_auth_${uid}`;
       sessionStorage.setItem(secAuthKey, "true");
-      sessionStorage.setItem(`${secAuthKey}_user`, JSON.stringify(matchedCred));
       localStorage.setItem(secAuthKey, "true");
-      // Mesma correcao do caminho do Google: o perfil tem que persistir junto
-      // com a flag, senao a proxima sessao do navegador entra sem papel.
-      localStorage.setItem(`${secAuthKey}_user`, JSON.stringify(matchedCred));
 
       try {
         await setDoc(doc(db, "users", uid), {
@@ -330,7 +336,18 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           updatedAt: new Date()
         });
       } catch (syncErr) {
-        console.warn("Could not sync user profile to DB, proceeding with session:", syncErr);
+        // Este documento NAO e um detalhe: as regras do Firestore leem
+        // users/{uid} para decidir tudo (isAdmin, isVendedor, isAlimentador), e
+        // o App le dele o papel da sessao. Sem ele a pessoa entra numa sessao
+        // que nao consegue escrever nada — e ate agora isso passava como um
+        // aviso no console, e o erro so aparecia depois, em cada botao que
+        // devolvia "permission denied". Falhar aqui diz a verdade na hora certa.
+        console.error("Falha ao gravar o perfil da sessao:", syncErr);
+        throw new Error(
+          "Entrada recusada: não foi possível registrar seu perfil de acesso no servidor. " +
+          "Verifique a conexão e tente de novo — se continuar, peça para o administrador " +
+          "conferir sua credencial."
+        );
       }
 
       onAuthSuccess({

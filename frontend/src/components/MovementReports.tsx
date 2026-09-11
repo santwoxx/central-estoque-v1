@@ -14,7 +14,10 @@ import {
   User,
   Calendar,
   Layers,
-  Trash2
+  Trash2,
+  AlertTriangle,
+  ChevronDown,
+  Loader2
 } from "lucide-react";
 
 interface MovementReportsProps {
@@ -22,9 +25,24 @@ interface MovementReportsProps {
   isAdmin: boolean;
   onDeleteLog?: (logId: string) => Promise<void>;
   onClearLogs?: () => Promise<void>;
+  // A lista chega cortada por uma janela (ver MOVEMENTS_WINDOW em App.tsx).
+  // Enquanto isso era invisivel, esta tela mostrava 400 registros com a mesma
+  // cara de quem estava mostrando o historico inteiro — e quem exportava a
+  // planilha levava um recorte achando que levava tudo.
+  truncated?: boolean;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
 }
 
-export default function MovementReports({ logs, isAdmin, onDeleteLog, onClearLogs }: MovementReportsProps) {
+export default function MovementReports({
+  logs,
+  isAdmin,
+  onDeleteLog,
+  onClearLogs,
+  truncated,
+  onLoadMore,
+  loadingMore
+}: MovementReportsProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
 
@@ -111,7 +129,32 @@ export default function MovementReports({ logs, isAdmin, onDeleteLog, onClearLog
 
   return (
     <div className="space-y-6">
-      
+
+      {/* ── Aviso de janela ──────────────────────────────────────────
+          O corte precisa aparecer ANTES dos numeros, porque e ele que diz o que
+          os numeros significam: "Total Entradas" aqui e o total DA JANELA, nao
+          o do historico. Sem esta linha, os cards mentem com confianca. */}
+      {truncated && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px] font-bold">
+          <AlertTriangle size={15} className="shrink-0" />
+          <span className="flex-1 min-w-[240px] leading-relaxed">
+            Mostrando os <b>{logs.length} movimentos mais recentes</b> — há mais histórico atrás
+            deste ponto. Os totais e a planilha abaixo cobrem só o que está carregado.
+          </span>
+          {onLoadMore && (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer"
+            >
+              {loadingMore ? <Loader2 size={12} className="animate-spin" /> : <ChevronDown size={12} />}
+              Carregar mais
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Search and Quick Metrics Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         
@@ -375,6 +418,27 @@ export default function MovementReports({ logs, isAdmin, onDeleteLog, onClearLog
           </div>
         )}
       </div>
+
+      {/* Repetido no fim porque e aqui que a pessoa chega depois de rolar a
+          lista inteira — e o momento exato em que ela conclui "acabou". */}
+      {truncated && (
+        <div className="text-center py-3">
+          <p className="text-[11px] font-bold text-slate-500 mb-2">
+            Fim dos {logs.length} movimentos carregados — o histórico continua atrás deste ponto.
+          </p>
+          {onLoadMore && (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer"
+            >
+              {loadingMore ? <Loader2 size={12} className="animate-spin" /> : <ChevronDown size={12} />}
+              Carregar mais movimentos
+            </button>
+          )}
+        </div>
+      )}
 
     </div>
   );
