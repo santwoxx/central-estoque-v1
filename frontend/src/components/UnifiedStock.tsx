@@ -11,7 +11,16 @@ interface UnifiedStockProps {
   items: StockItem[];
   user: { uid: string; email: string; displayName: string; role: string; companyId?: string; companyName?: string };
   companies: Company[];
-  onUpdateItem: (itemId: string, updatedFields: Partial<StockItem>, reason: string, quantityDiff?: number) => Promise<void>;
+  // `quantityDiff` e o DELTA (nunca o total) e `expectedQuantity` e o saldo que
+  // a tela mostrava, para a gravacao ser recusada se ele mudou no meio.
+  onUpdateItem: (
+    itemId: string,
+    updatedFields: Partial<StockItem>,
+    reason: string,
+    quantityDiff?: number,
+    extraMovementFields?: Record<string, any>,
+    expectedQuantity?: number
+  ) => Promise<void>;
   onAddItem: (itemData: Omit<StockItem, "id" | "userId" | "userEmail" | "createdAt" | "updatedAt">) => Promise<void>;
   onAddCompany?: (name: string, description?: string) => Promise<void>;
   // Mesma gravacao transacional usada pela aba Entradas e Saidas. Ausente
@@ -573,7 +582,26 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
               );
             }
             const reason = diff > 0 ? "Ajuste manual de entrada" : "Baixa manual";
-            await onUpdateItem(existingDoc.id, { quantity: numValue }, reason, diff);
+            // Digitar o total na celula e uma CONTAGEM: manda o saldo que estava
+            // na tela junto, para a transacao recusar a gravacao se ele ja mudou
+            // (ver handleUpdateItem em App.tsx). Sem isso, editar a planilha com
+            // uma venda acontecendo no balcao apagava a venda.
+            await onUpdateItem(existingDoc.id, {}, reason, diff, undefined, existingDoc.quantity);
+
+            // DIMINUIR saldo virou um PEDIDO — o numero na celula NAO muda
+            // agora. Sem este aviso, quem digitou 5 ve a celula voltar para 8 e
+            // conclui que o sistema nao salvou (e digita de novo, abrindo um
+            // segundo pedido para a mesma baixa).
+            if (diff < 0) {
+              alert(
+                `Pedido de baixa enviado: ${Math.abs(diff)} un de ${item.sku} em ${targetCompany.name}.
+
+` +
+                `O saldo continua ${existingDoc.quantity} un de proposito — os pneus ficaram RESERVADOS ` +
+                `e ninguem mais consegue vende-los. A baixa so acontece quando o dono da loja ou um ` +
+                `administrador conferir e liberar, na aba "Aprovar Baixas".`
+              );
+            }
           }
         } else {
           if (numValue > 0) {

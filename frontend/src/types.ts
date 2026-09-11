@@ -140,6 +140,10 @@ export interface StockFlowResultItem {
 export interface StockFlowResult {
   operationId: string;
   type: StockFlowType;
+  // true quando a operacao virou um PEDIDO e nada saiu do estoque ainda. Toda
+  // saida nasce assim: a tela tem que mostrar "aguardando aprovacao" em vez de
+  // imprimir um comprovante de baixa que ainda nao aconteceu.
+  pendingApproval?: boolean;
   items: StockFlowResultItem[];
   totalUnits: number;
   totalAmount: number;
@@ -535,4 +539,133 @@ export interface Suggestion {
   resolvedByUid?: string;
   resolvedByName?: string;
   resolutionNote?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Pedido de baixa (fila de aprovação)
+//
+// NENHUMA saída reduz estoque direto. Quem opera o balcão abre um PEDIDO; o
+// pneu é PRESO no mesmo instante (`reservedQuantity`), e só uma segunda pessoa
+// — o dono da loja ou um administrador — aplica a baixa de verdade.
+//
+// A regra que dá sentido a tudo: QUEM PEDE NUNCA APROVA. É isso que transforma
+// "duas pessoas mexem no estoque" em "uma confere a outra". Sem ela, a fila
+// seria só um clique a mais para a mesma pessoa.
+//
+// Por que prender o pneu já no pedido, antes de qualquer aprovação: entre o
+// pedido e a decisão podem passar horas, e nesse intervalo o mesmo pneu não
+// pode ser prometido duas vezes. É a mesma mecânica da reserva de cliente —
+// e é ela que as regras do Firestore usam como PROVA de que a baixa passou
+// pela fila: uma saída só pode descontar `quantity` na mesma escrita em que
+// desconta `reservedQuantity`. Baixa direta, sem pedido, o banco recusa.
+// ─────────────────────────────────────────────────────────────────
+export type StockExitStatus = "PENDENTE" | "APROVADO" | "RECUSADO" | "CANCELADO";
+
+// De onde o pedido nasceu. Muda só o texto que aparece na fila e no histórico —
+// o efeito no estoque é o mesmo em todos.
+export type StockExitOrigin =
+  | "BALCAO"        // venda/saída pelo módulo de Entrada e Saída ou pelo caixa
+  | "RAPIDA"        // botão −1 na listagem do celular
+  | "CONTAGEM"      // edição do cadastro ou célula da planilha que reduziu o saldo
+  | "EXCLUSAO";     // zerar um produto para poder excluí-lo
+
+export interface StockExitItem {
+  stockItemId: string;
+  sku: string;
+  brand: string;
+  model: string;
+  size: string;
+  quantity: number;      // sempre positiva
+  unitPrice: number;
+  // Saldo do documento no instante do PEDIDO. Não é usado para gravar nada —
+  // a baixa relê o saldo na aprovação. Serve para quem aprova enxergar se o
+  // estoque mudou desde que o pedido foi aberto.
+  balanceAtRequest: number;
+}
+
+export interface StockExitRequest {
+  id: string;
+
+  companyId: string;
+  companyName: string;
+
+  origin: StockExitOrigin;
+  items: StockExitItem[];
+  totalUnits: number;
+  totalAmount: number;
+
+  // Mesmos campos da operação de saída, para o movimento sair completo quando
+  // a baixa for aplicada.
+  reason: string;
+  docNumber: string;
+  partyName: string;
+  partyDoc: string;
+  vehiclePlate: string;
+  observation: string;
+
+  status: StockExitStatus;
+
+  requestedByUid: string;
+  requestedByEmail: string;
+  requestedByName: string;
+  requestedByRole: UserRole;
+  requestedAt: any;
+
+  // Quem decidiu. Nunca é a mesma pessoa que pediu — conferido no cliente e
+  // repetido nas regras do Firestore.
+  reviewedByUid?: string;
+  reviewedByName?: string;
+  reviewedAt?: any;
+  reviewNote?: string;
+
+  // `operationId` gerado quando a baixa foi de fato aplicada. É o que amarra
+  // este pedido às linhas gravadas em `movements` e o que permite estorná-lo.
+  operationId?: string;
+
+  createdAt: any;
+  updatedAt: any;
+}
+
+// O que as telas mandam para abrir um pedido.
+export interface StockExitPayload {
+  origin: StockExitOrigin;
+  items: { stockItemId: string; quantity: number; unitPrice?: number }[];
+  reason: string;
+  docNumber?: string;
+  partyName?: string;
+  partyDoc?: string;
+  vehiclePlate?: string;
+  observation?: string;
+}
+
+// Retorno da abertura do pedido — alimenta a tela de "pedido enviado".
+export interface StockExitResult {
+  id: string;
+  totalUnits: number;
+  totalAmount: number;
+  companyName: string;
+  items: StockExitItem[];
+  reason: string;
+  requestedByName: string;
+  date: string;
+}
+
+// Quem pode decidir sobre um pedido: administrador (qualquer loja) ou o dono da
+// loja a que o pedido pertence — e, nos dois casos, desde que não seja quem
+// pediu. Esta função é a definição única da regra; as regras do Firestore
+// repetem a mesma condição do lado do servidor.
+export function canReviewStockExit(
+  exit: { companyId?: string; requestedByUid?: string; status?: StockExitStatus } | null | undefined,
+  user: { uid: string; role: UserRole; companyId?: string } | null | undefined
+): boolean {
+  if (!exit || !user) return false;
+  if (exit.status !== "PENDENTE") return false;
+  // Quem pede não aprova. É o ponto inteiro da fila.
+  if (exit.requestedByUid === user.uid) return false;
+  if (user.role === "admin") return true;
+  return (
+    (user.role === "alimentador" || user.role === "user") &&
+    !!user.companyId &&
+    exit.companyId === user.companyId
+  );
 }

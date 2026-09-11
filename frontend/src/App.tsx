@@ -62,9 +62,14 @@ import {
   TransferRequestKind,
   TransferSyncResult,
   Suggestion,
-  SuggestionStatus
+  SuggestionStatus,
+  StockExitRequest,
+  StockExitPayload,
+  StockExitResult,
+  StockExitItem,
+  StockExitOrigin
 } from "./types";
-import { CLIENTE_COMPANY_ID, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "./types";
+import { CLIENTE_COMPANY_ID, canReviewStockExit, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "./types";
 import { availableQuantity, formatDate, mapMovementDoc, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, suggestionTime, toMillis } from "./utils";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
@@ -90,6 +95,7 @@ const Suggestions = lazy(() => import("./components/Suggestions"));
 const PriceComparison = lazy(() => import("./components/PriceComparison"));
 const SizeHistory = lazy(() => import("./components/SizeHistory"));
 const StockFlow = lazy(() => import("./components/StockFlow"));
+const ExitApprovals = lazy(() => import("./components/ExitApprovals"));
 const ApkInstaller = lazy(() =>
   import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
 );
@@ -238,6 +244,13 @@ export default function App() {
   // escreve, e acompanha o que mandou dentro do próprio catálogo.
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
 
+  // Fila de aprovação de baixa. Todo mundo que opera estoque tem uma: o dono e o
+  // administrador veem o que precisa de decisão; quem pede acompanha o próprio
+  // pedido até ele ser liberado ou recusado. Duas consultas, unidas em
+  // `stockExits` mais abaixo.
+  const [exitsQueue, setExitsQueue] = useState<StockExitRequest[]>([]);
+  const [exitsMine, setExitsMine] = useState<StockExitRequest[]>([]);
+
   // Support and Error Report State
   const [showReportModal, setShowReportModal] = useState(false);
   const [errorComment, setErrorComment] = useState("");
@@ -250,7 +263,7 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
 
   // Active Tab/View state
-  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions" | "price-comparison" | "size-history">("analytics");
+  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions" | "price-comparison" | "size-history" | "exit-approvals">("analytics");
 
   // Authentication Status listener
   useEffect(() => {
@@ -670,6 +683,80 @@ export default function App() {
     };
   }, [user]);
 
+  // ── Fila de aprovação de baixa ─────────────────────────────────────
+  // Duas consultas, porque duas perguntas diferentes precisam de resposta:
+  //
+  //   • "o que eu preciso decidir" — os pedidos da MINHA loja (o dono) ou de
+  //     todas (o administrador). É a fila de trabalho.
+  //   • "o que eu pedi" — os meus próprios pedidos, em qualquer loja. Um
+  //     vendedor não vê a fila da loja, mas tem que conseguir acompanhar o que
+  //     mandou, senão ele pede duas vezes achando que não foi.
+  //
+  // Dois arrays unidos por id em `stockExits` (useMemo abaixo) — mesmo padrão
+  // das transferências, em vez de uma consulta composta que ninguém testou.
+  useEffect(() => {
+    if (!user) {
+      setExitsQueue([]);
+      setExitsMine([]);
+      return;
+    }
+
+    const exitsRef = collection(db, "stock_exits");
+    const unsubs: (() => void)[] = [];
+
+    // A fila de trabalho só existe para quem decide.
+    if (user.role === "admin" || user.role === "alimentador") {
+      const queueQuery = (user.role === "admin" || !user.companyId)
+        ? exitsRef
+        : query(exitsRef, where("companyId", "==", user.companyId));
+      unsubs.push(onSnapshot(
+        queueQuery,
+        (snap) => {
+          const list: StockExitRequest[] = [];
+          snap.forEach(d => list.push({ id: d.id, ...(d.data() as any) }));
+          setExitsQueue(list);
+        },
+        (err) => console.error("Erro ao ler a fila de baixas:", err)
+      ));
+    } else {
+      setExitsQueue([]);
+    }
+
+    // "Meus pedidos" — para todo mundo, inclusive o vendedor.
+    unsubs.push(onSnapshot(
+      query(exitsRef, where("requestedByUid", "==", user.uid)),
+      (snap) => {
+        const list: StockExitRequest[] = [];
+        snap.forEach(d => list.push({ id: d.id, ...(d.data() as any) }));
+        setExitsMine(list);
+      },
+      (err) => console.error("Erro ao ler meus pedidos de baixa:", err)
+    ));
+
+    return () => unsubs.forEach(u => u());
+  }, [user]);
+
+  // União das duas consultas. Pendentes primeiro — é o que exige ação — e
+  // dentro de cada grupo o mais recente antes.
+  const stockExits = useMemo(() => {
+    const byId = new Map<string, StockExitRequest>();
+    for (const e of exitsQueue) byId.set(e.id, e);
+    for (const e of exitsMine) byId.set(e.id, e);
+    return Array.from(byId.values()).sort((a, b) => {
+      const pa = a.status === "PENDENTE" ? 0 : 1;
+      const pb = b.status === "PENDENTE" ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return toMillis(b.requestedAt) - toMillis(a.requestedAt);
+    });
+  }, [exitsQueue, exitsMine]);
+
+  // Quantos pedidos ESTE usuário pode decidir agora. Alimenta o número vermelho
+  // na aba — sem ele a fila é uma tela que ninguém lembra de abrir.
+  const pendingExitCount = useMemo(
+    () => stockExits.filter(e => canReviewStockExit(e, user)).length,
+    [stockExits, user]
+  );
+
   // ── Sugestões de compra ────────────────────────────────────────────
   // Caixa de entrada do DONO DA LOJA. Uma consulta só, por igualdade em
   // companyId, ordenada em memória — mesmo padrão de stock/movements, e sem
@@ -1044,88 +1131,177 @@ export default function App() {
   };
 
   // Edit stock card & compute delta quantities for history logs
+  //
+  // ── POR QUE ISTO E UMA TRANSACAO, E NAO UM writeBatch ──────────────
+  // ANTES: `batch.update({ ...updatedFields })` gravava a quantidade como
+  // NUMERO ABSOLUTO, calculado na tela a partir do array `stock` em memoria.
+  // Um batch e atomico, mas nao rele o documento: ele escreve por cima do que
+  // estiver la. Duas baixas de 2 un num saldo de 10, no mesmo minuto, liam 10
+  // as duas e gravavam 8 as duas — sobravam 6 na prateleira e 8 no sistema.
+  // Dois pneus fantasma por venda simultanea, sem ninguem errar nada.
+  //
+  // E o estrago nao parava no saldo: o `balanceAfter` gravado no historico era
+  // o mesmo numero calculado na tela, entao a auditoria registrava um saldo que
+  // nunca existiu — e deixava de servir para reconstruir o estoque depois.
+  //
+  // AGORA a quantidade NUNCA e escrita como valor absoluto. Quem chama informa
+  // o DELTA (`quantityDiff`), a transacao rele o saldo do servidor, soma o
+  // delta e grava o resultado. `updatedFields.quantity` e descartado de
+  // proposito: enquanto ele pudesse ser gravado, bastaria um caminho novo
+  // esquecer do delta para a corrida voltar.
+  //
+  // ── `expectedQuantity`: a contagem de inventario ───────────────────
+  // Ha dois tipos de escrita de quantidade, e eles precisam de tratamentos
+  // diferentes:
+  //
+  //   • DELTA puro (venda, baixa rapida do celular) — "tire 2 do que tiver la".
+  //     Sempre certo, aconteca o que acontecer no meio. Nao passa expectedQuantity.
+  //
+  //   • CONTAGEM (edicao do cadastro, planilha unificada) — a pessoa digitou um
+  //     numero absoluto olhando para o saldo que a tela mostrava. Se o saldo
+  //     mudou desde entao, a contagem dela esta velha e aplicar o delta daria um
+  //     resultado que ninguem pediu. Esses caminhos mandam em `expectedQuantity`
+  //     o saldo que estava na tela; se o servidor discordar, a gravacao e
+  //     recusada com o numero novo, e quem esta editando decide de novo.
   const handleUpdateItem = async (
     itemId: string, 
     updatedFields: Partial<StockItem>, 
     reason: string, 
     quantityDiff: number = 0,
-    extraMovementFields?: Record<string, any>
+    extraMovementFields?: Record<string, any>,
+    expectedQuantity?: number,
+    exitOrigin: StockExitOrigin = "CONTAGEM"
   ) => {
     if (!user) return;
 
-    // Trava de reserva: um pneu prometido a outra empresa nao pode ser baixado.
-    // Vale para qualquer caminho que reduza o saldo por aqui (edicao do cadastro,
-    // baixa rapida do celular, checkout de venda do StockTable).
-    if (updatedFields.quantity !== undefined) {
-      const current = stock.find(item => item.id === itemId);
-      const reserved = reservedQuantityOf(current);
-      const nextQuantity = Number(updatedFields.quantity) || 0;
-      if (reserved > 0 && nextQuantity < reserved) {
-        throw new Error(
-          `Este pneu tem ${reserved} un reservadas para um cliente ou para uma transferência. ` +
-          `O saldo não pode ficar abaixo disso — resolva a reserva na aba Reservas ` +
-          `(confirmar, recusar ou cancelar) antes de dar baixa.`
-        );
+    // A quantidade so entra no documento pelo caminho do delta, abaixo.
+    const { quantity: _ignoredQuantity, ...safeFields } = updatedFields;
+
+    // ── TODA REDUCAO DE SALDO VIRA PEDIDO ────────────────────────────
+    // Nenhuma tela tira pneu do estoque sozinha. Se a alteracao DIMINUI o
+    // saldo, ela e quebrada em duas partes:
+    //
+    //   1. os campos que nao sao quantidade (marca, medida, preco, observacao)
+    //      sao gravados na hora — corrigir um cadastro nao e baixa e nao
+    //      precisa da aprovacao de ninguem;
+    //   2. a diminuicao vira um PEDIDO na fila, que prende o pneu ate alguem
+    //      que nao seja quem pediu conferir e liberar.
+    //
+    // Aumentar saldo continua direto: errar para mais aparece no inventario,
+    // errar para menos some com o pneu.
+    if (quantityDiff < 0) {
+      // A conferencia de contagem desatualizada precisa acontecer ANTES de
+      // abrir o pedido — senao o pedido nasce com uma quantidade calculada
+      // sobre um saldo que ja mudou.
+      if (expectedQuantity !== undefined) {
+        const fresh = await getDoc(doc(db, "stock", itemId));
+        if (!fresh.exists()) {
+          throw new Error("Este pneu não existe mais no estoque. Atualize a tela e tente de novo.");
+        }
+        const currentQuantity = Number((fresh.data() as any).quantity) || 0;
+        if (currentQuantity !== expectedQuantity) {
+          throw new Error(
+            `O saldo deste pneu mudou enquanto você editava: a tela mostrava ${expectedQuantity} un ` +
+            `e agora são ${currentQuantity} un. Feche, confira o número atual e refaça a alteração.`
+          );
+        }
       }
+
+      if (Object.keys(safeFields).length > 0) {
+        await updateDoc(doc(db, "stock", itemId), { ...safeFields, updatedAt: serverTimestamp() });
+      }
+
+      await handleRequestStockExit({
+        origin: exitOrigin,
+        items: [{
+          stockItemId: itemId,
+          quantity: Math.abs(quantityDiff),
+          unitPrice: Number((extraMovementFields as any)?.unitPrice) || 0
+        }],
+        reason: reason || "Baixa de estoque",
+        partyName: String((extraMovementFields as any)?.partyName || ""),
+        partyDoc: String((extraMovementFields as any)?.partyDoc || ""),
+        vehiclePlate: String((extraMovementFields as any)?.vehiclePlate || ""),
+        observation: ""
+      });
+      return;
     }
 
     try {
-      const batch = writeBatch(db);
-      const itemDocRef = doc(db, "stock", itemId);
+      await runTransaction(db, async (transaction) => {
+        const itemDocRef = doc(db, "stock", itemId);
+        const snap = await transaction.get(itemDocRef);
+        if (!snap.exists()) {
+          throw new Error("Este pneu não existe mais no estoque. Atualize a tela e tente de novo.");
+        }
+        const data: any = snap.data();
 
-      batch.update(itemDocRef, {
-        ...updatedFields,
-        updatedAt: serverTimestamp()
-      });
+        const currentQuantity = Number(data.quantity) || 0;
+        const reserved = reservedQuantityOf(data);
 
-      // Find the existing item in local state to retrieve complete metadata
-      const existingItem = stock.find(item => item.id === itemId);
-      const mergedItem = {
-        ...existingItem,
-        ...updatedFields
-      };
+        // Contagem feita sobre um saldo que ja mudou: recusa e mostra o numero
+        // de agora. E melhor pedir para refazer do que gravar um total errado.
+        if (expectedQuantity !== undefined && currentQuantity !== expectedQuantity) {
+          throw new Error(
+            `O saldo deste pneu mudou enquanto você editava: a tela mostrava ${expectedQuantity} un ` +
+            `e agora são ${currentQuantity} un. Feche, confira o número atual e refaça a alteração.`
+          );
+        }
 
-      const matchedCompanyId = mergedItem.companyId || user.companyId || "";
-      const matchedCompanyName = mergedItem.companyName || user.companyName || "";
+        const nextQuantity = currentQuantity + quantityDiff;
 
-      const movementRef = doc(collection(db, "movements"));
-      if (quantityDiff !== 0) {
-        batch.set(movementRef, {
+        if (nextQuantity < 0) {
+          throw new Error(
+            `Saldo insuficiente: há ${currentQuantity} un em estoque e a operação pede ` +
+            `${Math.abs(quantityDiff)} un.`
+          );
+        }
+
+        // Trava de reserva conferida contra o documento do SERVIDOR, nao contra
+        // o array em memoria: uma reserva criada ha dez segundos por um vendedor
+        // de outra filial pode nem ter chegado nesta sessao ainda.
+        if (reserved > 0 && nextQuantity < reserved) {
+          throw new Error(
+            `Este pneu tem ${reserved} un reservadas para um cliente ou para uma transferência. ` +
+            `O saldo não pode ficar abaixo disso — resolva a reserva na aba Reservas ` +
+            `(confirmar, recusar ou cancelar) antes de dar baixa. ` +
+            `Livre para saída: ${Math.max(0, currentQuantity - reserved)} un.`
+          );
+        }
+
+        transaction.update(itemDocRef, {
+          ...safeFields,
+          ...(quantityDiff !== 0 ? { quantity: nextQuantity } : {}),
+          updatedAt: serverTimestamp()
+        });
+
+        // Metadados do movimento: o que veio no formulario tem precedencia (o
+        // usuario pode ter corrigido marca/medida na mesma gravacao), com o
+        // documento do servidor como base.
+        const mergedItem: any = { ...data, ...safeFields };
+        const matchedCompanyId = mergedItem.companyId || user.companyId || "";
+        const matchedCompanyName = mergedItem.companyName || user.companyName || "";
+
+        const movementRef = doc(collection(db, "movements"));
+        transaction.set(movementRef, {
           sku: mergedItem.sku || "N/A",
           brand: mergedItem.brand || "N/A",
           model: mergedItem.model || "N/A",
           size: mergedItem.size || "N/A",
-          type: quantityDiff > 0 ? "ENTRADA" : "SAIDA",
+          type: quantityDiff > 0 ? "ENTRADA" : quantityDiff < 0 ? "SAIDA" : "AJUSTE",
           quantity: quantityDiff,
-          balanceAfter: mergedItem.quantity || 0,
+          // Saldo REAL depois da escrita — lido do servidor, nao calculado na tela.
+          balanceAfter: nextQuantity,
           companyId: matchedCompanyId,
           companyName: matchedCompanyName,
           userId: user.uid,
           userEmail: user.email,
           timestamp: serverTimestamp(),
-          reason: reason || "Ajuste físico de inventário",
+          reason: reason || (quantityDiff !== 0 ? "Ajuste físico de inventário" : "Dados cadastrais atualizados"),
+          stockItemId: itemId,
           ...extraMovementFields
         });
-      } else {
-        batch.set(movementRef, {
-          sku: mergedItem.sku || "N/A",
-          brand: mergedItem.brand || "N/A",
-          model: mergedItem.model || "N/A",
-          size: mergedItem.size || "N/A",
-          type: "AJUSTE",
-          quantity: 0,
-          balanceAfter: mergedItem.quantity || 0,
-          companyId: matchedCompanyId,
-          companyName: matchedCompanyName,
-          userId: user.uid,
-          userEmail: user.email,
-          timestamp: serverTimestamp(),
-          reason: reason || "Dados cadastrais atualizados",
-          ...extraMovementFields
-        });
-      }
-
-      await batch.commit();
+      });
     } catch (err) {
       // A causa real NAO pode morrer aqui. Enquanto esta mensagem era um
       // "Erro ao gravar alteracoes." seco, uma recusa do banco, um campo
@@ -1135,6 +1311,10 @@ export default function App() {
       console.error("Erro ao atualizar item:", err);
       const code = (err as any)?.code;
       const detail = (err as any)?.message || String(err);
+      // Erro de regra de negocio lancado aqui dentro (saldo, reserva, contagem
+      // desatualizada) ja chega pronto para a tela — nao tem codigo do Firestore
+      // e nao deve ser reembrulhado num "Erro ao gravar".
+      if (!code) throw err instanceof Error ? err : new Error(detail);
       if (code === "permission-denied") {
         throw new Error(
           "O banco recusou a gravação por permissão. Se a empresa da sua credencial mudou " +
@@ -1147,7 +1327,7 @@ export default function App() {
           "Verifique a internet e tente de novo."
         );
       }
-      throw new Error(`Erro ao gravar alterações${code ? ` (${code})` : ""}: ${detail}`);
+      throw new Error(`Erro ao gravar alterações (${code}): ${detail}`);
     }
   };
 
@@ -1162,8 +1342,21 @@ export default function App() {
       const reserved = reservedQuantityOf(itemToDrop);
       if (reserved > 0) {
         throw new Error(
-          `Não é possível excluir: ${reserved} un deste pneu estão reservadas para um cliente ou ` +
-          `para uma transferência. Resolva a reserva na aba Reservas primeiro.`
+          `Não é possível excluir: ${reserved} un deste pneu estão reservadas para um cliente, ` +
+          `para uma transferência ou para um pedido de baixa em análise. Resolva a reserva primeiro.`
+        );
+      }
+
+      // ── EXCLUIR PNEU COM SALDO É UMA BAIXA ──────────────────────────
+      // Apagar o documento tirava o saldo do sistema sem passar por ninguém —
+      // era o atalho que furava a fila inteira. Agora o caminho é: pedir a baixa
+      // das unidades, alguém aprovar, e só então excluir o cadastro vazio.
+      // Excluir um produto ZERADO continua livre: não há estoque para perder.
+      if ((Number(itemToDrop.quantity) || 0) > 0) {
+        throw new Error(
+          `Este pneu tem ${itemToDrop.quantity} un em estoque e por isso não pode ser excluído direto — ` +
+          `excluir aqui tiraria ${itemToDrop.quantity} un do sistema sem ninguém conferir. ` +
+          `Dê baixa nas unidades pelo módulo de Saída, espere a aprovação, e então exclua o cadastro zerado.`
         );
       }
 
@@ -1229,8 +1422,17 @@ export default function App() {
   // outcome of clicking "Apagar Estoque".
   const handleClearCompanyStock = async (companyId?: string) => {
     if (!user) return;
-    if (user.role !== "admin" && user.role !== "alimentador") {
-      throw new Error("Apenas administradores ou donos de empresa podem apagar o estoque.");
+    // ── LIMPEZA DE ESTOQUE É SÓ DO ADMINISTRADOR ────────────────────
+    // Antes o dono da loja podia apagar o próprio estoque inteiro num clique —
+    // a maior baixa possível, sem conferência de ninguém. Como uma fila de
+    // aprovação para centenas de itens de uma vez não teria como ser conferida
+    // de verdade, a operação passou a exigir o administrador, que é quem
+    // responde pelo sistema todo.
+    if (user.role !== "admin") {
+      throw new Error(
+        "Apagar estoque em lote é uma operação do administrador. Para tirar pneus do seu estoque, " +
+        "use o módulo de Saída — a baixa fica registrada, é conferida por outra pessoa e pode ser estornada."
+      );
     }
 
     const scopedItems = user.role === "admin"
@@ -1399,6 +1601,56 @@ export default function App() {
     // Cada item gera 2 documentos (estoque + histórico); o limite do Firestore é 500.
     if (inputs.length > 100) {
       throw new Error("Máximo de 100 pneus por operação. Divida em mais de uma movimentação.");
+    }
+
+    // ── SAIDA NAO GRAVA MAIS AQUI ────────────────────────────────────
+    // Toda saida passa pela fila de aprovacao: esta funcao abre o PEDIDO e
+    // prende o pneu; quem tira do estoque e handleApproveStockExit, executado
+    // por OUTRA pessoa. A ENTRADA continua direta — errar para mais aparece no
+    // inventario, errar para menos some com o pneu.
+    if (payload.type === "SAIDA") {
+      const req = await handleRequestStockExit({
+        origin: "BALCAO",
+        items: inputs,
+        reason: payload.reason,
+        docNumber: payload.docNumber,
+        partyName: payload.partyName,
+        partyDoc: payload.partyDoc,
+        vehiclePlate: payload.vehiclePlate,
+        observation: payload.observation
+      });
+      // O retorno mantem o formato de StockFlowResult porque a tela de sucesso e
+      // o comprovante ja o consomem — mas `pendingApproval` avisa que NADA saiu
+      // do estoque ainda, e e o que faz a tela dizer "aguardando aprovacao" em
+      // vez de imprimir um comprovante de baixa que nao aconteceu.
+      return {
+        operationId: req.id,
+        type: "SAIDA",
+        pendingApproval: true,
+        items: req.items.map(i => ({
+          sku: i.sku,
+          brand: i.brand,
+          model: i.model,
+          size: i.size,
+          quantity: i.quantity,
+          balanceBefore: i.balanceAtRequest,
+          balanceAfter: i.balanceAtRequest, // nada mudou: o pedido so prendeu
+          unitPrice: i.unitPrice,
+          totalAmount: i.unitPrice * i.quantity,
+          companyName: req.companyName
+        })),
+        totalUnits: req.totalUnits,
+        totalAmount: req.totalAmount,
+        reason: req.reason,
+        docNumber: (payload.docNumber || "").trim(),
+        partyName: (payload.partyName || "").trim(),
+        partyDoc: (payload.partyDoc || "").trim(),
+        vehiclePlate: (payload.vehiclePlate || "").trim().toUpperCase(),
+        observation: (payload.observation || "").trim(),
+        companyName: req.companyName,
+        userName: user.displayName,
+        date: req.date
+      };
     }
 
     const isEntry = payload.type === "ENTRADA";
@@ -1639,6 +1891,363 @@ export default function App() {
       }
     });
   };
+
+  // ─────────────────────────────────────────────────────────────────
+  // FILA DE APROVAÇÃO DE BAIXA
+  //
+  // Nenhuma saída reduz estoque direto. As telas abrem um PEDIDO, o pneu é
+  // preso na mesma transação, e uma SEGUNDA pessoa aplica a baixa.
+  // ─────────────────────────────────────────────────────────────────
+
+  // Abre o pedido e PRENDE o pneu. Uma transação só: se o saldo livre não
+  // cobrir, nada é gravado e o pedido não chega a existir.
+  const handleRequestStockExit = async (payload: StockExitPayload): Promise<StockExitResult> => {
+    if (!user) throw new Error("Sessão expirada. Faça login novamente.");
+
+    const inputs = (payload.items || []).filter(i => i && i.stockItemId && i.quantity > 0);
+    if (inputs.length === 0) throw new Error("Selecione pelo menos um pneu para dar baixa.");
+    if (new Set(inputs.map(i => i.stockItemId)).size !== inputs.length) {
+      throw new Error("O mesmo pneu foi adicionado duas vezes no pedido.");
+    }
+    if (inputs.length > 100) {
+      throw new Error("Máximo de 100 pneus por pedido. Divida em mais de um.");
+    }
+
+    const exitRef = doc(collection(db, "stock_exits"));
+    const resultItems: StockExitItem[] = [];
+    let companyId = user.companyId || "";
+    let companyName = user.companyName || "";
+
+    await runTransaction(db, async (transaction) => {
+      resultItems.length = 0; // a transação pode ser reexecutada pelo Firestore
+
+      // --- LEITURAS ---
+      const pending: { ref: any; data: any; input: { stockItemId: string; quantity: number; unitPrice?: number } }[] = [];
+      for (const input of inputs) {
+        const stockRef = doc(db, "stock", input.stockItemId);
+        const snap = await transaction.get(stockRef);
+        if (!snap.exists()) {
+          throw new Error("Um dos pneus selecionados não existe mais no estoque. Atualize a tela e refaça o pedido.");
+        }
+        const data: any = snap.data();
+        const balance = Number(data.quantity) || 0;
+        const reserved = reservedQuantityOf(data);
+        const free = balance - reserved;
+
+        // O saldo LIVRE é o que importa: o que já está preso por outro pedido de
+        // baixa, por uma reserva de cliente ou por uma transferência não pode ser
+        // prometido de novo.
+        if (input.quantity > free) {
+          throw new Error(
+            `Saldo livre insuficiente para ${data.sku || "o item"} (${data.brand || ""} ${data.size || ""}). ` +
+            `Em estoque: ${balance} un, já reservadas: ${reserved} un, livre: ${Math.max(0, free)} un, ` +
+            `pedido: ${input.quantity} un.`
+          );
+        }
+
+        pending.push({ ref: stockRef, data, input });
+      }
+
+      // --- ESCRITAS ---
+      for (const entry of pending) {
+        const { ref, data, input } = entry;
+        const balance = Number(data.quantity) || 0;
+        const reserved = reservedQuantityOf(data);
+
+        // Prende o pneu. `quantity` NÃO muda — o pneu continua fisicamente na
+        // loja; ele só deixa de estar disponível para outra promessa.
+        transaction.update(ref, {
+          reservedQuantity: reserved + input.quantity,
+          updatedAt: serverTimestamp()
+        });
+
+        if (data.companyId) {
+          companyId = data.companyId;
+          companyName = data.companyName || companyName;
+        }
+
+        resultItems.push({
+          stockItemId: input.stockItemId,
+          sku: data.sku || "N/A",
+          brand: data.brand || "N/A",
+          model: data.model || "N/A",
+          size: data.size || "N/A",
+          quantity: input.quantity,
+          unitPrice: Number(input.unitPrice) || 0,
+          balanceAtRequest: balance
+        });
+      }
+
+      transaction.set(exitRef, {
+        companyId,
+        companyName,
+        origin: payload.origin,
+        items: resultItems,
+        totalUnits: resultItems.reduce((acc, i) => acc + i.quantity, 0),
+        totalAmount: resultItems.reduce((acc, i) => acc + i.unitPrice * i.quantity, 0),
+        reason: (payload.reason || "").trim() || "Saída de pneus",
+        docNumber: (payload.docNumber || "").trim(),
+        partyName: (payload.partyName || "").trim(),
+        partyDoc: (payload.partyDoc || "").trim(),
+        vehiclePlate: (payload.vehiclePlate || "").trim().toUpperCase(),
+        observation: (payload.observation || "").trim(),
+        status: "PENDENTE",
+        requestedByUid: user.uid,
+        requestedByEmail: user.email,
+        requestedByName: user.displayName,
+        requestedByRole: user.role,
+        requestedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    });
+
+    return {
+      id: exitRef.id,
+      totalUnits: resultItems.reduce((acc, i) => acc + i.quantity, 0),
+      totalAmount: resultItems.reduce((acc, i) => acc + i.unitPrice * i.quantity, 0),
+      companyName,
+      items: resultItems,
+      reason: (payload.reason || "").trim() || "Saída de pneus",
+      requestedByName: user.displayName,
+      date: formatDate(new Date())
+    };
+  };
+
+  // APLICA a baixa. Só aqui `quantity` cai — e cai junto com `reservedQuantity`,
+  // na mesma escrita. É esse par que as regras do Firestore exigem como prova de
+  // que a saída passou pela fila.
+  const handleApproveStockExit = async (exitId: string): Promise<StockFlowResult> => {
+    if (!user) throw new Error("Sessão expirada. Faça login novamente.");
+
+    const operationId = `OP-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const resultItems: StockFlowResultItem[] = [];
+    let head: any = null;
+
+    await runTransaction(db, async (transaction) => {
+      resultItems.length = 0;
+
+      const exitRef = doc(db, "stock_exits", exitId);
+      const exitSnap = await transaction.get(exitRef);
+      if (!exitSnap.exists()) throw new Error("Este pedido não existe mais.");
+      const exitData: any = exitSnap.data();
+      head = exitData;
+
+      if (exitData.status !== "PENDENTE") {
+        throw new Error(
+          exitData.status === "APROVADO"
+            ? "Este pedido já foi aprovado — a baixa já está no estoque."
+            : `Este pedido já foi ${String(exitData.status).toLowerCase()} e não pode mais ser aprovado.`
+        );
+      }
+      // QUEM PEDE NÃO APROVA. Conferido aqui e repetido nas regras do Firestore:
+      // sem isso a fila vira um clique a mais para a mesma pessoa.
+      if (exitData.requestedByUid === user.uid) {
+        throw new Error(
+          "Você abriu este pedido, então não pode aprová-lo. Outro administrador " +
+          "ou o dono da loja precisa conferir e liberar a baixa."
+        );
+      }
+      if (!canReviewStockExit({ ...exitData, status: "PENDENTE" }, user)) {
+        throw new Error("Seu perfil não pode aprovar baixas desta loja.");
+      }
+
+      const items: StockExitItem[] = exitData.items || [];
+      if (items.length === 0) throw new Error("Pedido sem itens.");
+
+      // --- LEITURAS ---
+      const pending: { ref: any; data: any; item: StockExitItem; after: number; afterReserved: number }[] = [];
+      for (const item of items) {
+        const stockRef = doc(db, "stock", item.stockItemId);
+        const snap = await transaction.get(stockRef);
+        if (!snap.exists()) {
+          throw new Error(
+            `O pneu ${item.sku} não existe mais no estoque — ele foi excluído depois que o pedido foi aberto. ` +
+            `Recuse este pedido e refaça a operação.`
+          );
+        }
+        const data: any = snap.data();
+        const balance = Number(data.quantity) || 0;
+        const reserved = reservedQuantityOf(data);
+
+        const after = balance - item.quantity;
+        if (after < 0) {
+          throw new Error(
+            `Saldo insuficiente para ${item.sku}: há ${balance} un e o pedido baixa ${item.quantity} un. ` +
+            `Recuse o pedido e refaça com a quantidade certa.`
+          );
+        }
+
+        pending.push({
+          ref: stockRef,
+          data,
+          item,
+          after,
+          // A reserva DESTE pedido some (virou saída real); a de outros pedidos fica.
+          afterReserved: Math.max(0, reserved - item.quantity)
+        });
+      }
+
+      // --- ESCRITAS ---
+      for (const entry of pending) {
+        const { ref, data, item, after, afterReserved } = entry;
+
+        transaction.update(ref, {
+          quantity: after,
+          reservedQuantity: afterReserved,
+          updatedAt: serverTimestamp()
+        });
+
+        const readable =
+          `Saída aprovada — ${exitData.reason}` +
+          (exitData.docNumber ? ` • OS ${exitData.docNumber}` : "") +
+          (exitData.partyName ? ` • Cliente: ${exitData.partyName}` : "") +
+          (exitData.vehiclePlate ? ` • Placa ${exitData.vehiclePlate}` : "") +
+          ` • pedido por ${exitData.requestedByName}, aprovado por ${user.displayName} (${operationId})`;
+
+        const movementRef = doc(collection(db, "movements"));
+        transaction.set(movementRef, {
+          sku: item.sku,
+          brand: item.brand,
+          model: item.model,
+          size: item.size,
+          type: "SAIDA",
+          quantity: -item.quantity,
+          balanceAfter: after,
+          companyId: data.companyId || exitData.companyId || "",
+          companyName: data.companyName || exitData.companyName || "",
+          userId: user.uid,
+          userEmail: user.email,
+          timestamp: serverTimestamp(),
+          reason: readable,
+          stockItemId: item.stockItemId,
+          operationId,
+          operationReason: exitData.reason,
+          docNumber: exitData.docNumber || "",
+          partyName: exitData.partyName || "",
+          partyDoc: exitData.partyDoc || "",
+          vehiclePlate: exitData.vehiclePlate || "",
+          observation: exitData.observation || "",
+          unitPrice: Number(item.unitPrice) || 0,
+          totalAmount: (Number(item.unitPrice) || 0) * item.quantity,
+          // Rastro dos dois lados: quem pediu e quem liberou ficam no próprio
+          // movimento, não só no pedido.
+          exitRequestId: exitId,
+          requestedByUid: exitData.requestedByUid,
+          requestedByName: exitData.requestedByName,
+          approvedByUid: user.uid,
+          approvedByName: user.displayName
+        });
+
+        resultItems.push({
+          sku: item.sku,
+          brand: item.brand,
+          model: item.model,
+          size: item.size,
+          quantity: item.quantity,
+          balanceBefore: Number(data.quantity) || 0,
+          balanceAfter: after,
+          unitPrice: Number(item.unitPrice) || 0,
+          totalAmount: (Number(item.unitPrice) || 0) * item.quantity,
+          companyName: data.companyName || exitData.companyName || ""
+        });
+      }
+
+      transaction.update(exitRef, {
+        status: "APROVADO",
+        reviewedByUid: user.uid,
+        reviewedByName: user.displayName,
+        reviewedAt: serverTimestamp(),
+        operationId,
+        updatedAt: serverTimestamp()
+      });
+    });
+
+    return {
+      operationId,
+      type: "SAIDA",
+      items: resultItems,
+      totalUnits: resultItems.reduce((acc, i) => acc + i.quantity, 0),
+      totalAmount: resultItems.reduce((acc, i) => acc + i.totalAmount, 0),
+      reason: head?.reason || "",
+      docNumber: head?.docNumber || "",
+      partyName: head?.partyName || "",
+      partyDoc: head?.partyDoc || "",
+      vehiclePlate: head?.vehiclePlate || "",
+      observation: head?.observation || "",
+      companyName: head?.companyName || user.companyName || "",
+      userName: user.displayName,
+      date: formatDate(new Date())
+    };
+  };
+
+  // Recusa ou cancelamento: os dois SOLTAM o pneu de volta. A diferença é quem
+  // pode fazer — quem aprova recusa, quem pediu cancela — e o que fica escrito.
+  const releaseStockExit = async (
+    exitId: string,
+    nextStatus: "RECUSADO" | "CANCELADO",
+    note: string
+  ) => {
+    if (!user) throw new Error("Sessão expirada. Faça login novamente.");
+
+    await runTransaction(db, async (transaction) => {
+      const exitRef = doc(db, "stock_exits", exitId);
+      const exitSnap = await transaction.get(exitRef);
+      if (!exitSnap.exists()) throw new Error("Este pedido não existe mais.");
+      const exitData: any = exitSnap.data();
+
+      if (exitData.status !== "PENDENTE") {
+        throw new Error(`Este pedido já foi ${String(exitData.status).toLowerCase()} e não pode mais ser alterado.`);
+      }
+
+      if (nextStatus === "RECUSADO") {
+        if (!canReviewStockExit({ ...exitData, status: "PENDENTE" }, user)) {
+          throw new Error(
+            exitData.requestedByUid === user.uid
+              ? "Você abriu este pedido — para desistir dele use Cancelar, não Recusar."
+              : "Seu perfil não pode recusar baixas desta loja."
+          );
+        }
+      } else if (exitData.requestedByUid !== user.uid && user.role !== "admin") {
+        throw new Error("Só quem abriu o pedido (ou um administrador) pode cancelá-lo.");
+      }
+
+      const items: StockExitItem[] = exitData.items || [];
+
+      // --- LEITURAS ---
+      const pending: { ref: any; afterReserved: number }[] = [];
+      for (const item of items) {
+        const stockRef = doc(db, "stock", item.stockItemId);
+        const snap = await transaction.get(stockRef);
+        // Pneu excluído no meio do caminho: não há reserva para devolver, e o
+        // pedido morre assim mesmo — não pode ficar preso por um documento que
+        // não existe mais.
+        if (!snap.exists()) continue;
+        const reserved = reservedQuantityOf(snap.data());
+        pending.push({ ref: stockRef, afterReserved: Math.max(0, reserved - item.quantity) });
+      }
+
+      // --- ESCRITAS ---
+      for (const entry of pending) {
+        transaction.update(entry.ref, {
+          reservedQuantity: entry.afterReserved,
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      transaction.update(exitRef, {
+        status: nextStatus,
+        reviewedByUid: user.uid,
+        reviewedByName: user.displayName,
+        reviewedAt: serverTimestamp(),
+        reviewNote: (note || "").trim(),
+        updatedAt: serverTimestamp()
+      });
+    });
+  };
+
+  const handleRejectStockExit = (exitId: string, note: string) => releaseStockExit(exitId, "RECUSADO", note);
+  const handleCancelStockExit = (exitId: string, note: string) => releaseStockExit(exitId, "CANCELADO", note);
 
   // ─────────────────────────────────────────────────────────────────
   // Sugestões de compra (o que o balcão pediu e o estoque não tinha)
@@ -3633,6 +4242,29 @@ export default function App() {
                 Fica colada em Reservas de propósito — as duas são demanda de
                 cliente trazida pelo vendedor; a diferença é que aqui o pneu
                 nem existe no estoque ainda. */}
+            {/* A fila de baixa aparece para TODO MUNDO que opera estoque: quem
+                decide vê o que precisa conferir, quem pede acompanha o próprio
+                pedido. Um vendedor sem esta aba não saberia se a baixa dele
+                saiu, e pediria de novo. */}
+            <button
+              type="button"
+              onClick={() => setActiveTab("exit-approvals")}
+              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2.5 border ${
+                activeTab === "exit-approvals"
+                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
+                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
+              }`}
+            >
+              <span className="flex items-center gap-2.5">
+                <ShieldCheck size={14} className="stroke-[2px]" /> Aprovar Baixas
+              </span>
+              {pendingExitCount > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black">
+                  {pendingExitCount}
+                </span>
+              )}
+            </button>
+
             {canSeeSuggestions && (
               <button
                 type="button"
@@ -3926,6 +4558,22 @@ export default function App() {
           <span className="text-[9px] font-extrabold uppercase tracking-wide">Reservas</span>
         </button>
 
+        <button
+          type="button"
+          onClick={() => setActiveTab("exit-approvals")}
+          className={`relative flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
+            activeTab === "exit-approvals" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+          }`}
+        >
+          <ShieldCheck size={18} />
+          {pendingExitCount > 0 && (
+            <span className="absolute top-2 right-1/2 translate-x-4 inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[8px] font-black">
+              {pendingExitCount}
+            </span>
+          )}
+          <span className="text-[9px] font-extrabold uppercase tracking-wide">Baixas</span>
+        </button>
+
         {canSeeSuggestions && (
           <button
             type="button"
@@ -4145,6 +4793,11 @@ export default function App() {
                 onDeleteItem={handleDeleteItem}
                 onClearStock={handleClearCompanyStock}
                 onRestoreBackup={handleRestoreBackup}
+                onRegisterFlow={
+                  user.role === "admin" || user.role === "alimentador"
+                    ? handleRegisterStockFlow
+                    : undefined
+                }
               />
             </div>
           )}
@@ -4229,6 +4882,18 @@ export default function App() {
               onCancel={handleCancelTransfer}
               onForceRelease={handleForceReleaseReservation}
               onDelete={handleDeleteTransfer}
+            />
+          )}
+
+          {activeTab === "exit-approvals" && (
+            <ExitApprovals
+              exits={stockExits}
+              stock={stock}
+              companies={companies}
+              user={user}
+              onApprove={handleApproveStockExit}
+              onReject={handleRejectStockExit}
+              onCancel={handleCancelStockExit}
             />
           )}
 

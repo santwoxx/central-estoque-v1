@@ -198,22 +198,59 @@ service cloud.firestore {
         request.resource.data.companyId == getUserData().companyId
       );
 
+      // ─────────────────────────────────────────────────────────────
+      // TRAVA DE BAIXA: saldo só cai junto com a reserva
+      //
+      // Esta é a regra que faz a fila de aprovação valer no SERVIDOR, e não só
+      // na tela. O raciocínio:
+      //
+      //   • Abrir um pedido de baixa SOBE `reservedQuantity` e não encosta em
+      //     `quantity` — o pneu continua na loja, só deixa de estar livre.
+      //   • Aprovar o pedido DESCE os dois juntos, na mesma escrita.
+      //
+      // Então exigir que toda queda de `quantity` venha acompanhada de uma queda
+      // de `reservedQuantity` pelo menos do mesmo tamanho é o mesmo que exigir
+      // que a saída tenha passado por um pedido. Uma baixa direta — a tela
+      // antiga, um script, uma aba esquecida com código velho — desce `quantity`
+      // sozinho e o banco recusa.
+      //
+      // O que continua livre: SUBIR o saldo (entrada não precisa de aprovação) e
+      // mexer em qualquer campo que não seja quantidade.
+      //
+      // Limite honesto desta trava: ela prova que houve reserva, não que houve
+      // um documento em `stock_exits`. Quem tivesse acesso direto ao banco
+      // poderia reservar numa escrita e baixar na seguinte, sem pedido nenhum.
+      // Fechar isso por completo exige que todas as escritas de estoque passem
+      // por uma Cloud Function. Contra erro de operação — que é o problema real
+      // aqui — esta regra já basta.
+      // ─────────────────────────────────────────────────────────────
+      function quantityDrop() {
+        return resource.data.get('quantity', 0) - request.resource.data.get('quantity', 0);
+      }
+      function reservedDrop() {
+        return resource.data.get('reservedQuantity', 0) - request.resource.data.get('reservedQuantity', 0);
+      }
+      // Toda queda de saldo tem que ser coberta por uma queda igual ou maior da
+      // reserva. Quando o saldo não cai (entrada, ou edição de cadastro), passa.
+      function exitWentThroughQueue() {
+        return quantityDrop() <= 0 || quantityDrop() <= reservedDrop();
+      }
+
       // Admin can update anything. Donos/Alimentadores can only update their own company's items.
       //
       // TRAVA DE RESERVA: `reservedQuantity` guarda quantas unidades ja foram
-      // prometidas a outra empresa por uma transferencia aprovada. O saldo do
-      // documento nunca pode terminar abaixo desse numero — e assim que "pneu
-      // reservado nao pode receber baixa" deixa de depender da tela e passa a
-      // ser garantido pelo banco. Documentos sem o campo (todo o estoque antigo)
-      // resolvem para 0 e seguem exatamente como antes.
+      // prometidas — a outra empresa, a um cliente, ou a um pedido de baixa em
+      // analise. O saldo do documento nunca pode terminar abaixo desse numero.
       allow update: if isAdmin() || (
         isAlimentador() &&
         resource.data.companyId == getUserData().companyId &&
         request.resource.data.companyId == getUserData().companyId &&
-        (
-          request.resource.data.get('reservedQuantity', 0) == 0 ||
-          request.resource.data.get('quantity', 0) >= request.resource.data.get('reservedQuantity', 0)
-        )
+        // Saldo negativo nao existe. Antes esta conferencia so acontecia quando
+        // havia reserva — sem reserva, `quantity: -40` era aceito pelo servidor.
+        request.resource.data.get('quantity', 0) is number &&
+        request.resource.data.get('quantity', 0) >= 0 &&
+        request.resource.data.get('quantity', 0) >= request.resource.data.get('reservedQuantity', 0) &&
+        exitWentThroughQueue()
       ) || (
         // RESERVA DO VENDEDOR: quando ele separa um pneu para um cliente, o pneu
         // e preso na MESMA transacao que cria o pedido — e por isso ele precisa
@@ -223,7 +260,6 @@ service cloud.firestore {
         // O que ele NAO pode: tudo o mais. `hasOnly` trava a escrita nesses dois
         // campos, entao quantidade, preco, empresa e cadastro seguem fechados
         // para o vendedor — ele consegue prender e soltar pneu, nunca dar baixa.
-        // A baixa continua sendo do dono da loja / administrador.
         isVendedor() &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservedQuantity', 'updatedAt']) &&
         request.resource.data.get('reservedQuantity', 0) is number &&
@@ -232,12 +268,19 @@ service cloud.firestore {
       );
 
       // Admin can delete anything. Donos/Alimentadores can only delete their own company's items.
-      // Um item com reserva ativa nao pode ser apagado: o pedido da outra empresa
+      //
+      // Um item com reserva ativa nao pode ser apagado: o pedido que o prendeu
       // ficaria apontando para um documento inexistente.
+      //
+      // E um item COM SALDO tambem nao. Apagar o documento tirava as unidades do
+      // sistema sem passar pela fila — era o atalho que furava a aprovacao
+      // inteira. Zerar pelo modulo de Saida (com aprovacao) e so entao excluir o
+      // cadastro vazio e o caminho.
       allow delete: if isAdmin() || (
         isAlimentador() &&
         resource.data.companyId == getUserData().companyId &&
-        resource.data.get('reservedQuantity', 0) == 0
+        resource.data.get('reservedQuantity', 0) == 0 &&
+        resource.data.get('quantity', 0) == 0
       );
     }
 
@@ -578,6 +621,87 @@ service cloud.firestore {
           resource.data.reservation.get('active', false) != true
         )
       );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Pedidos de baixa (fila de aprovacao)
+    //
+    // Nenhuma saida reduz estoque direto. Quem opera abre um pedido aqui — que
+    // prende o pneu em `stock/{id}.reservedQuantity` na mesma transacao — e uma
+    // SEGUNDA pessoa aprova. A regra central, repetida do lado do servidor:
+    //
+    //   QUEM PEDE NAO APROVA.
+    //
+    // Sem ela a fila seria so um clique a mais para a mesma pessoa, e nao havia
+    // conferencia nenhuma. Por isso `reviewedByUid != resource.data.requestedByUid`
+    // aparece em toda transicao de decisao — inclusive para o administrador.
+    // ─────────────────────────────────────────────────────────────
+    match /stock_exits/{exitId} {
+
+      // Dono da loja a que o pedido pertence.
+      function isOwnerOfExit() {
+        return isAlimentador() &&
+          myCompanyId() != '' &&
+          resource.data.get('companyId', '') == myCompanyId();
+      }
+
+      // Le quem decide (admin e dono da loja) e quem escreveu — o vendedor
+      // precisa acompanhar o proprio pedido, senao ele pede duas vezes achando
+      // que nao foi. Cada forma corresponde a uma consulta do app: colecao
+      // inteira (admin), where companyId (dono), where requestedByUid (todos).
+      allow read: if isAdmin() ||
+        isOwnerOfExit() ||
+        (isAuth() && resource.data.get('requestedByUid', '') == request.auth.uid);
+
+      // Abre o pedido quem atende o balcao: vendedor, dono e admin. Ele nasce
+      // SEMPRE pendente e assinado por quem esta logado — ninguem cria um pedido
+      // ja aprovado (que seria a baixa sem conferencia de volta pela janela),
+      // nem em nome de outra pessoa.
+      allow create: if (isAdmin() || isVendedor() || isAlimentador()) &&
+        request.resource.data.status == 'PENDENTE' &&
+        request.resource.data.requestedByUid == request.auth.uid &&
+        // Um pedido que ja nasce decidido seria a propria baixa direta.
+        !('reviewedByUid' in request.resource.data) &&
+        !('operationId' in request.resource.data) &&
+        request.resource.data.items is list &&
+        request.resource.data.items.size() > 0 &&
+        request.resource.data.items.size() <= 100 &&
+        request.resource.data.companyId is string &&
+        request.resource.data.companyId != '';
+
+      // ── A DECISAO ──────────────────────────────────────────────
+      // Tres transicoes, todas a partir de PENDENTE, todas com a lista de campos
+      // travada para nada mais mudar junto (itens, quantidade e loja sao
+      // imutaveis depois de aberto — senao daria para aprovar um pedido de 2 un
+      // e baixar 20).
+      allow update: if
+        // (a) APROVAR ou RECUSAR — o dono da loja ou o administrador, e NUNCA
+        // quem abriu o pedido. Esta e a regra inteira do modulo.
+        (
+          (isAdmin() || isOwnerOfExit()) &&
+          resource.data.status == 'PENDENTE' &&
+          (request.resource.data.status == 'APROVADO' || request.resource.data.status == 'RECUSADO') &&
+          request.resource.data.reviewedByUid == request.auth.uid &&
+          request.resource.data.reviewedByUid != resource.data.requestedByUid &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'reviewedByUid', 'reviewedByName', 'reviewedAt', 'reviewNote', 'operationId', 'updatedAt'])
+        )
+        // (b) CANCELAR — quem abriu desiste do proprio pedido (ou o admin
+        // limpa a fila). Nao e uma decisao sobre a baixa: o pneu volta ao saldo
+        // livre e nada sai do estoque.
+        || (
+          (resource.data.requestedByUid == request.auth.uid || isAdmin()) &&
+          resource.data.status == 'PENDENTE' &&
+          request.resource.data.status == 'CANCELADO' &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'reviewedByUid', 'reviewedByName', 'reviewedAt', 'reviewNote', 'updatedAt'])
+        );
+
+      // A fila e registro de conferencia: um pedido aprovado explica de onde
+      // veio cada baixa no historico. So o administrador faz faxina, e so do que
+      // ja esta encerrado — apagar um PENDENTE deixaria o pneu preso para sempre,
+      // sem nada apontando para a causa.
+      allow delete: if isAdmin() && resource.data.status != 'PENDENTE';
     }
 
     // ─────────────────────────────────────────────────────────────

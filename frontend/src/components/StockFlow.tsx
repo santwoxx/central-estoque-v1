@@ -39,7 +39,8 @@ import {
   Keyboard,
   Info,
   ClipboardList,
-  Lock
+  Lock,
+  Hourglass
 } from "lucide-react";
 
 interface StockFlowProps {
@@ -1361,19 +1362,41 @@ export default function StockFlow({ stock, movements, companies, user, transfers
               /* ── Tela de sucesso + comprovante ── */
               <div className="flex-1 overflow-y-auto p-6 sm:p-8">
                 <div className="max-w-lg mx-auto text-center space-y-5">
-                  <div className={`h-16 w-16 mx-auto rounded-2xl flex items-center justify-center ${isEntrada ? "bg-emerald-50 text-emerald-600 border border-emerald-200" : "bg-red-50 text-red-600 border border-red-200"}`}>
-                    <CheckCircle2 size={34} className="stroke-[2]" />
+                  {/* Uma SAÍDA nunca sai do estoque aqui: ela vira um pedido que
+                      outra pessoa aprova. Mostrar "Saída registrada!" com um
+                      comprovante seria mentir sobre um estoque que não mudou. */}
+                  <div className={`h-16 w-16 mx-auto rounded-2xl flex items-center justify-center ${
+                    receipt.pendingApproval
+                      ? "bg-gold-50 text-gold-700 border border-gold-300"
+                      : isEntrada
+                      ? "bg-emerald-50 text-emerald-600 border border-emerald-200"
+                      : "bg-red-50 text-red-600 border border-red-200"
+                  }`}>
+                    {receipt.pendingApproval
+                      ? <Hourglass size={32} className="stroke-[2]" />
+                      : <CheckCircle2 size={34} className="stroke-[2]" />}
                   </div>
 
                   <div>
                     <h4 className="text-base font-black text-slate-900 uppercase tracking-wide">
-                      {isEntrada ? "Entrada registrada!" : "Saída registrada!"}
+                      {receipt.pendingApproval
+                        ? "Pedido enviado para aprovação"
+                        : isEntrada ? "Entrada registrada!" : "Saída registrada!"}
                     </h4>
-                    <p className="text-xs text-slate-500 font-semibold mt-1.5 leading-relaxed">
-                      {receipt.totalUnits} un em {receipt.items.length} {receipt.items.length === 1 ? "produto" : "produtos"}
-                      {isEntrada ? " somadas ao" : " baixadas do"} estoque. Tudo salvo no histórico com o código{" "}
-                      <span className="font-mono font-black text-slate-800">{receipt.operationId}</span>.
-                    </p>
+                    {receipt.pendingApproval ? (
+                      <p className="text-xs text-slate-500 font-semibold mt-1.5 leading-relaxed">
+                        {receipt.totalUnits} un de {receipt.items.length} {receipt.items.length === 1 ? "produto" : "produtos"}{" "}
+                        ficaram <b className="text-slate-800">reservadas</b> — ninguém consegue vender esses pneus
+                        enquanto o pedido estiver aberto. A baixa só acontece quando o dono da loja ou um
+                        administrador conferir e liberar, na aba <b className="text-slate-800">Aprovar Baixas</b>.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-500 font-semibold mt-1.5 leading-relaxed">
+                        {receipt.totalUnits} un em {receipt.items.length} {receipt.items.length === 1 ? "produto" : "produtos"}
+                        {isEntrada ? " somadas ao" : " baixadas do"} estoque. Tudo salvo no histórico com o código{" "}
+                        <span className="font-mono font-black text-slate-800">{receipt.operationId}</span>.
+                      </p>
+                    )}
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 text-left overflow-hidden">
@@ -1388,7 +1411,9 @@ export default function StockFlow({ stock, movements, companies, user, transfers
                             {isEntrada ? "+" : "-"}{item.quantity} un
                           </span>
                           <div className="text-[10px] text-slate-400 font-bold font-mono">
-                            {item.balanceBefore} → {item.balanceAfter}
+                            {receipt.pendingApproval
+                              ? `${item.balanceBefore} un · reservadas`
+                              : `${item.balanceBefore} → ${item.balanceAfter}`}
                           </div>
                         </div>
                       </div>
@@ -1403,13 +1428,17 @@ export default function StockFlow({ stock, movements, companies, user, transfers
                   )}
 
                   <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => printReceipt(receipt)}
-                      className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-black uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer"
-                    >
-                      <Printer size={14} /> Imprimir comprovante
-                    </button>
+                    {/* Sem comprovante para um pedido: o papel só existe depois
+                        que a baixa aconteceu de verdade. */}
+                    {!receipt.pendingApproval && (
+                      <button
+                        type="button"
+                        onClick={() => printReceipt(receipt)}
+                        className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-black uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer"
+                      >
+                        <Printer size={14} /> Imprimir comprovante
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => openFlow(receipt.type)}

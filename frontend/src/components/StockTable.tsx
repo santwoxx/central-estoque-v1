@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { StockItem, Company, UserRole } from "../types";
+import { StockItem, Company, UserRole, StockFlowPayload, StockFlowResult, StockExitOrigin } from "../types";
 import { availableQuantity, formatBRL, matchesTireSize, parsePriceInput, reservedQuantityOf } from "../utils";
 import sajEstoqueData from "../saj_estoque.json";
 import autocarEstoqueData from "../autocar_estoque.json";
@@ -31,13 +31,27 @@ interface StockTableProps {
   isAdmin: boolean;
   user: { uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string };
   companies: Company[];
-  onUpdateItem: (itemId: string, updatedFields: Partial<StockItem>, movementReason: string, quantityDiff?: number, extraMovementFields?: Record<string, any>) => Promise<void>;
+  // `quantityDiff` e o DELTA (nunca o total: a quantidade absoluta enviada em
+  // `updatedFields` e descartada por handleUpdateItem). `expectedQuantity` e o
+  // saldo que a tela mostrava — so os caminhos de CONTAGEM mandam.
+  onUpdateItem: (
+    itemId: string,
+    updatedFields: Partial<StockItem>,
+    movementReason: string,
+    quantityDiff?: number,
+    extraMovementFields?: Record<string, any>,
+    expectedQuantity?: number,
+    exitOrigin?: StockExitOrigin
+  ) => Promise<void>;
   onDeleteItem: (itemId: string) => Promise<void>;
   onAddItem: (itemData: Omit<StockItem, "id" | "userId" | "userEmail" | "createdAt" | "updatedAt">) => Promise<void>;
   // Omitting companyId wipes every company's stock — only used for the explicit
   // "todas as empresas" choice in the clear-stock modal below, never as a default.
   onClearStock?: (companyId?: string) => Promise<void>;
   onRestoreBackup?: (backupItems: any[]) => Promise<void>;
+  // Grava uma operacao inteira (varios pneus) numa UNICA transacao. E por aqui
+  // que a venda do balcao passa a sair: ver handleSaveCheckout abaixo.
+  onRegisterFlow?: (payload: StockFlowPayload) => Promise<StockFlowResult>;
 }
 
 // Sentinel value for the "wipe every company" option in the clear-stock modal —
@@ -86,7 +100,8 @@ export default function StockTable({
   onDeleteItem, 
   onAddItem,
   onClearStock,
-  onRestoreBackup
+  onRestoreBackup,
+  onRegisterFlow
 }: StockTableProps) {
   // Filtering & Search
   const [searchTerm, setSearchTerm] = useState("");
@@ -736,12 +751,30 @@ export default function StockTable({
         companyName: matchedCompName
       };
 
+      // CONTAGEM, nao delta: a pessoa digitou um total olhando para o saldo que
+      // a tela mostrava. `editingItem.quantity` vai como `expectedQuantity` para
+      // a transacao conferir — se alguem vendeu enquanto este formulario estava
+      // aberto, a gravacao e recusada com o numero novo em vez de apagar a venda.
       const quantityDiff = Number(formQuantity) - editingItem.quantity;
-      await onUpdateItem(editingItem.id, updatedFields, movementReason || "Edição de cadastro", quantityDiff);
+      await onUpdateItem(
+        editingItem.id,
+        updatedFields,
+        movementReason || "Edição de cadastro",
+        quantityDiff,
+        undefined,
+        editingItem.quantity
+      );
       setShowEditModal(false);
+      // Se a quantidade DIMINUIU, ela não foi gravada: virou um pedido. Dizer
+      // "gravado, 5 un" seria mentira — o cadastro mudou, o saldo não.
       setSavedMsg(
-        `${formBrand} ${formModel} (${formSize}) gravado — custo ${costPrice > 0 ? formatBRL(costPrice) : "não informado"}, ` +
-        `à vista ${formatBRL(priceCash)}, a prazo ${formatBRL(priceInstallment)}, ${Number(formQuantity)} un.`
+        quantityDiff < 0
+          ? `Cadastro de ${formBrand} ${formModel} (${formSize}) gravado. A redução de ` +
+            `${Math.abs(quantityDiff)} un virou um PEDIDO DE BAIXA: o saldo continua ` +
+            `${editingItem.quantity} un e as unidades ficaram reservadas até o dono da loja ou um ` +
+            `administrador aprovar, na aba "Aprovar Baixas".`
+          : `${formBrand} ${formModel} (${formSize}) gravado — custo ${costPrice > 0 ? formatBRL(costPrice) : "não informado"}, ` +
+            `à vista ${formatBRL(priceCash)}, a prazo ${formatBRL(priceInstallment)}, ${Number(formQuantity)} un.`
       );
     } catch (err: any) {
       setErrorMsg(err.message || "Erro ao atualizar dados.");
@@ -813,10 +846,32 @@ export default function StockTable({
     setCheckoutItems(prev => prev.filter(i => i.id !== id));
   };
 
+  // ── VENDA DO BALCAO: uma operacao, uma transacao ───────────────────
+  // ANTES: um laco `for (...) await onUpdateItem(...)`, uma gravacao por pneu.
+  // Duas falhas moravam aqui.
+  //
+  // A primeira: o saldo novo saia de `checkoutItem.itemRef` — a copia do produto
+  // guardada quando o item foi ADICIONADO a lista. Uma venda que ficasse cinco
+  // minutos aberta enquanto o cliente decidia gravava por cima de tudo que
+  // tivesse acontecido com aquele pneu nesse intervalo.
+  //
+  // A segunda: o laco nao era atomico. Se o terceiro pneu falhasse (rede,
+  // permissao, saldo), os dois primeiros JA tinham sido baixados, mas a tela
+  // mostrava erro e nao emitia recibo. O vendedor refazia a venda inteira e os
+  // dois primeiros saiam de novo — quatro unidades para uma venda de tres.
+  //
+  // AGORA a lista inteira vai numa chamada so para `onRegisterFlow`, que le
+  // todos os saldos, valida todos e so entao escreve — tudo ou nada. E o mesmo
+  // caminho do modulo Entrada e Saida, entao a venda do balcao passa a aparecer
+  // no historico com operationId, e pode ser estornada como qualquer outra.
   const handleSaveCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
     if (checkoutItems.length === 0) {
       setErrorMsg("Adicione pelo menos um item à lista.");
+      return;
+    }
+    if (!onRegisterFlow) {
+      setErrorMsg("Seu perfil não tem permissão para dar baixa no estoque.");
       return;
     }
 
@@ -825,55 +880,44 @@ export default function StockTable({
 
     try {
       const reason = checkoutReason.trim() || "Saída / Baixa manual";
-      let totalAmount = 0;
-      const receiptItems = [];
-      let companyName = user.companyName || "Central Estoque";
+      const isSale = checkoutReason === "Venda";
 
-      for (const checkoutItem of checkoutItems) {
-        const item = checkoutItem.itemRef;
-        const newQty = item.quantity - checkoutItem.quantity;
-        const unitPrice = checkoutItem.priceUnit;
-        const itemTotal = unitPrice * checkoutItem.quantity;
-        totalAmount += itemTotal;
-        
-        const extraFields: Record<string, any> = {};
-        if (checkoutReason === "Venda") {
-          extraFields.clientName = checkoutClientName.trim();
-          extraFields.clientDoc = checkoutClientDoc.trim();
-          extraFields.clientVehicle = checkoutClientVehicle.trim().toUpperCase();
-          extraFields.priceUnit = unitPrice;
-          extraFields.totalAmount = itemTotal;
-        }
+      const result = await onRegisterFlow({
+        type: "SAIDA",
+        reason,
+        items: checkoutItems.map(ci => ({
+          stockItemId: ci.id,
+          quantity: ci.quantity,
+          unitPrice: ci.priceUnit
+        })),
+        partyName: isSale ? checkoutClientName.trim() : "",
+        partyDoc: isSale ? checkoutClientDoc.trim() : "",
+        vehiclePlate: isSale ? checkoutClientVehicle.trim().toUpperCase() : "",
+        observation: ""
+      });
 
-        await onUpdateItem(item.id, { quantity: newQty }, reason, -checkoutItem.quantity, extraFields);
-        
-        receiptItems.push({
-          sku: item.sku,
-          brand: item.brand,
-          model: item.model,
-          size: item.size,
-          quantity: checkoutItem.quantity,
-          priceUnit: unitPrice,
-          total: itemTotal,
-        });
-
-        if (item.companyName) {
-          companyName = item.companyName;
-        }
-      }
-      
-      // Prepare receipt data
+      // O recibo passa a ser montado com o que o SERVIDOR gravou — sku, medida e
+      // saldo vem da leitura feita dentro da transacao, nao da copia da tela.
       const receiptData = {
-        items: receiptItems,
-        totalAmount,
+        pendingApproval: !!result.pendingApproval,
+        items: result.items.map(i => ({
+          sku: i.sku,
+          brand: i.brand,
+          model: i.model,
+          size: i.size,
+          quantity: i.quantity,
+          priceUnit: i.unitPrice,
+          total: i.totalAmount
+        })),
+        totalAmount: result.totalAmount,
         clientName: checkoutClientName.trim(),
         clientDoc: checkoutClientDoc.trim(),
         clientVehicle: checkoutClientVehicle.trim().toUpperCase(),
-        companyName,
+        companyName: result.companyName || user.companyName || "Central Estoque",
         userName: user.displayName,
-        date: new Date().toLocaleDateString("pt-BR") + " " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+        date: result.date
       };
-      
+
       setLastSaleReceipt(receiptData);
       setShowCheckoutModal(false);
       setCheckoutItems([]);
@@ -884,6 +928,7 @@ export default function StockTable({
       setSubmitting(false);
     }
   };
+
   const checkoutStockOptions = useMemo(() => {
     const lower = checkoutSearch.toLowerCase();
     return items
@@ -1545,7 +1590,25 @@ export default function StockTable({
                                   : "Este pneu está com saldo zerado."
                               );
                             } else {
-                              onUpdateItem(item.id, { quantity: item.quantity - 1 }, "Baixa rápida via celular", -1)
+                              // Delta puro: manda so o -1. O saldo base e lido
+                              // dentro da transacao, entao dois toques ao mesmo
+                              // tempo em aparelhos diferentes tiram 2, nao 1.
+                              // O 7o argumento e a ORIGEM do pedido: e o que
+                              // faz a fila mostrar "Baixa rapida" em vez de
+                              // "Contagem" para quem vai aprovar.
+                              onUpdateItem(item.id, {}, "Baixa rápida via celular", -1, undefined, undefined, "RAPIDA")
+                                // O contador ao lado NAO desce agora: a unidade
+                                // fica reservada ate alguem aprovar. Sem dizer
+                                // isso, o operador aperta o botao cinco vezes
+                                // achando que nao funcionou — e abre cinco
+                                // pedidos para a mesma baixa.
+                                .then(() => alert(
+                                  `Pedido de baixa enviado: 1 un de ${item.sku}.
+
+` +
+                                  `O saldo continua ${item.quantity} un de propósito — a unidade ficou RESERVADA. ` +
+                                  `A baixa acontece quando o dono da loja ou um administrador aprovar, na aba "Aprovar Baixas".`
+                                ))
                                 .catch((err: any) => alert(err?.message || "Erro ao dar baixa."));
                             }
                           }}
@@ -1565,7 +1628,7 @@ export default function StockTable({
                           type="button"
                           title="Adicionar 1 unidade"
                           onClick={() => {
-                            onUpdateItem(item.id, { quantity: item.quantity + 1 }, "Entrada rápida via celular", 1)
+                            onUpdateItem(item.id, {}, "Entrada rápida via celular", 1)
                               .catch((err: any) => alert(err?.message || "Erro ao lançar entrada."));
                           }}
                           className="h-8 w-8 text-emerald-600 active:bg-slate-200 font-extrabold hover:text-emerald-700 flex items-center justify-center cursor-pointer select-none rounded text-lg transition-colors border border-transparent"
@@ -2433,8 +2496,11 @@ export default function StockTable({
         <div className="fixed inset-0 z-55 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
           <div className="bg-white rounded-3xl w-full max-w-sm p-6 border border-slate-200 shadow-2xl relative flex flex-col space-y-4 font-sans text-slate-800 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-xs font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1.5">
-                <ShoppingBag size={16} /> Saída Confirmada!
+              <h3 className={`text-xs font-black uppercase tracking-widest flex items-center gap-1.5 ${
+                lastSaleReceipt.pendingApproval ? "text-gold-700" : "text-emerald-700"
+              }`}>
+                <ShoppingBag size={16} />
+                {lastSaleReceipt.pendingApproval ? "Pedido enviado" : "Saída Confirmada!"}
               </h3>
               <button 
                 onClick={() => setLastSaleReceipt(null)}
@@ -2444,11 +2510,21 @@ export default function StockTable({
               </button>
             </div>
 
+            {/* Enquanto o pedido não for aprovado, NADA saiu do estoque — o
+                bloco abaixo é a lista do que foi pedido, não um comprovante. */}
+            {lastSaleReceipt.pendingApproval && (
+              <div className="bg-gold-50 border border-gold-300 text-gold-900 rounded-xl px-3 py-2.5 text-[11px] font-bold leading-relaxed">
+                Os pneus ficaram <b>reservados</b> e ninguém mais consegue vendê-los. A baixa só acontece
+                quando o dono da loja ou um administrador conferir e liberar, na aba{" "}
+                <b>Aprovar Baixas</b>. Este papel ainda não vale como comprovante de saída.
+              </div>
+            )}
+
             {/* Thermal Receipt Visual Container */}
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 font-mono text-[11px] leading-relaxed shadow-inner max-h-[350px] overflow-y-auto">
               <div className="text-center border-b border-dashed border-slate-300 pb-2.5 mb-2.5">
                 <span className="font-bold text-xs uppercase tracking-wider block text-slate-900">{lastSaleReceipt.companyName}</span>
-                <span className="text-[9px] text-slate-400 block mt-0.5">COMPROVANTE DE SAÍDA</span>
+                <span className="text-[9px] text-slate-400 block mt-0.5">{lastSaleReceipt.pendingApproval ? "PEDIDO DE BAIXA — AGUARDANDO APROVAÇÃO" : "COMPROVANTE DE SAÍDA"}</span>
                 <span className="text-[9px] text-slate-400 block">{lastSaleReceipt.date}</span>
               </div>
 
