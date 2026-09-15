@@ -151,6 +151,15 @@ const MOVEMENTS_WINDOW = 400;
 // De quanto em quanto a janela cresce quando alguem pede "carregar mais".
 const MOVEMENTS_STEP = 800;
 
+// Janela dos pedidos de baixa: quantos pedidos JA DECIDIDOS carregar de uma vez.
+// Os PENDENTES nao usam janela — sao a fila de trabalho, ela drena, e esconder
+// um pedido esperando decisao seria esconder um pneu preso.
+const EXITS_WINDOW = 300;
+
+// Caixa de entrada de sugestoes. Mesma ideia: ela so cresce, e o que importa
+// sao as recentes em aberto.
+const SUGGESTIONS_WINDOW = 300;
+
 // Helper: maps a raw Firestore transfer document into a typed TransferOrder
 function mapTransferDoc(docSnap: any): TransferOrder {
   const data = docSnap.data() || {};
@@ -354,6 +363,11 @@ export default function App() {
   // `stockExits` mais abaixo.
   const [exitsQueue, setExitsQueue] = useState<StockExitRequest[]>([]);
   const [exitsMine, setExitsMine] = useState<StockExitRequest[]>([]);
+  // Só depois que TODOS os listeners da fila entregarem o primeiro snapshot é
+  // que o sino pode comparar estados. Sem isso, entrar no sistema com dez
+  // pedidos pendentes geraria dez avisos de "novo pedido" para coisa antiga.
+  const [exitsHistory, setExitsHistory] = useState<StockExitRequest[]>([]);
+  const [stockExitsReady, setStockExitsReady] = useState(false);
 
   // Support and Error Report State
   const [showReportModal, setShowReportModal] = useState(false);
@@ -810,62 +824,158 @@ export default function App() {
   }, [user]);
 
   // ── Fila de aprovação de baixa ─────────────────────────────────────
-  // Duas consultas, porque duas perguntas diferentes precisam de resposta:
+  // Três consultas, e a divisão entre elas é o ponto:
   //
-  //   • "o que eu preciso decidir" — os pedidos da MINHA loja (o dono) ou de
-  //     todas (o administrador). É a fila de trabalho.
-  //   • "o que eu pedi" — os meus próprios pedidos, em qualquer loja. Um
-  //     vendedor não vê a fila da loja, mas tem que conseguir acompanhar o que
-  //     mandou, senão ele pede duas vezes achando que não foi.
+  //   • PENDENTES da loja (ou de todas, para o admin) — listener AO VIVO. É a
+  //     fila de trabalho, e ela drena: o que entra é decidido e sai. Fica
+  //     pequena para sempre, por mais que o sistema rode anos.
+  //   • MEUS pedidos — listener ao vivo, com janela. Quem pede precisa ver o
+  //     desfecho do que mandou.
+  //   • DECIDIDOS — carga ÚNICA, não listener. É histórico: não muda sozinho, e
+  //     manter um listener sobre ele seria pagar por um passado imutável.
   //
-  // Dois arrays unidos por id em `stockExits` (useMemo abaixo) — mesmo padrão
-  // das transferências, em vez de uma consulta composta que ninguém testou.
+  // ANTES era uma consulta só, sem limite nenhum: o administrador baixava a
+  // coleção inteira — cada pedido já decidido desde o primeiro dia — a cada vez
+  // que abria o sistema. Com vinte baixas por dia nas cinco lojas, passa de sete
+  // mil documentos em um ano, lidos e cobrados para mostrar os dez que importam.
+  // É o mesmo defeito que H1 apontou em `movements`, repetido na coleção nova.
   useEffect(() => {
     if (!user) {
       setExitsQueue([]);
       setExitsMine([]);
+      setExitsHistory([]);
       return;
     }
 
+    setStockExitsReady(false);
     const exitsRef = collection(db, "stock_exits");
     const unsubs: (() => void)[] = [];
 
-    // A fila de trabalho só existe para quem decide.
-    if (user.role === "admin" || user.role === "alimentador") {
-      const queueQuery = (user.role === "admin" || !user.companyId)
-        ? exitsRef
-        : query(exitsRef, where("companyId", "==", user.companyId));
+    const decides = user.role === "admin" || user.role === "alimentador";
+    const isGlobal = user.role === "admin" || !user.companyId;
+    let queueLoaded = !decides; // quem não decide não tem fila de trabalho
+    let mineLoaded = false;
+    const markReady = () => {
+      if (queueLoaded && mineLoaded) setStockExitsReady(true);
+    };
+
+    // ── 1. A fila de trabalho: só o que está pendente ──
+    if (decides) {
+      const queueQuery = isGlobal
+        ? query(exitsRef, where("status", "==", "PENDENTE"))
+        : query(exitsRef, where("companyId", "==", user.companyId), where("status", "==", "PENDENTE"));
+
       unsubs.push(onSnapshot(
         queueQuery,
         (snap) => {
           const list: StockExitRequest[] = [];
           snap.forEach(d => list.push({ id: d.id, ...(d.data() as any) }));
           setExitsQueue(list);
+          queueLoaded = true;
+          markReady();
         },
-        (err) => console.error("Erro ao ler a fila de baixas:", err)
+        (err: any) => {
+          // Filtrar por empresa E status exige um índice composto
+          // (stock_exits: companyId + status — ver firestore.indexes.json).
+          // Enquanto ele não existe, cai para a consulta só por empresa e
+          // filtra em memória: custa mais leituras, mas devolve o dado certo em
+          // vez de uma fila vazia que parece "não há nada para aprovar".
+          if (err?.code === "failed-precondition" && !isGlobal) {
+            console.warn(
+              "[BAIXAS] Índice composto ausente (companyId + status) — usando consulta alternativa. " +
+              "Para restaurar a consulta enxuta rode: firebase deploy --only firestore:indexes"
+            );
+            unsubs.push(onSnapshot(
+              query(exitsRef, where("companyId", "==", user.companyId)),
+              (snap) => {
+                const list: StockExitRequest[] = [];
+                snap.forEach(d => {
+                  const data: any = d.data();
+                  if (data.status === "PENDENTE") list.push({ id: d.id, ...data });
+                });
+                setExitsQueue(list);
+                queueLoaded = true;
+                markReady();
+              },
+              (e) => console.error("Erro ao ler a fila de baixas (alternativa):", e)
+            ));
+            return;
+          }
+          console.error("Erro ao ler a fila de baixas:", err);
+          queueLoaded = true;
+          markReady();
+        }
       ));
     } else {
       setExitsQueue([]);
     }
 
-    // "Meus pedidos" — para todo mundo, inclusive o vendedor.
+    // ── 2. Meus pedidos, em qualquer loja ──
     unsubs.push(onSnapshot(
-      query(exitsRef, where("requestedByUid", "==", user.uid)),
+      query(exitsRef, where("requestedByUid", "==", user.uid), limit(EXITS_WINDOW)),
       (snap) => {
         const list: StockExitRequest[] = [];
         snap.forEach(d => list.push({ id: d.id, ...(d.data() as any) }));
         setExitsMine(list);
+        mineLoaded = true;
+        markReady();
       },
-      (err) => console.error("Erro ao ler meus pedidos de baixa:", err)
+      (err) => {
+        console.error("Erro ao ler meus pedidos de baixa:", err);
+        mineLoaded = true;
+        markReady();
+      }
     ));
 
     return () => unsubs.forEach(u => u());
   }, [user]);
 
+  // ── 3. Histórico dos já decididos ──────────────────────────────────
+  // Carga única, sob demanda: só quando alguém abre a aba de aprovações. Não é
+  // listener porque pedido decidido não muda mais — e porque é justamente esta
+  // parte que cresce para sempre.
+  useEffect(() => {
+    if (!user || activeTab !== "exit-approvals") return;
+    if (!(user.role === "admin" || user.role === "alimentador")) return;
+
+    let cancelled = false;
+    const exitsRef = collection(db, "stock_exits");
+    const isGlobal = user.role === "admin" || !user.companyId;
+
+    const load = async () => {
+      try {
+        const base = isGlobal
+          ? query(exitsRef, orderBy("requestedAt", "desc"), limit(EXITS_WINDOW))
+          : query(exitsRef, where("companyId", "==", user.companyId), orderBy("requestedAt", "desc"), limit(EXITS_WINDOW));
+        const snap = await getDocs(base);
+        if (cancelled) return;
+        const list: StockExitRequest[] = [];
+        snap.forEach(d => {
+          const data: any = d.data();
+          if (data.status !== "PENDENTE") list.push({ id: d.id, ...data });
+        });
+        setExitsHistory(list);
+      } catch (err: any) {
+        // Sem o índice composto (companyId + requestedAt), o histórico
+        // simplesmente não carrega — e isso é aceitável: os PENDENTES, que são o
+        // que exige ação, continuam chegando pelo listener acima.
+        console.warn(
+          "[BAIXAS] Histórico não carregado (índice ausente ou erro de leitura). " +
+          "Os pedidos pendentes não são afetados.",
+          err?.code || err
+        );
+      }
+    };
+
+    load();
+    return () => { cancelled = true; };
+  }, [user, activeTab]);
+
   // União das duas consultas. Pendentes primeiro — é o que exige ação — e
   // dentro de cada grupo o mais recente antes.
   const stockExits = useMemo(() => {
     const byId = new Map<string, StockExitRequest>();
+    for (const e of exitsHistory) byId.set(e.id, e);
     for (const e of exitsQueue) byId.set(e.id, e);
     for (const e of exitsMine) byId.set(e.id, e);
     return Array.from(byId.values()).sort((a, b) => {
@@ -874,7 +984,7 @@ export default function App() {
       if (pa !== pb) return pa - pb;
       return toMillis(b.requestedAt) - toMillis(a.requestedAt);
     });
-  }, [exitsQueue, exitsMine]);
+  }, [exitsQueue, exitsMine, exitsHistory]);
 
   // Quantos pedidos ESTE usuário pode decidir agora. Alimenta o número vermelho
   // na aba — sem ele a fila é uma tela que ninguém lembra de abrir.
@@ -903,9 +1013,13 @@ export default function App() {
     }
 
     const suggestionsRef = collection(db, "suggestions");
+    // Janela: a caixa de entrada tambem so cresce. `SUGGESTIONS_WINDOW` sem
+    // orderBy de proposito — ordenar exigiria indice composto com o `in`, e
+    // aqui o corte por quantidade ja resolve o custo. A ordenacao real acontece
+    // em memoria logo abaixo, como sempre foi.
     const suggestionsQuery = user.role === "admin" || !user.companyId
-      ? suggestionsRef
-      : query(suggestionsRef, where("companyId", "in", [user.companyId, "ALL"]));
+      ? query(suggestionsRef, limit(SUGGESTIONS_WINDOW))
+      : query(suggestionsRef, where("companyId", "in", [user.companyId, "ALL"]), limit(SUGGESTIONS_WINDOW));
 
     const unsub = onSnapshot(suggestionsQuery, (snapshot) => {
       const list: Suggestion[] = [];
@@ -1006,7 +1120,9 @@ export default function App() {
     transfers,
     transfersReady,
     stock,
-    !loadingData
+    !loadingData,
+    stockExits,
+    stockExitsReady
   );
 
   // Quem abre a aba de cadastro de acessos. O ADMIN administra o sistema inteiro

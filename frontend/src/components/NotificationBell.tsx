@@ -10,6 +10,8 @@ import {
   PackageCheck,
   PackageOpen,
   Ban,
+  Hourglass,
+  ShieldCheck,
   X
 } from "lucide-react";
 
@@ -22,7 +24,12 @@ const TYPE_STYLES: Record<NotificationType, { icon: any; iconClass: string; dotC
   TRANSFER_COMPLETED: { icon: PackageCheck, iconClass: "bg-emerald-50 text-emerald-800 border-emerald-200", dotClass: "bg-emerald-500" },
   TRANSFER_CANCELLED: { icon: Ban, iconClass: "bg-red-50 text-red-700 border-red-200", dotClass: "bg-red-500" },
   STOCK_LOW: { icon: PackageOpen, iconClass: "bg-amber-50 text-amber-800 border-amber-200", dotClass: "bg-amber-500" },
-  STOCK_OUT: { icon: PackageOpen, iconClass: "bg-red-50 text-red-700 border-red-200", dotClass: "bg-red-500" }
+  STOCK_OUT: { icon: PackageOpen, iconClass: "bg-red-50 text-red-700 border-red-200", dotClass: "bg-red-500" },
+  // Fila de baixa. EXIT_PENDING usa a mesma cor de "exige acao sua" das
+  // transferencias — e o mesmo tipo de evento, e nao ganha destaque proprio so
+  // por ser de um modulo novo. EXIT_DECIDED e desfecho, nao pedido: verde.
+  EXIT_PENDING: { icon: Hourglass, iconClass: "bg-amber-50 text-amber-800 border-amber-200", dotClass: "bg-amber-500" },
+  EXIT_DECIDED: { icon: ShieldCheck, iconClass: "bg-emerald-50 text-emerald-800 border-emerald-200", dotClass: "bg-emerald-500" }
 };
 
 interface NotificationBellProps {

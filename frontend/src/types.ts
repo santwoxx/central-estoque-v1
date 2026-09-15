@@ -479,7 +479,12 @@ export type NotificationType =
   | "TRANSFER_COMPLETED"
   | "TRANSFER_CANCELLED"
   | "STOCK_LOW"
-  | "STOCK_OUT";
+  | "STOCK_OUT"
+  // Fila de baixa. Sem estes dois, a fila so aparecia para quem ja estava com o
+  // sistema aberto e olhava para o menu — e cada pedido parado e um pneu preso
+  // que a loja nao pode vender.
+  | "EXIT_PENDING"      // chegou um pedido que VOCE pode decidir
+  | "EXIT_DECIDED";     // o SEU pedido foi aprovado ou recusado
 
 export interface AppNotification {
   id: string; // stable, e.g. `transfer:{id}:{status}` — dedupes re-fires of the same event
@@ -489,7 +494,7 @@ export interface AppNotification {
   createdAt: number; // epoch millis
   read: boolean;
   refId?: string; // transferId or stockItemId, for click-through context
-  targetTab?: "transfers" | "reservations" | "unified" | "inventory";
+  targetTab?: "transfers" | "reservations" | "unified" | "inventory" | "exit-approvals";
 }
 
 // ─────────────────────────────────────────────────────────────────

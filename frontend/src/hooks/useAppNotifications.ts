@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppNotification, NotificationType, StockItem, TransferOrder, TransferStatus, UserRole, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "../types";
+import { AppNotification, NotificationType, StockExitRequest, StockExitStatus, StockItem, TransferOrder, TransferStatus, UserRole, canReviewStockExit, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "../types";
 import { toMillis } from "../utils";
 
 const MAX_NOTIFICATIONS = 40;
@@ -292,7 +292,12 @@ export function useAppNotifications(
   transfers: TransferOrder[],
   transfersReady: boolean,
   stock: StockItem[],
-  stockReady: boolean
+  stockReady: boolean,
+  // Fila de baixa. Chega com `ready` proprio pelo mesmo motivo das
+  // transferencias: sem ele, o primeiro snapshot depois do login viraria uma
+  // enxurrada de "novo pedido" para coisa que ja estava la.
+  stockExits: StockExitRequest[] = [],
+  stockExitsReady: boolean = false
 ) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
@@ -300,6 +305,8 @@ export function useAppNotifications(
   const transfersSeededRef = useRef(false);
   const prevStockRef = useRef<Map<string, number> | null>(null);
   const stockSeededRef = useRef(false);
+  const prevExitsRef = useRef<Map<string, StockExitStatus> | null>(null);
+  const exitsSeededRef = useRef(false);
   const userIdRef = useRef<string | null>(null);
 
   // (Re)load per-user feed and reset diff state whenever the logged-in user changes.
@@ -308,6 +315,8 @@ export function useAppNotifications(
     transfersSeededRef.current = false;
     prevStockRef.current = null;
     stockSeededRef.current = false;
+    prevExitsRef.current = null;
+    exitsSeededRef.current = false;
 
     if (!user) {
       userIdRef.current = null;
@@ -371,6 +380,102 @@ export function useAppNotifications(
     prevTransfersRef.current = currentMap;
     if (generated.length) pushNotifications(generated);
   }, [transfers, transfersReady, user, pushNotifications]);
+
+  // ── Fila de baixa ─────────────────────────────────────────────────
+  // Duas situações, e só estas duas — o sino tem que avisar do que exige ação,
+  // não narrar o módulo:
+  //
+  //   • chegou um pedido que ESTE usuário pode decidir;
+  //   • o pedido que ELE abriu foi aprovado ou recusado.
+  //
+  // Sem isto, a fila só existia para quem já estava com o sistema aberto e
+  // olhava para o número no menu. Fila que ninguém é avisado que existe vira
+  // fila parada, e cada pedido parado é um pneu preso que a loja não vende.
+  useEffect(() => {
+    if (!user || !stockExitsReady) return;
+
+    const currentMap = new Map(stockExits.map(e => [e.id, e.status]));
+
+    // Primeiro snapshot depois do login: só registra o estado, não dispara nada.
+    // Sem esta guarda, entrar no sistema com dez pedidos pendentes geraria dez
+    // avisos de "novo pedido" para coisa que já estava lá ontem.
+    if (!exitsSeededRef.current) {
+      exitsSeededRef.current = true;
+      prevExitsRef.current = currentMap;
+      return;
+    }
+
+    const prevMap = prevExitsRef.current || new Map();
+    const generated: AppNotification[] = [];
+
+    for (const exit of stockExits) {
+      const prevStatus = prevMap.get(exit.id);
+      if (prevStatus === exit.status) continue;
+
+      const units = Number(exit.totalUnits) || 0;
+      const unitsLabel = `${units} ${units === 1 ? "unidade" : "unidades"}`;
+      const where = exit.companyName ? ` em ${exit.companyName}` : "";
+
+      // (1) Pedido novo esperando a decisão DESTE usuário.
+      if (exit.status === "PENDENTE" && prevStatus === undefined) {
+        // Ninguém precisa de aviso do próprio pedido. Vale mesmo quando ele
+        // pode aprovar sozinho (o dono da loja): ele acabou de clicar.
+        if (exit.requestedByUid === user.uid) continue;
+        if (!canReviewStockExit(exit, user)) continue;
+
+        generated.push({
+          id: `exit:${exit.id}:PENDENTE`,
+          type: "EXIT_PENDING",
+          title: "Baixa esperando sua aprovação",
+          message:
+            `${exit.requestedByName} pediu baixa de ${unitsLabel}${where}` +
+            `${exit.reason ? ` — ${exit.reason}` : ""}. Os pneus estão presos até você decidir.`,
+          createdAt: toMillis(exit.requestedAt) || Date.now(),
+          read: false,
+          refId: exit.id,
+          targetTab: "exit-approvals"
+        });
+        continue;
+      }
+
+      // (2) Desfecho do pedido que ESTE usuário abriu.
+      if (exit.requestedByUid === user.uid && prevStatus === "PENDENTE") {
+        // Quem decidiu foi ele mesmo (dono confirmando a própria baixa): sem sino.
+        if (exit.reviewedByUid === user.uid) continue;
+
+        if (exit.status === "APROVADO") {
+          generated.push({
+            id: `exit:${exit.id}:APROVADO`,
+            type: "EXIT_DECIDED",
+            title: "Sua baixa foi aprovada",
+            message:
+              `${exit.reviewedByName || "O responsável"} liberou a baixa de ${unitsLabel}${where}. ` +
+              `Os pneus saíram do estoque.`,
+            createdAt: toMillis(exit.reviewedAt) || Date.now(),
+            read: false,
+            refId: exit.id,
+            targetTab: "exit-approvals"
+          });
+        } else if (exit.status === "RECUSADO") {
+          generated.push({
+            id: `exit:${exit.id}:RECUSADO`,
+            type: "EXIT_DECIDED",
+            title: "Sua baixa foi recusada",
+            message:
+              `${exit.reviewedByName || "O responsável"} recusou a baixa de ${unitsLabel}${where}` +
+              `${exit.reviewNote ? `: “${exit.reviewNote}”` : "."} Os pneus voltaram ao saldo livre.`,
+            createdAt: toMillis(exit.reviewedAt) || Date.now(),
+            read: false,
+            refId: exit.id,
+            targetTab: "exit-approvals"
+          });
+        }
+      }
+    }
+
+    prevExitsRef.current = currentMap;
+    if (generated.length) pushNotifications(generated);
+  }, [stockExits, stockExitsReady, user, pushNotifications]);
 
   // Diff stock quantities crossing into "low" / "out" bands.
   useEffect(() => {
