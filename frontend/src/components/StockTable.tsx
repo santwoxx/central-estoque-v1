@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { StockItem, Company, UserRole, StockFlowPayload, StockFlowResult, StockExitOrigin } from "../types";
+import { StockItem, Company, UserRole, StockFlowPayload, StockFlowResult, StockExitOrigin, RestoreResult } from "../types";
 import { availableQuantity, formatBRL, matchesTireSize, parsePriceInput, reservedQuantityOf } from "../utils";
 import sajEstoqueData from "../saj_estoque.json";
 import autocarEstoqueData from "../autocar_estoque.json";
@@ -48,7 +48,10 @@ interface StockTableProps {
   // Omitting companyId wipes every company's stock — only used for the explicit
   // "todas as empresas" choice in the clear-stock modal below, never as a default.
   onClearStock?: (companyId?: string) => Promise<void>;
-  onRestoreBackup?: (backupItems: any[]) => Promise<void>;
+  // `dryRun` devolve o relatorio SEM gravar: e a previa que a pessoa confere
+  // antes de confirmar. Restauracao e operacao de emergencia — quem executa
+  // precisa ver o que vai acontecer antes que aconteca.
+  onRestoreBackup?: (backupItems: any[], dryRun?: boolean) => Promise<RestoreResult>;
   // Grava uma operacao inteira (varios pneus) numa UNICA transacao. E por aqui
   // que a venda do balcao passa a sair: ver handleSaveCheckout abaixo.
   onRegisterFlow?: (payload: StockFlowPayload) => Promise<StockFlowResult>;
@@ -178,6 +181,10 @@ export default function StockTable({
   const [checkoutClientDoc, setCheckoutClientDoc] = useState("");
   const [checkoutClientVehicle, setCheckoutClientVehicle] = useState("");
   const [lastSaleReceipt, setLastSaleReceipt] = useState<any | null>(null);
+
+  // Previa da restauracao: o que SERIA feito, antes de qualquer escrita.
+  const [restorePreview, setRestorePreview] = useState<{ result: RestoreResult; items: any[] } | null>(null);
+  const [restoreDone, setRestoreDone] = useState<RestoreResult | null>(null);
 
   const [isInjecting, setIsInjecting] = useState(false);
 
@@ -840,6 +847,37 @@ export default function StockTable({
     setCheckoutQuantityStr("");
     setCheckoutSearch("");
     setErrorMsg("");
+  };
+
+  // Um caminho só para os dois botões de restauração (cópia do navegador e
+  // arquivo .json): calcula a prévia e abre a tela de conferência. Nada é
+  // gravado aqui — quem grava é o botão de confirmar da prévia.
+  const openRestorePreview = async (items: any[]) => {
+    if (!onRestoreBackup) return;
+    setSubmitting(true);
+    try {
+      const result = await onRestoreBackup(items, true);
+      setRestorePreview({ result, items });
+    } catch (err: any) {
+      alert(err?.message || "Não foi possível ler este backup.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const confirmRestore = async () => {
+    if (!onRestoreBackup || !restorePreview) return;
+    setSubmitting(true);
+    try {
+      const done = await onRestoreBackup(restorePreview.items, false);
+      setRestorePreview(null);
+      setRestoreDone(done);
+      setShowBackupRestoreModal(false);
+    } catch (err: any) {
+      alert(err?.message || "Erro ao restaurar o backup.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleRemoveCheckoutItem = (id: string) => {
@@ -2492,6 +2530,129 @@ export default function StockTable({
       )}
 
       {/* MODAL: COMPROVANTE / RECIBO DE VENDA */}
+      {/* ── Prévia da restauração ────────────────────────────────────
+          A tela que faltava. Antes, restaurar era um window.confirm com a
+          contagem de itens e um "isso adicionará os registros ao banco" — que
+          era literalmente verdade: adicionava, duplicando o estoque inteiro.
+          Agora a pessoa vê, item a item, o que vai ser criado, o que vai ser
+          atualizado (de quanto para quanto) e o que fica de fora, e só então
+          confirma. */}
+      {restorePreview && (
+        <div className="fixed inset-0 z-60 bg-slate-900/70 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide">
+                Conferir antes de restaurar
+              </h3>
+              <p className="text-[11px] font-bold text-slate-500 mt-1">
+                Nada foi gravado ainda. Confira o que vai acontecer com cada pneu.
+              </p>
+            </div>
+
+            <div className="px-5 py-3 grid grid-cols-3 gap-3 border-b border-slate-100 shrink-0">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <span className="block text-[9px] font-black uppercase tracking-widest text-emerald-700">Criar</span>
+                <span className="block text-lg font-black font-mono text-emerald-800">{restorePreview.result.created}</span>
+              </div>
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
+                <span className="block text-[9px] font-black uppercase tracking-widest text-blue-700">Atualizar</span>
+                <span className="block text-lg font-black font-mono text-blue-800">{restorePreview.result.updated}</span>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <span className="block text-[9px] font-black uppercase tracking-widest text-slate-500">Ignorar</span>
+                <span className="block text-lg font-black font-mono text-slate-700">{restorePreview.result.skipped}</span>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto px-5 py-3">
+              <table className="w-full text-[11px] min-w-[520px]">
+                <thead className="sticky top-0 bg-white">
+                  <tr className="text-[9px] uppercase tracking-widest text-slate-400 font-black border-b border-slate-200">
+                    <th className="text-left py-2">Código</th>
+                    <th className="text-left py-2">Empresa</th>
+                    <th className="text-right py-2">Hoje</th>
+                    <th className="text-right py-2">Backup</th>
+                    <th className="text-left py-2 pl-3">O que acontece</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {restorePreview.result.items.map((it, idx) => (
+                    <tr key={`${it.sku}-${idx}`} className="border-b border-slate-50">
+                      <td className="py-1.5 font-mono font-bold text-slate-900">{it.sku}</td>
+                      <td className="py-1.5 font-bold text-slate-600">{it.companyName || "—"}</td>
+                      <td className="py-1.5 text-right font-mono font-bold text-slate-700">
+                        {it.currentQuantity === null ? "—" : it.currentQuantity}
+                      </td>
+                      <td className="py-1.5 text-right font-mono font-bold text-slate-700">{it.backupQuantity}</td>
+                      <td className="py-1.5 pl-3">
+                        <span
+                          className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                            it.action === "CRIAR"
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : it.action === "ATUALIZAR"
+                              ? "bg-blue-50 text-blue-700 border border-blue-200"
+                              : "bg-slate-100 text-slate-500 border border-slate-200"
+                          }`}
+                        >
+                          {it.action}
+                        </span>
+                        {it.note && <span className="ml-2 text-[10px] font-bold text-amber-700">{it.note}</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="px-5 py-4 border-t border-slate-100 flex flex-wrap gap-2 justify-end items-center">
+              <span className="text-[10px] font-bold text-slate-500 mr-auto max-w-sm">
+                Pneus reservados não são soltos: se o backup pedir menos do que está prometido a um
+                cliente ou pedido, o saldo para na reserva.
+              </span>
+              <button
+                type="button"
+                onClick={() => setRestorePreview(null)}
+                className="px-4 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 text-[11px] font-black uppercase tracking-wider cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={submitting || (restorePreview.result.created + restorePreview.result.updated) === 0}
+                onClick={confirmRestore}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white text-[11px] font-black uppercase tracking-wider cursor-pointer transition-colors"
+              >
+                {submitting ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                Restaurar {restorePreview.result.created + restorePreview.result.updated} itens
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resultado, depois de gravado. */}
+      {restoreDone && (
+        <div className="fixed inset-0 z-60 bg-slate-900/70 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide">Restauração concluída</h3>
+            <p className="text-[12px] font-bold text-slate-600">
+              {restoreDone.created} cadastro(s) recriado(s), {restoreDone.updated} atualizado(s)
+              {restoreDone.skipped > 0 ? `, ${restoreDone.skipped} ignorado(s)` : ""}. Cada alteração
+              ficou registrada na Auditoria com o saldo de antes e o de depois.
+            </p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setRestoreDone(null)}
+                className="px-4 py-2 rounded-lg bg-slate-900 text-white text-[11px] font-black uppercase tracking-wider cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {lastSaleReceipt && (
         <div className="fixed inset-0 z-55 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
           <div className="bg-white rounded-3xl w-full max-w-sm p-6 border border-slate-200 shadow-2xl relative flex flex-col space-y-4 font-sans text-slate-800 max-h-[90vh] overflow-y-auto">
@@ -2790,22 +2951,10 @@ export default function StockTable({
                         <button
                           type="button"
                           disabled={submitting}
-                          onClick={async () => {
-                            if (onRestoreBackup && window.confirm(`Deseja mesmo restaurar ${parsed.items?.length || 0} itens deste backup automático? Isso adicionará os registros ao banco.`)) {
-                              setSubmitting(true);
-                              try {
-                                await onRestoreBackup(parsed.items);
-                                setShowBackupRestoreModal(false);
-                              } catch (err: any) {
-                                alert(err.message);
-                              } finally {
-                                setSubmitting(false);
-                              }
-                            }
-                          }}
+                          onClick={() => openRestorePreview(parsed.items || [])}
                           className="w-full py-1.5 bg-gold-600 hover:bg-gold-700 text-white font-extrabold rounded-lg text-[10px] uppercase shadow-sm transition-all cursor-pointer"
                         >
-                          Restaurar Cópia do Navegador
+                          Conferir e Restaurar Cópia do Navegador
                         </button>
                       </div>
                     );
@@ -2835,17 +2984,7 @@ export default function StockTable({
                           throw new Error("Formato inválido. O arquivo JSON deve ser um array ou conter uma propriedade 'items'.");
                         }
                         
-                        if (onRestoreBackup && window.confirm(`Deseja importar ${items.length} itens do arquivo JSON de backup?`)) {
-                          setSubmitting(true);
-                          try {
-                            await onRestoreBackup(items);
-                            setShowBackupRestoreModal(false);
-                          } catch (err: any) {
-                            alert(err.message);
-                          } finally {
-                            setSubmitting(false);
-                          }
-                        }
+                        await openRestorePreview(items);
                       } catch (err: any) {
                         alert("Erro ao ler JSON: " + (err.message || err));
                       }

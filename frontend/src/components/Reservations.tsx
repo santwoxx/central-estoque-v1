@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   Company,
+  StockExitRequest,
   TransferOrder,
   UserRole,
   isCrossStoreReservation,
@@ -56,6 +57,12 @@ import {
 
 interface ReservationsProps {
   reservations: TransferOrder[];
+  // Pedidos de baixa AINDA PENDENTES. Eles não são reservas de cliente, mas
+  // prendem pneu do mesmo jeito (`reservedQuantity`) — e esta é a tela em que
+  // as pessoas procuram "por que este pneu está preso". Sem eles aqui, a
+  // resposta simplesmente não existia em lugar nenhum: o pneu aparecia
+  // reservado no estoque e a aba Reservas, consultada, mostrava vazio.
+  pendingExits?: StockExitRequest[];
   companies: Company[];
   user: { uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string };
   // Confirma uma reserva da própria loja: dá a baixa e registra a venda.
@@ -84,6 +91,7 @@ const VIEW_LABELS: Record<ViewFilter, string> = {
 
 export default function Reservations({
   reservations,
+  pendingExits = [],
   companies,
   user,
   onConfirmSale,
@@ -389,8 +397,51 @@ export default function Reservations({
     );
   };
 
+  // Quantas unidades estão presas por pedido de baixa em análise. Não são
+  // reservas de cliente — mas prendem pneu igual, e esta é a tela onde se
+  // pergunta por quê.
+  const exitUnits = pendingExits.reduce((acc, e) => acc + (Number(e.totalUnits) || 0), 0);
+
   return (
     <div className="space-y-5">
+      {/* ── Pneus presos por pedido de baixa ──────────────────────
+          Estes pedidos NÃO se resolvem aqui: quem decide é a aba Aprovar
+          Baixas. O que esta faixa faz é responder à pergunta que traz a pessoa
+          até esta tela — "por que este pneu está reservado?" — em vez de
+          deixá-la olhando uma lista vazia com o pneu travado no estoque. */}
+      {pendingExits.length > 0 && (
+        <div className="bg-white border border-amber-300 rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Package size={15} className="text-amber-700 shrink-0" />
+            <span className="text-[11px] font-black uppercase tracking-wider text-amber-900">
+              Também preso: {exitUnits} un em {pendingExits.length}{" "}
+              {pendingExits.length === 1 ? "pedido de baixa" : "pedidos de baixa"}
+            </span>
+            <span className="flex-1" />
+            <span className="text-[10px] font-bold text-amber-800">
+              Estes se resolvem na aba <b>Aprovar Baixas</b>
+            </span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {pendingExits.map(exit => (
+              <div key={exit.id} className="px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-bold">
+                <span className="font-mono font-black text-slate-900">{exit.totalUnits} un</span>
+                <span className="text-slate-600">
+                  {(exit.items || []).map(i => `${i.sku} (${i.size})`).join(" · ")}
+                </span>
+                <span className="text-slate-400">·</span>
+                <span className="text-slate-500">{exit.companyName || "—"}</span>
+                <span className="flex-1" />
+                <span className="text-slate-500">
+                  Pedido por <b className="text-slate-800">{exit.requestedByName}</b>
+                  {exit.reason ? ` — ${exit.reason}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Cabeçalho ───────────────────────────────────────────── */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>

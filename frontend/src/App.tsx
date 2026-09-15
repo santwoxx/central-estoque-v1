@@ -68,7 +68,9 @@ import {
   StockExitPayload,
   StockExitResult,
   StockExitItem,
-  StockExitOrigin
+  StockExitOrigin,
+  RestoreResult,
+  RestorePreviewItem
 } from "./types";
 import { CLIENTE_COMPANY_ID, canReviewStockExit, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "./types";
 import { availableQuantity, formatDate, mapMovementDoc, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, suggestionTime, toMillis } from "./utils";
@@ -549,6 +551,18 @@ export default function App() {
   // without this guard, several stock updates arriving in quick succession while
   // the first backup POST is still in flight would each pass the "not done yet"
   // localStorage check and fire their own duplicate request to the backend.
+  // ── O que entra no backup ──────────────────────────────────────────
+  // `stock` traz a colecao INTEIRA: desde a mudanca de escopo, todo usuario le
+  // o estoque de todas as filiais para poder pedir transferencia. O backup ia
+  // junto assim — o arquivo chamado `backup-autocar-<data>.json` continha o
+  // estoque de TODAS as lojas, e restaura-lo recriava o estoque de todas elas.
+  // O dono baixa a propria loja; o administrador, tudo.
+  const backupScopedStock = useMemo(() => {
+    if (!user) return [];
+    if (user.role === "admin" || !user.companyId) return stock;
+    return stock.filter(item => item.companyId === user.companyId);
+  }, [stock, user]);
+
   const dailyBackupStateRef = useRef<"idle" | "in-flight" | "done">("idle");
   useEffect(() => {
     if (!user) {
@@ -576,7 +590,7 @@ export default function App() {
           date: new Date().toISOString(),
           userEmail: user.email,
           companyName: user.companyName || "Geral",
-          items: stock
+          items: backupScopedStock
         };
         localStorage.setItem(`stock_backup_data_${user.uid}`, JSON.stringify(backupPayload));
 
@@ -586,7 +600,7 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            items: stock,
+            items: backupScopedStock,
             userEmail: user.email,
             companyName: user.companyName || "Geral"
           })
@@ -618,7 +632,12 @@ export default function App() {
 
     const checkAndDownloadBackup = () => {
       try {
-        const currentStock = stockRef.current;
+        // Mesmo escopo do backup diario: o dono baixa a propria loja, nao o
+        // estoque de todas as filiais com o nome da dele no arquivo.
+        const allStock = stockRef.current;
+        const currentStock = (user.role === "admin" || !user.companyId)
+          ? allStock
+          : allStock.filter(item => item.companyId === user.companyId);
         if (currentStock.length === 0) return;
 
         const now = new Date();
@@ -1364,9 +1383,9 @@ export default function App() {
         // de outra filial pode nem ter chegado nesta sessao ainda.
         if (reserved > 0 && nextQuantity < reserved) {
           throw new Error(
-            `Este pneu tem ${reserved} un reservadas para um cliente ou para uma transferência. ` +
-            `O saldo não pode ficar abaixo disso — resolva a reserva na aba Reservas ` +
-            `(confirmar, recusar ou cancelar) antes de dar baixa. ` +
+            `Este pneu tem ${reserved} un presas por uma reserva de cliente, uma transferência ` +
+            `ou um pedido de baixa em análise. O saldo não pode ficar abaixo disso — resolva na aba ` +
+            `Reservas (confirmar, recusar ou cancelar) ou em Aprovar Baixas, conforme o caso. ` +
             `Livre para saída: ${Math.max(0, currentQuantity - reserved)} un.`
           );
         }
@@ -1551,8 +1570,9 @@ export default function App() {
     }
     if (itemsToClear.length === 0) {
       throw new Error(
-        `Todos os ${reservedItems.length} produtos deste escopo estão reservados para clientes ou ` +
-        `transferências. Resolva as reservas na aba Reservas antes de apagar o estoque.`
+        `Todos os ${reservedItems.length} produtos deste escopo estão presos por reservas de cliente, ` +
+        `transferências ou pedidos de baixa em análise. Resolva-os nas abas Reservas e Aprovar Baixas ` +
+        `antes de apagar o estoque.`
       );
     }
 
@@ -1593,77 +1613,240 @@ export default function App() {
         `[ESTOQUE] ${reservedItems.length} produto(s) preservado(s) na limpeza por terem reserva de transferência ativa.`
       );
       alert(
-        `Estoque apagado. ${reservedItems.length} produto(s) foram preservados porque estão reservados ` +
-        `para clientes ou transferências — veja a aba Reservas.`
+        `Estoque apagado. ${reservedItems.length} produto(s) foram preservados porque estão presos por ` +
+        `reservas de cliente, transferências ou pedidos de baixa — veja as abas Reservas e Aprovar Baixas.`
       );
     }
   };
 
-  // Restore backup data back into Firestore
-  const handleRestoreBackup = async (backupItems: any[]) => {
-    if (!user) return;
-    if (user.role !== "admin" && user.role !== "alimentador") {
-      throw new Error("Apenas administradores ou donos de empresa podem restaurar backups.");
+  // ── RESTAURAÇÃO DE BACKUP ──────────────────────────────────────────
+  //
+  // ANTES esta função criava um documento NOVO para cada item do arquivo:
+  // `doc(collection(db, "stock"))` gera um id aleatório, sempre. Não havia
+  // busca por SKU, não havia substituição, não havia conferência. Restaurar
+  // sobre um estoque que não estava vazio SOMAVA tudo de novo — o dono que
+  // restaurasse "por garantia" depois de um susto ficava com o estoque dobrado,
+  // sem como desfazer, porque os duplicados tinham ids diferentes e pareciam
+  // produtos legítimos.
+  //
+  // AGORA cada item é casado por `companyId + sku` contra o estoque lido do
+  // SERVIDOR (não o array em memória: restauração é operação de recuperação, e
+  // o preço de uma leitura a mais não se compara ao de restaurar em cima de
+  // dado velho). Existe → atualiza. Não existe → cria. Ambíguo → deixa de fora
+  // e avisa.
+  //
+  // `dryRun` devolve o mesmo relatório sem gravar nada: é o que a tela mostra
+  // para a pessoa conferir ANTES de confirmar.
+  //
+  // ── Por que é só do administrador ─────────────────────────────────
+  // Uma restauração pode DIMINUIR saldo, e a regra do Firestore agora recusa
+  // qualquer queda de `quantity` que não venha acompanhada de queda de
+  // `reservedQuantity` — é a trava que obriga toda baixa a passar pela fila de
+  // aprovação. Para o dono da loja, metade das restaurações falharia no meio,
+  // deixando um estado pior que o inicial. O administrador passa pela trava, e
+  // a operação é da mesma família da limpeza de estoque em lote, que já é
+  // exclusiva dele.
+  const handleRestoreBackup = async (
+    backupItems: any[],
+    dryRun: boolean = false
+  ): Promise<RestoreResult> => {
+    if (!user) throw new Error("Sessão expirada. Faça login novamente.");
+    if (user.role !== "admin") {
+      throw new Error(
+        "Restaurar backup é uma operação do administrador. Ela pode reduzir saldo, e " +
+        "reduzir saldo fora da fila de aprovação é exatamente o que o sistema passou a impedir."
+      );
     }
 
     if (!Array.isArray(backupItems) || backupItems.length === 0) {
       throw new Error("Arquivo de backup vazio ou inválido.");
     }
 
-    // Insert in chunks of 200 items (each item writes 2 docs: stock and movement)
-    const chunks: any[][] = [];
-    for (let i = 0; i < backupItems.length; i += 200) {
-      chunks.push(backupItems.slice(i, i + 200));
+    // Estoque atual, lido do servidor. A chave é companyId + sku: é o par que
+    // identifica "o mesmo pneu" entre o arquivo e o banco.
+    const liveSnap = await getDocs(collection(db, "stock"));
+    const byKey = new Map<string, { ref: any; data: any; count: number }>();
+    liveSnap.forEach(d => {
+      const data: any = d.data();
+      const key = `${data.companyId || ""}|${String(data.sku || "").trim().toUpperCase()}`;
+      const found = byKey.get(key);
+      if (found) {
+        // Dois documentos com o MESMO sku na MESMA empresa. O sistema permite
+        // (sku não é chave única), mas aqui não dá para adivinhar qual é o certo.
+        found.count += 1;
+      } else {
+        byKey.set(key, { ref: d.ref, data, count: 1 });
+      }
+    });
+
+    const report: RestorePreviewItem[] = [];
+    const writes: { kind: "CRIAR" | "ATUALIZAR"; ref: any; item: any; live?: any }[] = [];
+    const seenInFile = new Set<string>();
+
+    for (const item of backupItems) {
+      const sku = String(item?.sku || "").trim();
+      const companyId = item?.companyId || user.companyId || "";
+      const companyName = item?.companyName || user.companyName || "";
+      const backupQuantity = Number(item?.quantity) || 0;
+      const key = `${companyId}|${sku.toUpperCase()}`;
+
+      if (!sku) {
+        report.push({
+          sku: "(sem código)", companyName, currentQuantity: null, backupQuantity,
+          action: "IGNORAR", note: "Item do arquivo sem código — não dá para casar com o estoque."
+        });
+        continue;
+      }
+
+      // O mesmo pneu duas vezes DENTRO do arquivo: aplicar os dois faria o
+      // segundo sobrescrever o primeiro, com o total errado no meio.
+      if (seenInFile.has(key)) {
+        report.push({
+          sku, companyName, currentQuantity: null, backupQuantity,
+          action: "IGNORAR", note: "Repetido no próprio arquivo de backup — só a primeira linha foi usada."
+        });
+        continue;
+      }
+      seenInFile.add(key);
+
+      const live = byKey.get(key);
+
+      if (live && live.count > 1) {
+        report.push({
+          sku, companyName, currentQuantity: Number(live.data.quantity) || 0, backupQuantity,
+          action: "IGNORAR",
+          note: `Existem ${live.count} cadastros com este código nesta empresa — resolva a duplicidade antes de restaurar.`
+        });
+        continue;
+      }
+
+      if (live) {
+        const currentQuantity = Number(live.data.quantity) || 0;
+        const reserved = reservedQuantityOf(live.data);
+
+        // Restaurar nunca solta um pneu já prometido. Se o backup traz um saldo
+        // menor do que o que está reservado hoje, o piso é a reserva.
+        const target = Math.max(backupQuantity, reserved);
+        const note = target !== backupQuantity
+          ? `Backup pedia ${backupQuantity} un, mas ${reserved} un estão reservadas — gravado ${target} un.`
+          : undefined;
+
+        report.push({ sku, companyName, currentQuantity, backupQuantity, action: "ATUALIZAR", note });
+        writes.push({ kind: "ATUALIZAR", ref: live.ref, item, live: { ...live.data, __target: target } });
+      } else {
+        report.push({ sku, companyName, currentQuantity: null, backupQuantity, action: "CRIAR" });
+        writes.push({ kind: "CRIAR", ref: doc(collection(db, "stock")), item });
+      }
     }
 
-    for (const chunk of chunks) {
+    const result: RestoreResult = {
+      created: report.filter(r => r.action === "CRIAR").length,
+      updated: report.filter(r => r.action === "ATUALIZAR").length,
+      skipped: report.filter(r => r.action === "IGNORAR").length,
+      items: report
+    };
+
+    // Conferência antes de gravar: devolve o mesmo relatório sem tocar no banco.
+    if (dryRun) return result;
+
+    // Cada item escreve 2 documentos (estoque + movimento); o limite do lote é 500.
+    for (let i = 0; i < writes.length; i += 200) {
+      const chunk = writes.slice(i, i + 200);
       const batch = writeBatch(db);
-      chunk.forEach(item => {
-        const stockRef = doc(collection(db, "stock"));
-        const movementRef = doc(collection(db, "movements"));
-        
-        const companyId = item.companyId || user.companyId || "";
-        const companyName = item.companyName || user.companyName || "";
 
-        batch.set(stockRef, {
-          sku: item.sku || `RESTORE-${Math.floor(1000 + Math.random() * 9000)}`,
-          brand: item.brand || "Desconhecida",
-          model: item.model || "Produto Restaurado",
-          size: item.size || "—",
-          quantity: Number(item.quantity) || 0,
-          price: Number(item.price) || 0,
-          priceCash: Number(item.priceCash || item.price) || 0,
-          priceInstallment: Number(item.priceInstallment || item.price) || 0,
-          costPrice: Number(item.costPrice) || 0,
-          notes: item.notes || "",
-          description: item.description || "Restaurado via backup",
-          imageUrl: item.imageUrl || "",
-          companyId,
-          companyName,
-          userId: user.uid,
-          userEmail: user.email,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
+      for (const w of chunk) {
+        const item = w.item;
+        const companyId = item?.companyId || user.companyId || "";
+        const companyName = item?.companyName || user.companyName || "";
+        const backupQuantity = Number(item?.quantity) || 0;
 
-        batch.set(movementRef, {
-          sku: item.sku || "RESTORE",
-          brand: item.brand || "Desconhecida",
-          model: item.model || "Restaurado",
-          size: item.size || "—",
-          type: "ENTRADA",
-          quantity: Number(item.quantity) || 0,
-          balanceAfter: Number(item.quantity) || 0,
-          companyId,
-          companyName,
-          userId: user.uid,
-          userEmail: user.email,
-          timestamp: serverTimestamp(),
-          reason: `Restaurado via backup de segurança por ${user.displayName}`
-        });
-      });
+        if (w.kind === "ATUALIZAR") {
+          const target = Number(w.live.__target) || 0;
+          const before = Number(w.live.quantity) || 0;
+
+          // `reservedQuantity` NÃO entra na escrita: ele é o estado de hoje, não
+          // do dia do backup. Sobrescrevê-lo soltaria pneus prometidos a
+          // clientes e a pedidos em aberto.
+          batch.update(w.ref, {
+            sku: item.sku,
+            brand: item.brand || w.live.brand || "",
+            model: item.model || w.live.model || "",
+            size: item.size || w.live.size || "",
+            quantity: target,
+            price: Number(item.price) || 0,
+            priceCash: Number(item.priceCash || item.price) || 0,
+            priceInstallment: Number(item.priceInstallment || item.price) || 0,
+            costPrice: Number(item.costPrice) || 0,
+            notes: item.notes || "",
+            description: item.description || w.live.description || "",
+            imageUrl: item.imageUrl || w.live.imageUrl || "",
+            updatedAt: serverTimestamp()
+          });
+
+          const diff = target - before;
+          const movementRef = doc(collection(db, "movements"));
+          batch.set(movementRef, {
+            sku: item.sku,
+            brand: item.brand || "",
+            model: item.model || "",
+            size: item.size || "",
+            type: diff > 0 ? "ENTRADA" : diff < 0 ? "SAIDA" : "AJUSTE",
+            quantity: diff,
+            balanceAfter: target,
+            companyId,
+            companyName,
+            userId: user.uid,
+            userEmail: user.email,
+            timestamp: serverTimestamp(),
+            reason: `Restauração de backup por ${user.displayName} — saldo ${before} → ${target}`,
+            stockItemId: w.ref.id
+          });
+        } else {
+          batch.set(w.ref, {
+            sku: item.sku,
+            brand: item.brand || "Desconhecida",
+            model: item.model || "Produto Restaurado",
+            size: item.size || "—",
+            quantity: backupQuantity,
+            price: Number(item.price) || 0,
+            priceCash: Number(item.priceCash || item.price) || 0,
+            priceInstallment: Number(item.priceInstallment || item.price) || 0,
+            costPrice: Number(item.costPrice) || 0,
+            notes: item.notes || "",
+            description: item.description || "Restaurado via backup",
+            imageUrl: item.imageUrl || "",
+            companyId,
+            companyName,
+            userId: user.uid,
+            userEmail: user.email,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+
+          const movementRef = doc(collection(db, "movements"));
+          batch.set(movementRef, {
+            sku: item.sku,
+            brand: item.brand || "Desconhecida",
+            model: item.model || "Restaurado",
+            size: item.size || "—",
+            type: "ENTRADA",
+            quantity: backupQuantity,
+            balanceAfter: backupQuantity,
+            companyId,
+            companyName,
+            userId: user.uid,
+            userEmail: user.email,
+            timestamp: serverTimestamp(),
+            reason: `Restauração de backup por ${user.displayName} — cadastro recriado`,
+            stockItemId: w.ref.id
+          });
+        }
+      }
+
       await batch.commit();
     }
+
+    return result;
   };
 
   // Add a new company/branch (creates a new column in unified stock)
@@ -1804,8 +1987,9 @@ export default function App() {
         if (!isEntry && reserved > 0 && after < reserved) {
           throw new Error(
             `${reserved} un de ${data.sku || "este pneu"} (${data.brand || ""} ${data.size || ""}) estão ` +
-            `RESERVADAS para um cliente ou para uma transferência e não podem ser baixadas — ` +
-            `veja a aba Reservas. Livre para saída: ${Math.max(0, before - reserved)} un, ` +
+            `PRESAS por uma reserva de cliente, uma transferência ou um pedido de baixa em análise, e ` +
+            `não podem ser baixadas — veja as abas Reservas e Aprovar Baixas. ` +
+            `Livre para saída: ${Math.max(0, before - reserved)} un, ` +
             `solicitado: ${input.quantity} un.`
           );
         }
@@ -5002,6 +5186,10 @@ export default function App() {
           {activeTab === "reservations" && (
             <Reservations
               reservations={reservations}
+              // Pedidos de baixa em análise prendem pneu igual a uma reserva.
+              // Sem isto, a pessoa via "reservado" no estoque e encontrava esta
+              // tela vazia — a resposta não existia em lugar nenhum.
+              pendingExits={stockExits.filter(e => e.status === "PENDENTE")}
               companies={companies}
               user={user}
               onConfirmSale={handleCompleteSale}

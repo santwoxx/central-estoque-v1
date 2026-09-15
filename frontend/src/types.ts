@@ -686,3 +686,28 @@ export function canReviewStockExit(
     exit.companyId === user.companyId
   );
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Resultado da restauração de backup
+//
+// A restauração é uma operação de emergência, feita sob estresse — depois de
+// alguém apagar algo por engano. Devolver um "pronto!" mudo é o pior momento
+// possível para esconder o que aconteceu: quem restaura precisa ver, ANTES de
+// confirmar e DEPOIS de aplicar, quantos itens foram criados, quantos
+// atualizados e quantos ficaram de fora.
+// ─────────────────────────────────────────────────────────────────
+export interface RestorePreviewItem {
+  sku: string;
+  companyName: string;
+  currentQuantity: number | null;  // null = não existe no estoque hoje
+  backupQuantity: number;
+  action: "CRIAR" | "ATUALIZAR" | "IGNORAR";
+  note?: string;
+}
+
+export interface RestoreResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  items: RestorePreviewItem[];
+}
