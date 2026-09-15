@@ -713,7 +713,16 @@ export default function App() {
 
     setTransfersReady(false);
     const transfersRef = collection(db, "transfers");
-    const isGlobalAdmin = user.role === "admin" && (!user.companyId || user.email === "brisasofc@gmail.com" || user.email === "isaacbomfim.te@gmail.com" || user.email === "isaacbomfim.00@gmail.com");
+    // Administrador e administrador, tenha loja vinculada ou nao.
+    //
+    // ANTES esta linha exigia `!user.companyId` OU um e-mail de uma lista fixa
+    // de tres. Um administrador com loja vinculada e fora da lista — que e o
+    // caso de qualquer admin novo criado pela tela de Operadores — ficava preso
+    // aos pedidos da propria filial AQUI, enquanto via todas as empresas em
+    // movimentos, sugestoes e na fila de baixa. Nao era uma decisao de escopo,
+    // era uma inconsistencia: promover alguem a admin no cadastro dava poder
+    // total em quase tudo, menos nesta tela, sem nada explicando a diferenca.
+    const isGlobalAdmin = user.role === "admin";
     // "Minhas Reservas" do vendedor lista só o que ele pediu — não o movimento
     // de transferência das filiais, que não é assunto dele.
     const isSellerScoped = user.role === "vendedor";
