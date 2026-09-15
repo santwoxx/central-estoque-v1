@@ -257,9 +257,9 @@ export default function ExitApprovals({
           <p className="text-slate-300">
             Nenhum pneu sai do estoque sozinho. Quem atende abre o pedido e o pneu fica{" "}
             <b className="text-white">preso na hora</b> — ninguém consegue vender o mesmo pneu duas vezes.
-            Depois, <b className="text-white">outra pessoa</b> — o dono da loja ou um administrador — confere e
-            libera. Quem pediu nunca aprova o próprio pedido: é essa segunda pessoa que faz a conferência
-            existir.
+            A baixa é um <b className="text-white">segundo passo</b>, feito pelo dono da loja ou por um
+            administrador, e o histórico grava quem pediu e quem liberou. Vendedor não dá baixa: ele reserva,
+            e quem fecha a venda da reserva é o dono.
           </p>
         </div>
       </div>
@@ -517,22 +517,26 @@ export default function ExitApprovals({
                     </>
                   )}
 
+                  {/* Quem abriu vê de quem é o pedido mesmo quando pode aprovar:
+                      confirmar a própria baixa é legítimo, mas tem que estar à
+                      vista de quem clica — e fica gravado no histórico. */}
                   {isPending && isMine && (
-                    <>
-                      <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
-                        <Hourglass size={12} className="text-gold-600" />
-                        Você abriu este pedido — outra pessoa precisa conferir e liberar.
-                      </span>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => runCancel(exit)}
-                        className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-50 text-slate-600 text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer"
-                      >
-                        {busy ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
-                        Cancelar pedido
-                      </button>
-                    </>
+                    <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
+                      <Hourglass size={12} className="text-gold-600" />
+                      {canDecide ? "Pedido seu — você confirma a baixa da sua loja." : "Você abriu este pedido."}
+                    </span>
+                  )}
+
+                  {isPending && isMine && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => runCancel(exit)}
+                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-50 text-slate-600 text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer"
+                    >
+                      {busy ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
+                      Cancelar pedido
+                    </button>
                   )}
 
                   {isPending && !canDecide && !isMine && (

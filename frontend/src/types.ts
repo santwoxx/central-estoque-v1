@@ -545,12 +545,13 @@ export interface Suggestion {
 // Pedido de baixa (fila de aprovação)
 //
 // NENHUMA saída reduz estoque direto. Quem opera o balcão abre um PEDIDO; o
-// pneu é PRESO no mesmo instante (`reservedQuantity`), e só uma segunda pessoa
-// — o dono da loja ou um administrador — aplica a baixa de verdade.
+// pneu é PRESO no mesmo instante (`reservedQuantity`), e a baixa só acontece
+// num segundo passo, deliberado, feito pelo dono da loja ou por um administrador.
 //
-// A regra que dá sentido a tudo: QUEM PEDE NUNCA APROVA. É isso que transforma
-// "duas pessoas mexem no estoque" em "uma confere a outra". Sem ela, a fila
-// seria só um clique a mais para a mesma pessoa.
+// QUEM ABRE PEDIDO DE BAIXA: o dono da loja e o administrador. O VENDEDOR NÃO —
+// ele não dá baixa em nada, ele RESERVA (ver TransferOrder com destino
+// CLIENTE_COMPANY_ID, mais acima). A baixa da reserva dele é fechada pelo dono,
+// e é lá que mora a conferência de duas pessoas no fluxo do vendedor.
 //
 // Por que prender o pneu já no pedido, antes de qualquer aprovação: entre o
 // pedido e a decisão podem passar horas, e nesse intervalo o mesmo pneu não
@@ -650,18 +651,34 @@ export interface StockExitResult {
   date: string;
 }
 
-// Quem pode decidir sobre um pedido: administrador (qualquer loja) ou o dono da
-// loja a que o pedido pertence — e, nos dois casos, desde que não seja quem
-// pediu. Esta função é a definição única da regra; as regras do Firestore
-// repetem a mesma condição do lado do servidor.
+// Quem pode decidir sobre um pedido: o DONO da loja a que o pedido pertence, ou
+// um administrador (qualquer loja).
+//
+// ── Por que o dono confirma o PRÓPRIO pedido ──────────────────────
+// A primeira versão exigia que quem aprova fosse outra pessoa. Na prática isso
+// travou a operação: o dono é quem mais atende, e na maioria das lojas ele é o
+// único com acesso ao sistema — cada venda dele ficava parada esperando o
+// administrador, inclusive no fim de semana.
+//
+// O dono responde pelo estoque da loja dele. Não existe "segunda pessoa" acima
+// dele dentro da própria loja, então exigir uma era inventar um degrau que a
+// operação não tem. O que a fila continua garantindo para ele é real: a baixa é
+// um passo deliberado e separado, o pneu fica preso entre o pedido e a
+// confirmação (ninguém vende o mesmo pneu duas vezes), e o histórico grava quem
+// pediu e quem aprovou — quando são a mesma pessoa, isso aparece.
+//
+// A conferência por outra pessoa continua existindo onde ela de fato protege:
+// um pedido aberto por alguém que NÃO é o dono daquela loja só sai com o aval
+// do dono ou do administrador.
+//
+// Esta função é a definição única da regra; as regras do Firestore repetem a
+// mesma condição do lado do servidor.
 export function canReviewStockExit(
   exit: { companyId?: string; requestedByUid?: string; status?: StockExitStatus } | null | undefined,
   user: { uid: string; role: UserRole; companyId?: string } | null | undefined
 ): boolean {
   if (!exit || !user) return false;
   if (exit.status !== "PENDENTE") return false;
-  // Quem pede não aprova. É o ponto inteiro da fila.
-  if (exit.requestedByUid === user.uid) return false;
   if (user.role === "admin") return true;
   return (
     (user.role === "alimentador" || user.role === "user") &&

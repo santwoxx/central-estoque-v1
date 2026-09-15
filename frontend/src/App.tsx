@@ -2133,14 +2133,9 @@ export default function App() {
             : `Este pedido já foi ${String(exitData.status).toLowerCase()} e não pode mais ser aprovado.`
         );
       }
-      // QUEM PEDE NÃO APROVA. Conferido aqui e repetido nas regras do Firestore:
-      // sem isso a fila vira um clique a mais para a mesma pessoa.
-      if (exitData.requestedByUid === user.uid) {
-        throw new Error(
-          "Você abriu este pedido, então não pode aprová-lo. Outro administrador " +
-          "ou o dono da loja precisa conferir e liberar a baixa."
-        );
-      }
+      // O DONO da loja confirma as próprias baixas — ver canReviewStockExit em
+      // types.ts para o porquê. Quem não é dono daquela loja (nem admin) não
+      // aprova nada, nem o que ele mesmo abriu.
       if (!canReviewStockExit({ ...exitData, status: "PENDENTE" }, user)) {
         throw new Error("Seu perfil não pode aprovar baixas desta loja.");
       }
@@ -2295,11 +2290,7 @@ export default function App() {
 
       if (nextStatus === "RECUSADO") {
         if (!canReviewStockExit({ ...exitData, status: "PENDENTE" }, user)) {
-          throw new Error(
-            exitData.requestedByUid === user.uid
-              ? "Você abriu este pedido — para desistir dele use Cancelar, não Recusar."
-              : "Seu perfil não pode recusar baixas desta loja."
-          );
+          throw new Error("Seu perfil não pode recusar baixas desta loja.");
         }
       } else if (exitData.requestedByUid !== user.uid && user.role !== "admin") {
         throw new Error("Só quem abriu o pedido (ou um administrador) pode cancelá-lo.");

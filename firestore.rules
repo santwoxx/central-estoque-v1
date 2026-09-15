@@ -627,14 +627,21 @@ service cloud.firestore {
     // Pedidos de baixa (fila de aprovacao)
     //
     // Nenhuma saida reduz estoque direto. Quem opera abre um pedido aqui — que
-    // prende o pneu em `stock/{id}.reservedQuantity` na mesma transacao — e uma
-    // SEGUNDA pessoa aprova. A regra central, repetida do lado do servidor:
+    // prende o pneu em `stock/{id}.reservedQuantity` na mesma transacao — e a
+    // baixa so acontece num segundo passo, deliberado.
     //
-    //   QUEM PEDE NAO APROVA.
+    // QUEM ABRE: o dono da loja e o administrador. O VENDEDOR NAO — ele nao da
+    // baixa, ele reserva (transfers com destino 'CLIENTE'), e a baixa daquela
+    // reserva e fechada pelo dono. E la que mora a conferencia de duas pessoas
+    // no fluxo do vendedor.
     //
-    // Sem ela a fila seria so um clique a mais para a mesma pessoa, e nao havia
-    // conferencia nenhuma. Por isso `reviewedByUid != resource.data.requestedByUid`
-    // aparece em toda transicao de decisao — inclusive para o administrador.
+    // QUEM DECIDE: o dono da loja do pedido, ou um administrador. O dono
+    // confirma o PROPRIO pedido: ele responde pelo estoque da loja dele, e
+    // exigir uma segunda pessoa acima dele era inventar um degrau que a
+    // operacao nao tem — na maioria das lojas ele e o unico com acesso, e cada
+    // venda ficava parada esperando o administrador. O que a fila garante para
+    // ele continua real: a baixa e um passo separado, o pneu fica preso entre o
+    // pedido e a confirmacao, e o historico grava quem pediu e quem aprovou.
     // ─────────────────────────────────────────────────────────────
     match /stock_exits/{exitId} {
 
@@ -653,11 +660,14 @@ service cloud.firestore {
         isOwnerOfExit() ||
         (isAuth() && resource.data.get('requestedByUid', '') == request.auth.uid);
 
-      // Abre o pedido quem atende o balcao: vendedor, dono e admin. Ele nasce
-      // SEMPRE pendente e assinado por quem esta logado — ninguem cria um pedido
-      // ja aprovado (que seria a baixa sem conferencia de volta pela janela),
-      // nem em nome de outra pessoa.
-      allow create: if (isAdmin() || isVendedor() || isAlimentador()) &&
+      // Abre o pedido quem da baixa: o dono da loja e o admin. O vendedor fica
+      // de fora porque ele nao da baixa em nada — ele reserva. Ele nao tem tela
+      // para isso, e sem esta linha a permissao ficaria aberta sem uso.
+      //
+      // O pedido nasce SEMPRE pendente e assinado por quem esta logado: ninguem
+      // cria um pedido ja aprovado (que seria a baixa direta de volta pela
+      // janela), nem em nome de outra pessoa.
+      allow create: if (isAdmin() || isAlimentador()) &&
         request.resource.data.status == 'PENDENTE' &&
         request.resource.data.requestedByUid == request.auth.uid &&
         // Um pedido que ja nasce decidido seria a propria baixa direta.
@@ -675,14 +685,15 @@ service cloud.firestore {
       // imutaveis depois de aberto — senao daria para aprovar um pedido de 2 un
       // e baixar 20).
       allow update: if
-        // (a) APROVAR ou RECUSAR — o dono da loja ou o administrador, e NUNCA
-        // quem abriu o pedido. Esta e a regra inteira do modulo.
+        // (a) APROVAR ou RECUSAR — o dono da loja do pedido, ou o administrador.
+        // Inclusive o proprio pedido, quando quem decide e o dono daquela loja
+        // (ver o cabecalho deste bloco). Quem nao e dono nem admin nao decide
+        // nada, nem sobre o que ele mesmo abriu.
         (
           (isAdmin() || isOwnerOfExit()) &&
           resource.data.status == 'PENDENTE' &&
           (request.resource.data.status == 'APROVADO' || request.resource.data.status == 'RECUSADO') &&
           request.resource.data.reviewedByUid == request.auth.uid &&
-          request.resource.data.reviewedByUid != resource.data.requestedByUid &&
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['status', 'reviewedByUid', 'reviewedByName', 'reviewedAt', 'reviewNote', 'operationId', 'updatedAt'])
         )
