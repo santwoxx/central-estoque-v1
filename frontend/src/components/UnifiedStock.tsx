@@ -577,8 +577,9 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
             const reserved = reservedQuantityOf(existingDoc);
             if (reserved > 0 && numValue < reserved) {
               throw new Error(
-                `${reserved} un deste pneu estão reservadas para clientes ou transferências em ` +
-                `${targetCompany.name}. O saldo não pode ficar abaixo disso — resolva a reserva na aba Reservas.`
+                `${reserved} un deste pneu estão presas em ${targetCompany.name} — por uma reserva de ` +
+                `cliente, uma transferência ou um pedido de baixa ainda não aprovado. O saldo não pode ` +
+                `ficar abaixo disso: resolva em Reservas ou em Aprovar Baixas.`
               );
             }
             const reason = diff > 0 ? "Ajuste manual de entrada" : "Baixa manual";
@@ -901,7 +902,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         // Distingue "não tem pneu" de "tem pneu, mas está prometido para uma
         // transferência": a saída para o operador é completamente diferente.
         return flowReserved > 0 && flowQtyNumber <= flowBalance
-          ? `${flowReserved} un deste pneu estão RESERVADAS para um cliente ou para uma transferência em ${flowCompanyName} — veja a aba Reservas. Livre para saída: ${flowFree} un.`
+          ? `${flowReserved} un deste pneu estão PRESAS em ${flowCompanyName} — por uma reserva de cliente, uma transferência ou um pedido de baixa ainda não aprovado. Veja em Reservas ou em Aprovar Baixas. Livre para saída: ${flowFree} un.`
           : `Saldo insuficiente: disponível ${flowFree} un, solicitado ${flowQtyNumber} un.`;
       }
     }

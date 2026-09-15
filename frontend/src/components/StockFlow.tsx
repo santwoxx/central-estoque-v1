@@ -285,8 +285,9 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
     }
     if (mode === "SAIDA" && free <= 0) {
       setError(
-        `Todas as ${reservedQuantityOf(item)} un deste pneu estão reservadas para clientes ou transferências. ` +
-        `Resolva a reserva na aba Reservas — confirmar, recusar ou cancelar — para liberar a baixa.`
+        `Todas as ${reservedQuantityOf(item)} un deste pneu estão presas — por uma reserva de cliente, ` +
+        `uma transferência ou um pedido de baixa que ainda não foi aprovado. ` +
+        `Veja em Reservas ou em Aprovar Baixas para liberar.`
       );
       return;
     }
