@@ -1,59 +1,107 @@
 # Fechamento do Dia — Central Estoque
 
-Programa separado, de uma tarefa só: **baixar a cópia do dia da sua loja**.
-Não abre o sistema, não edita estoque, não tem abas. Entra com a mesma
-credencial que a pessoa já usa, lê, grava os arquivos numa pasta do computador
-e sai.
+Programa separado, de uma tarefa só: **todo dia às 18h, sem ninguém clicar,
+salva numa pasta do computador a planilha do dia** — vendas, estoque, movimento,
+transferências, baixas pendentes e a conferência de saldo.
+
+Fica escondido na bandeja do Windows (perto do relógio). Não edita estoque e
+não tem abas: entra com a mesma conta que a pessoa usa no sistema, lê, grava e
+volta a esperar o dia seguinte.
 
 ## O que ele salva
 
-Uma pasta por dia, dentro da pasta escolhida
-(padrão: `Documentos\Central Estoque\Fechamentos\2026-09-01\`):
+Um arquivo por dia, organizado por mês
+(padrão: `Documentos\Central Estoque\Fechamentos\2026-09\`):
 
-| Arquivo | O que tem dentro |
+| Arquivo | Para quê |
 |---|---|
-| `estoque-<loja>-<data>.csv` | O estoque inteiro da loja: código, medida, marca, modelo, quantidade física, reservado, disponível e os dois preços |
-| `movimentacoes-<loja>-<data>.csv` | Tudo que se moveu **naquele dia**: vendas, entradas, ajustes e transferências, com cliente, documento, placa e valores |
-| `transferencias-<loja>-<data>.csv` | Os pedidos de transferência que andaram no dia, com origem, destino, itens e situação |
-| `fechamento-<loja>-<data>.json` | A cópia completa, no formato que a tela **Restaurar Backup** do sistema lê. É este arquivo que salva a loja se o estoque for apagado por engano |
+| `Fechamento <loja> <data>.xlsx` | A planilha para ler. Abre direto no Excel. |
+| `backup\fechamento-<loja>-<data>.json` | A cópia que **restaura**: é o formato que a tela *Restaurar Backup* do sistema lê. |
 
-Os CSV abrem direto no Excel em português (separador `;` e acentuação certa).
+Abas da planilha:
 
-## Como usar
+| Aba | O que tem |
+|---|---|
+| **Resumo** | Uma linha por loja: vendas (un e R$), outras saídas, entradas, transferências, estoque, reservado, livre, baixas pendentes e divergências. |
+| **Vendas** | Cada venda do dia: hora, loja, cliente, CPF/CNPJ, placa, documento, pneu, quantidade, valor, quem pediu e quem aprovou. |
+| **Estoque** | O estoque inteiro no momento do fechamento: físico, reservado e livre. |
+| **Movimentações** | Tudo que se moveu no dia. |
+| **Transferências** | Os pedidos entre lojas que andaram no dia. |
+| **Baixas pendentes** | Pneus presos esperando aprovação na hora do fechamento. |
+| **Conferência** | Pneus cujo saldo no cadastro **não bate** com o último movimento registrado. Vazia é o resultado bom. |
 
-1. Instale com `Fechamento Central Estoque Setup 1.0.0.exe`.
-2. Entre com **o mesmo usuário e senha do sistema**. A loja vem da credencial —
-   cada pessoa baixa o estoque da própria filial.
-3. Confira a pasta de destino (dá para trocar a qualquer momento) e clique em
-   **Salvar fechamento do dia**.
+**Quem vê o quê:** o administrador recebe **todas as lojas** numa planilha só;
+o dono da loja recebe a dele. Vendedor não usa este programa.
 
-Duas opções que valem marcar na primeira vez:
+## Como instalar (para enviar a quem vai usar)
 
-- **Manter conectado neste computador** — não pede senha todo fim de dia.
-- **Abrir com o Windows e avisar às 18h** — o programa passa a subir junto com
-  o computador, fica escondido o dia inteiro e **aparece sozinho às 18h**
-  pedindo o fechamento. É esta opção que faz o lembrete acontecer sem ninguém
-  precisar lembrar.
+1. Baixe `Fechamento-Central-Estoque-Setup-2.0.0.exe` e abra.
+2. O Windows vai mostrar **"O Windows protegeu o computador"**. É porque o
+   programa não tem assinatura digital paga — não é vírus. Clique em
+   **Mais informações** → **Executar assim mesmo**.
+3. Instale (Avançar → Instalar). No fim, o programa abre sozinho.
+4. **Conta com Google** (é o caso de quem entra no sistema pelo Google):
+   clique em **Entrar com Google**. Vai abrir o navegador — escolha a mesma
+   conta Google do sistema, espere aparecer "Pronto", volte ao programa e
+   digite **usuário e senha do sistema**.
+   **Conta sem Google:** usuário e senha direto na tela.
+5. Pronto. Pode fechar a janela: o programa fica na bandeja e salva sozinho às
+   18h, todo dia. O login fica guardado — não precisa entrar de novo.
+
+## Como funciona o automático
+
+- **Às 18h** o programa lê o banco e grava a planilha do dia. Aparece uma
+  notificação do Windows com o total de vendas; tocar nela abre a pasta.
+- **Abre junto com o Windows**, escondido. Isso já vem ligado depois de
+  instalar (dá para desligar na tela do programa).
+- **Computador desligado às 18h?** Na próxima vez que ligar, o programa
+  recupera os dias perdidos (até 7). Esses arquivos são marcados: as vendas e o
+  movimento são daquele dia, mas o **estoque é o do momento da recuperação**.
+  Domingo e feriado sem movimento não geram arquivo.
+- **Sem internet às 18h?** Tenta de novo a cada 15 minutos.
+- **Sem login?** Avisa com uma notificação e abre a janela.
+- Tem também o botão **Salvar o fechamento de hoje agora**, para quando a loja
+  fechar mais cedo. Salvar de novo no mesmo dia substitui o arquivo do dia.
+
+## Segurança
+
+- **Nenhuma senha fica guardada no computador.** A versão 1 guardava usuário e
+  senha em texto puro para entrar sozinha. Agora o login fica com o próprio
+  Firebase, como no navegador, e o papel e a loja são relidos do servidor a
+  cada abertura.
+- O login Google acontece no **navegador de verdade**, não dentro do programa
+  (o Google recusa login em janelas de programa). O navegador devolve ao
+  programa só o comprovante do Google, amarrado a um código de uso único.
+- O programa escuta só em `localhost`, e só entrega os arquivos da própria
+  tela.
 
 ## Desenvolvimento
 
 ```bash
 npm install
-npm start      # abre o programa em modo desenvolvimento
+node node_modules/electron/install.js   # se o npm bloquear o download do Electron
+npm start      # abre em modo desenvolvimento
 npm run dist   # gera o instalador em dist/
 ```
 
-- `electron/main.js` — janela, escolha de pasta, gravação em disco e o
-  lembrete das 18h. **Só ele decide onde grava**: a tela manda nome de arquivo
-  e conteúdo, nunca um caminho.
-- `electron/dailyBackup.js` — a gravação em si, sem nada do Electron, para
-  poder ser testada com `node`.
-- `renderer/app.js` — login, leitura do Firestore e montagem dos arquivos.
-  É empacotado em `renderer/bundle.js` pelo esbuild (`npm run build:renderer`),
-  que roda sozinho antes de `start` e `dist`.
+> Rodando de dentro do VS Code, o terminal herda `ELECTRON_RUN_AS_NODE=1` e o
+> Electron vira Node puro ("bad option: --hidden"). Use `env -u
+> ELECTRON_RUN_AS_NODE npm start`.
+
+- `electron/main.js` — janela, bandeja, agendamento das 18h, recuperação de
+  dias perdidos, servidor local e retorno do login Google. **Só ele grava no
+  disco.** Vai embutido (esbuild) em `main.bundle.js`, junto com o exceljs.
+- `electron/dailyBackup.js` — monta a planilha e grava os arquivos. Node puro,
+  testável com `node` sem o Electron.
+- `renderer/app.js` — login e leitura do Firestore. Embutido em `bundle.js`.
+- `renderer/google.js` — a página de login Google que abre no navegador.
+- `build/make-icon.js` — gera o ícone sem dependência nenhuma.
+
+O instalador fica em ~92 MB: o Firebase e o exceljs vão embutidos no código (e
+não como `node_modules`), e só os idiomas português e inglês do Chromium
+entram. Abaixo de 100 MB o Google Drive consegue verificar vírus no arquivo —
+acima disso, mostra um aviso para quem baixa.
 
 O programa usa o mesmo projeto Firebase do sistema (`central-autocar`) e
-obedece às mesmas regras do Firestore: ele só consegue ler o que aquela
-credencial já podia ler. A única escrita que faz é o próprio perfil da sessão
-em `users/{uid}` — exigido pelas regras para liberar a leitura das
-movimentações e transferências.
+obedece às mesmas regras do Firestore. A única escrita que faz é o próprio
+perfil da sessão em `users/{uid}`, no login.

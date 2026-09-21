@@ -1,42 +1,69 @@
 {
   "name": "fechamento-central-estoque",
-  "version": "1.0.0",
-  "description": "Baixa o estoque e o movimento do dia da sua loja para uma pasta do computador.",
+  "version": "2.0.0",
+  "description": "Salva sozinho, todo dia às 18h, a planilha de vendas, o estoque e o movimento do dia.",
   "author": "Central Estoque",
-  "main": "electron/main.js",
+  "main": "electron/main.bundle.js",
   "scripts": {
-    "build:renderer": "esbuild renderer/app.js --bundle --outfile=renderer/bundle.js --format=iife --target=chrome120",
-    "start": "npm run build:renderer && electron .",
-    "dist": "npm run build:renderer && electron-builder"
+    "build:main": "esbuild electron/main.js --bundle --platform=node --target=node22 --external:electron --outfile=electron/main.bundle.js --minify",
+    "build:renderer": "esbuild renderer/app.js --bundle --outfile=renderer/bundle.js --format=iife --target=chrome120 --minify && esbuild renderer/google.js --bundle --outfile=renderer/google-bundle.js --format=iife --target=chrome100 --minify",
+    "build:icon": "node build/make-icon.js",
+    "build": "npm run build:icon && npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win"
   },
-  "dependencies": {
-    "firebase": "^11.10.0"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^26.0.0",
-    "esbuild": "^0.25.0"
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.0",
+    "exceljs": "^4.4.0",
+    "firebase": "^12.15.0"
   },
   "build": {
     "appId": "com.centralestoque.fechamento",
     "productName": "Fechamento Central Estoque",
+    "copyright": "Central Estoque",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
-      "electron/**/*",
+      "electron/main.bundle.js",
+      "electron/preload.js",
       "renderer/index.html",
       "renderer/bundle.js",
+      "renderer/google.html",
+      "renderer/google-bundle.js",
+      "build/icon.png",
       "package.json"
     ],
+    "asar": true,
+    "compression": "maximum",
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Fechamento do Dia"
-    }
+      "createStartMenuShortcut": true,
+      "shortcutName": "Fechamento do Dia",
+      "runAfterFinish": true,
+      "artifactName": "Fechamento-Central-Estoque-Setup-${version}.${ext}"
+    },
+    "electronLanguages": [
+      "pt-BR",
+      "en-US"
+    ]
   }
 }

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Entrar com Google — Fechamento do Dia</title>
+  <style>
+    :root {
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --gold: #d49321;
+      --ok: #166534;
+      --ok-bg: #dcfce7;
+      --err: #991b1b;
+      --err-bg: #fee2e2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #f1f5f9;
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      padding-inline: 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 28px 26px;
+      box-shadow: 0 10px 30px -18px rgba(15, 23, 42, .35);
+    }
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin: 0 0 8px;
+    }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p.lead { color: var(--muted); font-size: 14px; line-height: 1.55; margin: 0 0 22px; }
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 10px;
+      padding: 13px 16px;
+      font: inherit;
+      font-weight: 700;
+      font-size: 14px;
+      background: var(--ink);
+      color: #fff;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: #1e293b; }
+    button:disabled { opacity: .6; cursor: default; }
+    button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+    .msg {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+    .msg.ok { background: var(--ok-bg); color: var(--ok); }
+    .msg.error { background: var(--err-bg); color: var(--err); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <p class="eyebrow">Fechamento do Dia</p>
+    <h1>Entrar com a conta Google</h1>
+    <p class="lead">
+      Escolha a mesma conta Google que você usa no sistema Central Estoque.
+      Depois volte ao programa para digitar seu usuário e senha.
+    </p>
+    <button id="btn" type="button">Continuar com Google</button>
+    <div id="msg" class="msg" hidden></div>
+  </main>
+  <script src="google-bundle.js"></script>
+</body>
+</html>

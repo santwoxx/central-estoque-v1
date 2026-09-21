@@ -1,3 +1,10 @@
 node_modules/
 dist/
 renderer/bundle.js
+renderer/google-bundle.js
+electron/main.bundle.js
+
+# A raiz ignora toda pasta build/ (saida do Vite). Aqui build/ e FONTE: o
+# gerador do icone. So o icone gerado fica de fora.
+!build/
+build/icon.png
