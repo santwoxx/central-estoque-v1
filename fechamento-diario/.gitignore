@@ -1,5 +1,6 @@
 node_modules/
 dist/
+release/
 renderer/bundle.js
 renderer/google-bundle.js
 electron/main.bundle.js

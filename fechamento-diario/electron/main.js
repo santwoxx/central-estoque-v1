@@ -84,6 +84,18 @@ function start() {
     return cfg;
   }
 
+  // Ligado por padrão: o programa que ninguém lembra de abrir não salva nada
+  // às 18h. Só grava no registro quando é o programa INSTALADO — rodando em
+  // desenvolvimento, registraria o electron.exe da pasta node_modules.
+  function autostartWanted() {
+    return readConfig().autostart !== false;
+  }
+
+  function applyAutostart() {
+    if (!app.isPackaged) return;
+    app.setLoginItemSettings({ openAtLogin: autostartWanted(), args: ['--hidden'] });
+  }
+
   function currentFolder() {
     const cfg = readConfig();
     return typeof cfg.backupFolder === 'string' && cfg.backupFolder.trim()
@@ -475,7 +487,7 @@ function start() {
       lastClosedDay: cfg.lastClosedDay || null,
       closeHour: CLOSE_HOUR,
       version: app.getVersion(),
-      autostart: app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin
+      autostart: autostartWanted()
     };
   });
 
@@ -493,8 +505,9 @@ function start() {
   ipcMain.handle('folder:open', openFolder);
 
   ipcMain.handle('autostart:set', (_e, enabled) => {
-    app.setLoginItemSettings({ openAtLogin: !!enabled, args: ['--hidden'] });
-    return app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin;
+    writeConfig({ autostart: !!enabled });
+    applyAutostart();
+    return autostartWanted();
   });
 
   ipcMain.handle('closing:run-now', () => runClosing(dayKey(new Date()), { manual: true }));
@@ -540,14 +553,18 @@ function start() {
       return;
     }
 
-    // Primeira abertura do programa INSTALADO: já liga "abrir com o Windows".
-    // Sem isto o fechamento automático dependia de a pessoa achar e marcar uma
-    // opção — e o programa que ninguém lembra de abrir não salva nada às 18h.
-    const cfg = readConfig();
-    if (app.isPackaged && !cfg.firstRunDone) {
-      app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] });
-      writeConfig({ firstRunDone: true });
-    }
+    // ── Abrir com o Windows: reaplicado a CADA abertura ──────────────
+    // A vontade da pessoa mora na configuração (`autostart`, ligado por
+    // padrão) e é regravada no registro toda vez que o programa abre, apontando
+    // para o executável que está rodando AGORA.
+    //
+    // ANTES era gravado uma vez só, na primeira abertura. O registro guarda o
+    // caminho do .exe — e se a primeira abertura fosse de uma cópia que depois
+    // muda de lugar (a pasta de build, uma instalação antiga), o Windows seguia
+    // tentando abrir um arquivo que não existia mais. O fechamento das 18h
+    // parava em silêncio, e instalar a versão nova por cima não consertava,
+    // porque a "primeira abertura" já tinha passado.
+    applyAutostart();
 
     createWindow();
     createTray();

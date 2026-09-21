@@ -22,9 +22,10 @@ Abas da planilha:
 
 | Aba | O que tem |
 |---|---|
-| **Resumo** | Uma linha por loja: vendas (un e R$), outras saídas, entradas, transferências, estoque, reservado, livre, baixas pendentes e divergências. |
-| **Vendas** | Cada venda do dia: hora, loja, cliente, CPF/CNPJ, placa, documento, pneu, quantidade, valor, quem pediu e quem aprovou. |
-| **Estoque** | O estoque inteiro no momento do fechamento: físico, reservado e livre. |
+| **Resumo** | Uma linha por loja (vendas, outras saídas, entradas, transferências, estoque, reservado, livre, baixas pendentes, divergências). Abaixo, as **medidas vendidas no dia** e as **saídas que não são venda, por motivo e por quem fez** — exclusão de cadastro sai destacada. |
+| **Vendas** | Cada venda do dia: hora, loja, cliente, CPF/CNPJ, placa, documento, medida, pneu, quantidade, valor, quem pediu e quem aprovou. |
+| **Saídas por medida** | Tudo que saiu no dia agrupado por medida e loja: vendidas, outras saídas e enviadas para outra loja. As mais vendidas primeiro — é a lista de reposição. |
+| **Estoque *loja*** | Uma aba por empresa, com o estoque dela no fechamento (físico, reservado, livre, preços), ordenado por medida. Loja que terminou o dia zerada também ganha a aba, dizendo isso. |
 | **Movimentações** | Tudo que se moveu no dia. |
 | **Transferências** | Os pedidos entre lojas que andaram no dia. |
 | **Baixas pendentes** | Pneus presos esperando aprovação na hora do fechamento. |
@@ -35,7 +36,7 @@ o dono da loja recebe a dele. Vendedor não usa este programa.
 
 ## Como instalar (para enviar a quem vai usar)
 
-1. Baixe `Fechamento-Central-Estoque-Setup-2.0.0.exe` e abra.
+1. Baixe `Fechamento-Central-Estoque-Setup-2.1.0.exe` e abra.
 2. O Windows vai mostrar **"O Windows protegeu o computador"**. É porque o
    programa não tem assinatura digital paga — não é vírus. Clique em
    **Mais informações** → **Executar assim mesmo**.
@@ -52,8 +53,10 @@ o dono da loja recebe a dele. Vendedor não usa este programa.
 
 - **Às 18h** o programa lê o banco e grava a planilha do dia. Aparece uma
   notificação do Windows com o total de vendas; tocar nela abre a pasta.
-- **Abre junto com o Windows**, escondido. Isso já vem ligado depois de
-  instalar (dá para desligar na tela do programa).
+- **Abre junto com o Windows**, escondido. Vem ligado (dá para desligar na
+  tela do programa) e é **regravado a cada abertura**, apontando para o
+  executável que está rodando. Assim, instalar uma versão nova ou mudar o
+  programa de pasta não deixa o Windows tentando abrir um arquivo que sumiu.
 - **Computador desligado às 18h?** Na próxima vez que ligar, o programa
   recupera os dias perdidos (até 7). Esses arquivos são marcados: as vendas e o
   movimento são daquele dia, mas o **estoque é o do momento da recuperação**.
@@ -81,7 +84,7 @@ o dono da loja recebe a dele. Vendedor não usa este programa.
 npm install
 node node_modules/electron/install.js   # se o npm bloquear o download do Electron
 npm start      # abre em modo desenvolvimento
-npm run dist   # gera o instalador em dist/
+npm run dist   # gera o instalador em release/
 ```
 
 > Rodando de dentro do VS Code, o terminal herda `ELECTRON_RUN_AS_NODE=1` e o
