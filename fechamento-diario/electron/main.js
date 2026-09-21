@@ -383,7 +383,10 @@ function start() {
       const s = result.stats;
       notify(
         `Fechamento de ${formatDayLabel(day)} salvo`,
-        `${s.sales} venda(s) · ${brl(s.salesValue)}` +
+        (s.lockedFallback
+          ? 'A planilha do dia estava aberta no Excel, então salvei uma cópia com o horário no nome. '
+          : '') +
+          `${s.sales} venda(s) · ${brl(s.salesValue)}` +
           (s.pending ? ` · ${s.pending} baixa(s) esperando aprovação` : '') +
           (s.divergences ? ` · ATENÇÃO: ${s.divergences} divergência(s) de saldo` : '') +
           '. Toque para abrir a pasta.',

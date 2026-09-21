@@ -723,7 +723,32 @@ async function writeClosing({ baseFolder, data }) {
   const { wb, stats } = await buildWorkbook(data);
   const xlsxName = safeName(`Fechamento ${scope} ${day}.xlsx`);
   const xlsxPath = path.join(monthFolder, xlsxName);
-  await wb.xlsx.writeFile(xlsxPath);
+  // ── Planilha do dia aberta no Excel ──────────────────────────────
+  // O Excel trava o arquivo que está aberto, e o Windows não deixa ninguém
+  // gravar por cima. Antes isso virava "EBUSY: resource busy or locked" na tela
+  // — e às 18h, se alguém tivesse deixado a planilha do dia aberta, o
+  // fechamento automático falhava e ficava tentando a cada 15 minutos sem
+  // conseguir. Agora, com o arquivo travado, grava uma cópia com o horário no
+  // nome. O fechamento nunca se perde por causa de um Excel esquecido aberto.
+  let finalPath = xlsxPath;
+  let lockedFallback = false;
+  try {
+    await wb.xlsx.writeFile(xlsxPath);
+  } catch (err) {
+    if (!err || (err.code !== 'EBUSY' && err.code !== 'EPERM' && err.code !== 'EACCES')) throw err;
+    const now = new Date();
+    const stamp = `${String(now.getHours()).padStart(2, '0')}h${String(now.getMinutes()).padStart(2, '0')}`;
+    finalPath = path.join(monthFolder, safeName(`Fechamento ${scope} ${day} - salvo ${stamp}.xlsx`));
+    try {
+      await wb.xlsx.writeFile(finalPath);
+      lockedFallback = true;
+    } catch {
+      throw new Error(
+        'A planilha do dia está aberta no Excel e o Windows não deixa gravar por cima. ' +
+        'Feche o Excel e salve de novo.'
+      );
+    }
+  }
 
   // O JSON e a copia que RESTAURA: `items` no topo e exatamente o formato que a
   // tela "Restaurar Backup" do sistema le.
@@ -748,7 +773,7 @@ async function writeClosing({ baseFolder, data }) {
     'utf8'
   );
 
-  return { folder: monthFolder, file: xlsxPath, stats };
+  return { folder: monthFolder, file: finalPath, stats: { ...stats, lockedFallback, fileName: path.basename(finalPath) } };
 }
 
 module.exports = { safeName, safeDay, computeDivergences, buildWorkbook, writeClosing, isSale };

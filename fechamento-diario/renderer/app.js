@@ -597,7 +597,11 @@ async function handleSaveNow() {
     const s = r.stats;
     showMessage(
       $('main-msg'),
-      s.divergences ? 'warn' : 'ok',
+      s.divergences || s.lockedFallback ? 'warn' : 'ok',
+      (s.lockedFallback
+        ? `A planilha de hoje estava aberta no Excel, então salvei uma cópia separada: ` +
+          `<b>${escapeHtml(s.fileName)}</b>. Feche o Excel para o próximo salvamento substituir o arquivo do dia.<br>`
+        : '') +
       `Fechamento salvo: ${s.sales} venda(s), ${brl(s.salesValue)}` +
         (s.pending ? ` · ${s.pending} baixa(s) esperando aprovação` : '') +
         (s.divergences

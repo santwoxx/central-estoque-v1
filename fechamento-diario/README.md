@@ -36,7 +36,7 @@ o dono da loja recebe a dele. Vendedor não usa este programa.
 
 ## Como instalar (para enviar a quem vai usar)
 
-1. Baixe `Fechamento-Central-Estoque-Setup-2.1.0.exe` e abra.
+1. Baixe `Fechamento-Central-Estoque-Setup-2.1.1.exe` e abra.
 2. O Windows vai mostrar **"O Windows protegeu o computador"**. É porque o
    programa não tem assinatura digital paga — não é vírus. Clique em
    **Mais informações** → **Executar assim mesmo**.

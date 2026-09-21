@@ -1,6 +1,6 @@
 {
   "name": "fechamento-central-estoque",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Salva sozinho, todo dia às 18h, a planilha de vendas, o estoque e o movimento do dia.",
   "author": "Central Estoque",
   "main": "electron/main.bundle.js",
