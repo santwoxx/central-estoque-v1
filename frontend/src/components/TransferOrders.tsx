@@ -177,7 +177,19 @@ export default function TransferOrders({
   const [driverTarget, setDriverTarget] = useState<{ transfer: TransferOrder; stage: "DISPATCH" | "ARRIVAL" } | null>(null);
   const [processingId, setProcessingId] = useState("");
 
-  const isGlobalAdmin = isAdmin && (!user.companyId || user.email === "brisasofc@gmail.com" || user.email === "isaacbomfim.te@gmail.com" || user.email === "isaacbomfim.00@gmail.com");
+  // Administrador age por TODAS as lojas: assina o envio como origem, assina o
+  // recebimento como destino, aprova e recusa solicitacoes, reserva e solta
+  // pneu — em qualquer filial, tenha ele uma loja vinculada ou nao.
+  //
+  // ANTES esta linha exigia `!user.companyId` OU um e-mail de uma lista fixa de
+  // tres. Um administrador promovido pela tela de Operadores, com loja vinculada
+  // e fora da lista, ficava preso aos pedidos da propria filial SO nesta tela:
+  // via todas as empresas no estoque, na fila de baixa e nas reservas, mas nao
+  // conseguia enviar nem receber uma transferencia entre duas outras lojas. Era
+  // a mesma inconsistencia que ja tinha sido corrigida no listener de App.tsx,
+  // duplicada aqui. As regras do Firestore nunca fizeram essa distincao — o
+  // bloqueio era so da tela.
+  const isGlobalAdmin = isAdmin;
   const isSourceOf = (t: TransferOrder) =>
     !isVendedor && (isGlobalAdmin || user.companyId === t.sourceCompanyId);
   const isDestinationOf = (t: TransferOrder) =>
