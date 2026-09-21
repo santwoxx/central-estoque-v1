@@ -147,6 +147,45 @@ export default function ExitApprovals({
 
   const companyName = (id: string) => companies.find(c => c.id === id)?.name || "";
 
+  // ── Pedido que parece repetido ──────────────────────────────────
+  // A planilha unificada chegou a gerar DOIS pedidos para um mesmo Enter (a
+  // célula salvava no Enter e de novo ao perder o foco). Aprovar os dois tira
+  // do estoque o dobro do que saiu de verdade — é pneu perdido no sistema.
+  //
+  // Então todo pedido pendente idêntico a outro pendente anterior — mesma
+  // pessoa, mesma loja, mesmos pneus nas mesmas quantidades, aberto até 2
+  // minutos depois — sai marcado. Não bloqueia (duas vendas iguais seguidas
+  // podem ser legítimas): avisa, e o botão de recusar vem com o motivo pronto.
+  const duplicateOf = useMemo(() => {
+    const signature = (e: StockExitRequest) =>
+      [
+        e.requestedByUid,
+        e.companyId,
+        (e.items || [])
+          .map(i => `${i.stockItemId}:${i.quantity}`)
+          .sort()
+          .join(",")
+      ].join("|");
+
+    const pending = exits
+      .filter(e => e.status === "PENDENTE")
+      .slice()
+      .sort((a, b) => toMillis(a.requestedAt) - toMillis(b.requestedAt));
+
+    const firstBySig = new Map<string, StockExitRequest>();
+    const result = new Map<string, StockExitRequest>();
+    for (const e of pending) {
+      const sig = signature(e);
+      const first = firstBySig.get(sig);
+      if (first && toMillis(e.requestedAt) - toMillis(first.requestedAt) <= 2 * 60 * 1000) {
+        result.set(e.id, first);
+      } else {
+        firstBySig.set(sig, e);
+      }
+    }
+    return result;
+  }, [exits]);
+
   const counts = useMemo(() => {
     let paraDecidir = 0;
     let unidades = 0;
@@ -473,6 +512,17 @@ export default function ExitApprovals({
                     </table>
                   </div>
 
+                  {isPending && duplicateOf.has(exit.id) && (
+                    <div className="mt-2 bg-red-50 border border-red-300 text-red-800 rounded-lg px-3 py-2 text-[11px] font-bold flex items-start gap-2">
+                      <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                      <span>
+                        Parece <b>repetido</b>: mesma pessoa, mesmos pneus e mesmas quantidades de outro pedido
+                        aberto {formatRelativeTime(toMillis(duplicateOf.get(exit.id)!.requestedAt))}. Aprovar os dois
+                        tira do estoque o <b>dobro</b> do que saiu. Se foi um clique só, recuse este.
+                      </span>
+                    </div>
+                  )}
+
                   {isPending && drifted.length > 0 && (
                     <div className="mt-2 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2 text-[11px] font-bold flex items-start gap-2">
                       <AlertTriangle size={13} className="shrink-0 mt-0.5" />
@@ -507,7 +557,11 @@ export default function ExitApprovals({
                         disabled={busy}
                         onClick={() => {
                           setRejecting(exit);
-                          setRejectNote("");
+                          setRejectNote(
+                            duplicateOf.has(exit.id)
+                              ? "Pedido repetido — o mesmo pedido já estava na fila (gerado duas vezes pelo mesmo Enter)."
+                              : ""
+                          );
                         }}
                         className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-red-200 hover:bg-red-50 disabled:opacity-50 text-red-700 text-[11px] font-black uppercase tracking-wider transition-colors cursor-pointer"
                       >

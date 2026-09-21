@@ -55,6 +55,23 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
   const [searchTerm, setSearchTerm] = useState("");
   const [editingCell, setEditingCell] = useState<{ sku: string; field: string } | null>(null);
   const [editValue, setEditValue] = useState("");
+
+  // ── Uma edição, um salvamento ────────────────────────────────────
+  // A célula salva no Enter E ao perder o foco. Apertar Enter disparava os
+  // dois: o Enter salvava, o aviso de "pedido enviado" roubava o foco, e a
+  // perda de foco salvava DE NOVO — com a mesma diferença, porque um pedido de
+  // baixa só prende o pneu, não muda o saldo. Cada Enter numa célula de
+  // quantidade virava DOIS pedidos de baixa, e a reserva dobrava.
+  //
+  // Antes da fila de aprovação o salvamento duplo já existia, mas era
+  // inofensivo: gravar "8" duas vezes dá 8. Com a fila, cada gravação passou a
+  // ser um pedido novo, e repetir deixou de ser inofensivo.
+  //
+  // Por isso cada edição ganha um número, e só a PRIMEIRA gravação daquele
+  // número passa — venha ela do Enter, da perda de foco ou dos dois. Um ref, e
+  // não estado, porque as duas chamadas acontecem antes de o React re-renderizar.
+  const editSessionRef = React.useRef(0);
+  const savedSessionRef = React.useRef(-1);
   const [loadingSku, setLoadingSku] = useState("");
 
   // Add Company Modal State
@@ -550,12 +567,18 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       if (!canEditShownPrice) return;
     }
 
+    editSessionRef.current += 1;
     setEditingCell({ sku: item.sku, field });
     setEditValue(currentValue);
   };
 
   const handleSaveEdit = async (item: ConsolidatedItem) => {
     if (!editingCell) return;
+    // Esta edição já foi salva (ou cancelada com Esc): a segunda chamada — a da
+    // perda de foco logo depois do Enter — não faz nada.
+    const session = editSessionRef.current;
+    if (savedSessionRef.current === session) return;
+    savedSessionRef.current = session;
     setLoadingSku(item.sku);
     
     try {
@@ -698,6 +721,9 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     if (e.key === "Enter") {
       handleSaveEdit(item);
     } else if (e.key === "Escape") {
+      // Esc cancela: marca a edição como encerrada, para a perda de foco que
+      // vem em seguida não salvar o valor que a pessoa desistiu de gravar.
+      savedSessionRef.current = editSessionRef.current;
       setEditingCell(null);
     }
   };
@@ -859,6 +885,9 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     companyName: string;
     operationId: string;
     created: boolean;
+    // Saída virou PEDIDO: nada saiu do estoque ainda, as unidades só ficaram
+    // presas até alguém aprovar em Aprovar Baixas.
+    pendingApproval?: boolean;
   } | null>(null);
 
   // O produto é relido da lista consolidada a cada render — assim o saldo
@@ -1050,7 +1079,8 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           balanceAfter: line ? line.balanceAfter : flowBalanceAfter,
           companyName: company.name,
           operationId: result.operationId,
-          created: false
+          created: false,
+          pendingApproval: !!result.pendingApproval
         });
       }
     } catch (err: any) {
@@ -1830,18 +1860,31 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                 <div className={`rounded-2xl border p-5 text-center ${flowSuccess.type === "ENTRADA" ? "bg-emerald-50 border-emerald-200" : "bg-red-50 border-red-200"}`}>
                   <CheckCircle2 size={34} className={`mx-auto mb-2 ${flowSuccess.type === "ENTRADA" ? "text-emerald-600" : "text-red-600"}`} />
                   <p className="text-sm font-black text-slate-900 uppercase tracking-wider">
-                    {flowSuccess.type === "ENTRADA" ? "Entrada registrada" : "Saída registrada"}
+                    {flowSuccess.pendingApproval
+                      ? "Pedido de baixa enviado"
+                      : flowSuccess.type === "ENTRADA" ? "Entrada registrada" : "Saída registrada"}
                   </p>
                   <p className="text-[11px] font-bold text-slate-500 mt-1">
                     {flowSuccess.quantity} un • {flowItem.sku} • {flowSuccess.companyName}
                   </p>
-                  <div className="mt-3 flex items-center justify-center gap-2 text-base font-black font-mono">
-                    <span className="text-slate-400">{flowSuccess.balanceBefore} un</span>
-                    <ArrowRight size={15} className="text-slate-300" />
-                    <span className={flowSuccess.type === "ENTRADA" ? "text-emerald-600" : "text-red-600"}>
-                      {flowSuccess.balanceAfter} un
-                    </span>
-                  </div>
+                  {flowSuccess.pendingApproval ? (
+                    /* "10 → 10" parecia uma baixa que não funcionou. O saldo não
+                       mudou DE PROPÓSITO: as unidades estão presas, e a baixa só
+                       acontece quando alguém aprovar. */
+                    <p className="mt-3 text-[11px] font-bold text-slate-600 leading-relaxed">
+                      O saldo continua <b>{flowSuccess.balanceBefore} un</b> de propósito: as {flowSuccess.quantity} un
+                      ficaram <b>reservadas</b> e ninguém mais consegue vendê-las. A baixa acontece quando o pedido for
+                      aprovado na aba <b>Aprovar Baixas</b>.
+                    </p>
+                  ) : (
+                    <div className="mt-3 flex items-center justify-center gap-2 text-base font-black font-mono">
+                      <span className="text-slate-400">{flowSuccess.balanceBefore} un</span>
+                      <ArrowRight size={15} className="text-slate-300" />
+                      <span className={flowSuccess.type === "ENTRADA" ? "text-emerald-600" : "text-red-600"}>
+                        {flowSuccess.balanceAfter} un
+                      </span>
+                    </div>
+                  )}
                   {flowSuccess.operationId && (
                     <p className="mt-2 text-[10px] font-mono font-bold text-slate-400">{flowSuccess.operationId}</p>
                   )}
@@ -1850,6 +1893,8 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                 <p className="text-[10px] text-slate-400 font-semibold text-center leading-relaxed">
                   {flowSuccess.created
                     ? "O pneu não existia nesta empresa e foi cadastrado com o saldo desta entrada."
+                    : flowSuccess.pendingApproval
+                    ? "Depois de aprovada, a baixa aparece no histórico da aba Entradas e Saídas."
                     : "A operação está no histórico da aba Entradas e Saídas — é lá que ela pode ser conferida, impressa ou estornada."}
                 </p>
 
