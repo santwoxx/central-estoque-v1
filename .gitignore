@@ -12,4 +12,5 @@ dist-electron/
 
 # Relatorios de estoque exportados do ERP (tem preco de tudo): nao vao para o
 # GitHub. O que o sistema precisa deles vira JSON por tools/estoque-time-sistemas.py.
-/estoque*.pdf
+/*.pdf
+__pycache__/

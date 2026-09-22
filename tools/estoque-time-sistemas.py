@@ -110,15 +110,19 @@ if os.path.exists(OUT):
     except Exception:
         old = []
 
-# ── Marcas: nome oficial ← como o ERP escreve (inclusive truncado pela coluna)
+# ── Marcas: nome oficial ← como o ERP escreve (inclusive truncado pela coluna
+# e com erro de digitação). A busca é por PALAVRA inteira.
 BRANDS = [
     ("MAXTREK", ["MAXTREK", "MAXTRE"]),
     ("TERRENA", ["TERRENA"]),
-    ("SPEEDMAX", ["SPEEDMAX"]),
+    # "SPM" é como a SAJ escreve Speedmax: o mesmo pneu "MH01" aparece como
+    # "MH01 SPEEDMAX" na Valença e "MH01 SPM" na SAJ.
+    ("SPEEDMAX", ["SPEEDMAX", "SPM"]),
     ("ATLANDER", ["ATLANDER"]),
     ("DYNAMO", ["DYNAMO"]),
-    ("COMFORSER", ["COMFORSER"]),
-    ("CONTINENTAL", ["CONTINENTAL", "CONT"]),
+    ("COMFORSER", ["COMFORSER", "COMFORSE"]),
+    ("CONTINENTAL", ["CONTINENTAL", "CONT", "CONTI", "CONTINELTNAL"]),
+    ("GENERAL TIRE", ["GENERAL", "GENERALTIRE"]),
     ("LANDSPIDER", ["LANDSPIDER"]),
     ("COMPASAL", ["COMPASAL", "COMPAS"]),
     ("BLACKARROW", ["BLACKARROW"]),
@@ -131,33 +135,83 @@ BRANDS = [
     ("HAIDA", ["HAIDA"]),
     ("XBRI", ["XBRI", "XBR", "XB"]),
     ("LINGLONG", ["LINGLONG"]),
-    ("WESTLAKE", ["WESTLAKE"]),
+    ("WESTLAKE", ["WESTLAKE", "WESLAKE"]),
     ("FARROAD", ["FARROAD"]),
     ("SUNSET", ["SUNSET"]),
     ("TRAZANO", ["TRAZANO"]),
-    ("GRIPMASTER", ["GRIPMASTER"]),
+    ("GRIPMASTER", ["GRIPMASTER", "GRIPMASTE"]),
     ("LONGMARCH", ["LONGMARCH"]),
     ("ARISUN", ["ARISUN"]),
     ("BONNA", ["BONNA"]),
     ("FLEXEN", ["FLEXEN"]),
+    ("MICHELIN", ["MICHELIN"]),
+    ("BRIDGESTONE", ["BRIDGESTONE"]),
+    ("GOODYEAR", ["GOODYEAR"]),
+    ("DUNLOP", ["DUNLOP"]),
+    ("JK TYRE", ["JK", "JKTYRE"]),
+    ("APOLLO", ["APOLLO"]),
+    ("CHENGSHAN", ["CHENGSHAN", "CHENGSAN"]),
+    ("HIFLY", ["HIFLY"]),
+    ("MAXZEZ", ["MAXZEZ"]),
+    ("ITARO", ["ITARO"]),
+    ("LUISTONE", ["LUISTONE"]),
+    ("AUSTONE", ["AUSTONE"]),
+    ("EVOXX", ["EVOXX"]),
+    ("SUNWIDE", ["SUNWIDE"]),
+    ("LANVIGATOR", ["LANVIGATOR"]),
+    ("DURABLE", ["DURABLE"]),
+    ("ASCENSO", ["ASCENSO"]),
+    ("MRL", ["MRL"]),
+    ("FARMAX", ["FARMAX"]),
 ]
 ALIAS = {a: canon for canon, aliases in BRANDS for a in aliases}
+
+# Marcas de duas palavras, na ordem em que aparecem.
+TWO_WORD = [("LING", "LONG", "LINGLONG"), ("SPEED", "MAX", "SPEEDMAX"), ("ROYAL", "BLACK", "ROYAL BLACK"),
+            ("DRIVE", "FORCE", "DRIVE FORCE")]
+
+# Palavras grudadas pelo ERP: "CONTICROSSCONTACT" = Continental CrossContact.
+GLUED_CONTI = re.compile(r"^CONTI?(CROSS|PREMIUM|ECO|SPORT|VAN|ULTRA|POWER)", re.I)
+
+# Linha de pneu que decide a marca MESMO que outra palavra de marca apareça:
+# Altimax e Grabber são General Tire, ainda que a loja escreva "CONT" ao lado.
+PRIORITY_IMPLIES = [
+    (r"\bALTIMAX\b|\bGRABBER\b", "GENERAL TIRE", {"CONT", "GENERAL", "GEN", "CO", "GENERALTIRE"}),
+]
 
 # Linha de produto que o ERP não marca, mas é inconfundível — e a própria loja
 # escreve a marca em outras linhas do mesmo pneu (ex.: "POWC 2 CONT").
 MODEL_IMPLIES = [
-    (r"\bPOWER CONTACT\b", "CONTINENTAL"),
+    (r"\bPOWER ?CONTACT\b", "CONTINENTAL"),
+    (r"\bULTRA ?CONTACT\b", "CONTINENTAL"),
+    (r"\bPREMIUM ?CONTACT", "CONTINENTAL"),
+    (r"\bCROSS ?CONTACT\b", "CONTINENTAL"),
+    (r"\bVAN ?CONTACT\b", "CONTINENTAL"),
+    (r"\bVANCAP\b", "CONTINENTAL"),
     (r"\bBRAVURIS\b", "CONTINENTAL"),
+    (r"\bDUELLER\b", "BRIDGESTONE"),
     (r"\bECOPLUS\b", "XBRI"),
-    (r"\bFORZA\b", "XBRI"),
+    (r"\bX?FORZA\b", "XBRI"),
     (r"\bFRD\d+\b", "FARROAD"),
+    (r"\bPEAKGRIP\b", "MAXZEZ"),
+    (r"\bCF ?(?:1000|1100|3000)\b", "COMFORSER"),
 ]
+
+# Marca dada por regra, mas sem certeza — sai com aviso para conferir.
+UNSURE = {"DRIVE FORCE"}
 
 # Correções de digitação evidentes (o texto original fica em `description`).
 TYPOS = {"ZUPHIRA": "ZYPHIRA", "QUADRICULO": "QUADRICICLO"}
 
-# Tokens técnicos que ficam só na descrição: índice de carga/velocidade, lonas.
-TECH = re.compile(r"^(\d{2,3}[A-Za-z]|\d{2,3}/\d{2,3}[A-Za-z]|\d{1,2}PR|XL|FR|RWL|LT)$", re.I)
+# Tokens técnicos que ficam só na descrição: índice de carga/velocidade
+# ("81T", "112A8", "143/141", "106/104R"), lonas ("8PR", "8L"), construção
+# ("XL", "FR", "TL", "SL", "LT") e letra da lateral ("OWL", "RWL", "WL" — letra
+# branca/contornada, não é marca).
+TECH = re.compile(
+    r"^(\d{2,3}[A-Za-z]\d?|\d{2,3}/\d{2,3}[A-Za-z]?|\d{1,2}PR|\d{1,2}L|XL|FR|TL|SL|LT|RWL|OWL|WL|-)$", re.I)
+
+# Palavras que acompanham a marca e não são modelo ("JK TIRE").
+BRAND_FILLER = {"TIRE", "TYRE"}
 
 def fnum(v):
     return int(v) if float(v).is_integer() else round(v, 2)
@@ -167,14 +221,32 @@ def classify(desc):
     if d.startswith("CAMARA DE AR"): return "CAMARA"
     if d.startswith("PROTETOR"): return "PROTETOR"
     if d.startswith("RODA"): return "RODA"
+    if d.startswith("VALVULA"): return "VALVULA"
+    if d.startswith("LONA"): return "LONA"
     return "PNEU"
 
+# Ordem importa: do padrão mais específico para o mais genérico.
 SIZE_RX = [
+    # 165/70 R14 · 225/45 ZR17 · 215/75 R17.5 · 195/70 R15C
     (re.compile(r"\b(\d{3}/\d{2})\s+(Z?R)\s?(\d{2}(?:\.\d)?C?)\b", re.I), lambda m: f"{m[1]} {m[2].upper()}{m[3].upper()}"),
-    (re.compile(r"\b(\d{3})\s+R(\d{2}C)\b", re.I), lambda m: f"{m[1]} R{m[2].upper()}"),
+    # 195 R14C · 195 R14
+    (re.compile(r"\b(\d{3})\s+R(\d{2}C?)\b", re.I), lambda m: f"{m[1]} R{m[2].upper()}"),
+    # 31X10.50 R15LT (polegada)
+    (re.compile(r"\b(\d{2})X(\d{1,2}\.\d{2})\s+R(\d{2})(LT)?\b", re.I), lambda m: f"{m[1]}X{m[2]} R{m[3]}{(m[4] or '').upper()}"),
+    # 24X10-11 · 24X8.00 - 12 (quadriciclo)
     (re.compile(r"\b(\d{2})X(\d+(?:\.\d+)?)\s*-\s*(\d{2})\b", re.I), lambda m: f"{m[1]}X{m[2]}-{m[3]}"),
+    # 12.5/80-18 (agrícola)
+    (re.compile(r"\b(\d{1,2}\.\d)/(\d{2})-(\d{2})\b"), lambda m: f"{m[1]}/{m[2]}-{m[3]}"),
+    # 12.4-24 · 18.4-30 · 7.00-12 · 8.25-15 · 9.5-24 · 17.5 - 25
+    (re.compile(r"\b(\d{1,2}\.\d{1,2})\s*-\s*(\d{1,2}(?:\.\d)?)\b"), lambda m: f"{m[1]}-{m[2]}"),
+    # 1000-20 · 1400 - 24 · 14-17.5 · 750-16LT
+    (re.compile(r"\b(\d{2,4})\s*-\s*(\d{2}(?:\.\d)?)(LT)?\b", re.I), lambda m: f"{m[1]}-{m[2]}{(m[3] or '').upper()}"),
+    # 7.50 X 16 · 700 X 15
+    (re.compile(r"\b(\d{1,4}(?:\.\d{2})?)\s+X\s+(\d{2})\b", re.I), lambda m: f"{m[1]}-{m[2]}"),
+    # 1300 24
     (re.compile(r"^(\d{4})\s+(\d{2})\b"), lambda m: f"{m[1]} {m[2]}"),
-    (re.compile(r"\b(\d{3,4}/\d{2})\b"), lambda m: m[1]),
+    # 750/16 · 900/20 · 1000/20 · 600/9
+    (re.compile(r"\b(\d{3,4}/\d{1,2})\b"), lambda m: m[1]),
 ]
 
 def extract_size(text):
@@ -186,42 +258,92 @@ def extract_size(text):
 
 def split_tire(desc, flags):
     size, rest = extract_size(desc)
-    words = [TYPOS.get(w.upper(), w) for w in rest.split()]
-    # Truncamento no fim da descrição: "(9" solto, "C30 Z" / "C30 ZMA" (Zmax).
+    # Medida repetida pelo ERP ("215/75 R17.5 R17.5 TRA…"): some só a palavra
+    # IGUAL ao aro já extraído — "R26" do Bridgestone é nome de modelo e fica.
+    rim = re.search(r"R(\d{2}(?:\.\d)?)C?$", size)
+    dup_rim = f"R{rim.group(1)}" if rim else None
+    words = []
+    for w in rest.split():
+        if dup_rim and w.upper() == dup_rim:
+            continue
+        # "85VEVOXX": índice de velocidade grudado na marca.
+        g = re.fullmatch(r"(\d{2,3}[A-Z])([A-Z]{3,})", w, re.I)
+        words.extend([g[1], g[2]] if g else [TYPOS.get(w.upper(), w)])
+
+    # Truncamento no fim da descrição: "(9" solto, "C30 Z" / "C30 ZMA" (Zmax),
+    # "A/T COM" (Comforser), "A/T C" / "M/T C".
     if words and re.fullmatch(r"\(\d*", words[-1]):
         words.pop(); flags.append("descrição cortada pelo ERP")
     if len(words) >= 2 and words[-2].upper() == "C30" and words[-1].upper() in ("Z", "ZMA"):
         words[-1] = "ZMAX"; flags.append("descrição cortada pelo ERP")
     if words and words[-1].upper() == "COM" and "A/T" in [w.upper() for w in words]:
         words[-1] = "COMFORSER"; flags.append("descrição cortada pelo ERP")
-    if any(w.upper() in ("MAXTRE", "XBR", "XB", "AUTOGREE") for w in words):
+    if len(words) >= 2 and words[-1].upper() == "C" and words[-2].upper() in ("A/T", "M/T"):
+        words.pop(); flags.append("descrição cortada pelo ERP")
+    if any(w.upper() in ("MAXTRE", "XBR", "XB", "AUTOGREE", "COMFORSE", "GRIPMASTE") for w in words):
         flags.append("descrição cortada pelo ERP")
 
     upper = [w.upper() for w in words]
+    joined = " ".join(upper)
     brand = ""
-    # Marcas de duas palavras / separadas.
-    if "LING" in upper and "LONG" in upper:
-        brand = "LINGLONG"; words = [w for w in words if w.upper() not in ("LING", "LONG")]
-    elif "BLACK" in upper and "ARROW" in upper:
-        brand = "BLACKARROW"; words = [w for w in words if w.upper() not in ("BLACK", "ARROW")]
-    else:
+
+    # 1. Linha que manda na marca (Altimax/Grabber → General Tire).
+    for rx, canon, drop in PRIORITY_IMPLIES:
+        if re.search(rx, joined):
+            brand = canon
+            words = [w for w in words if w.upper() not in drop]
+            break
+
+    # 2. Palavras grudadas da Continental.
+    if not brand:
+        for i, w in enumerate(words):
+            g = GLUED_CONTI.match(w)
+            if g:
+                brand = "CONTINENTAL"
+                words[i] = w[g.start(1):].upper()
+                break
+
+    # 3. Marcas de duas palavras.
+    if not brand:
+        up = [w.upper() for w in words]
+        for a, b, canon in TWO_WORD:
+            if a in up and b in up and up.index(b) == up.index(a) + 1:
+                brand = canon
+                i = up.index(a)
+                words = words[:i] + words[i + 2:]
+                break
+        else:
+            if "BLACK" in up and "ARROW" in up:
+                brand = "BLACKARROW"
+                words = [w for w in words if w.upper() not in ("BLACK", "ARROW")]
+
+    # 4. Palavra de marca do dicionário.
+    if not brand:
         for i, w in enumerate(words):
             canon = ALIAS.get(w.upper())
             if canon:
                 brand = canon
+                if w.upper() == "SPM":
+                    flags.append("marca pela abreviação SPM (Speedmax) — conferir")
                 words = words[:i] + words[i + 1:]
                 break
+
+    # 5. Linha de pneu que denuncia a marca.
     if not brand:
-        joined = " ".join(words).upper()
+        joined = " ".join(w.upper() for w in words)
         for rx, canon in MODEL_IMPLIES:
             if re.search(rx, joined):
                 brand = canon; flags.append(f"marca deduzida pela linha do pneu ({canon})")
                 break
+
+    if brand in UNSURE:
+        flags.append(f"marca provável ({brand}) — conferir")
+
     # SAJPN marca pneu vindo da loja SAJ — não é modelo.
     if any(w.upper() == "SAJPN" for w in words):
         words = [w for w in words if w.upper() != "SAJPN"]; flags.append("veio da SAJ (etiqueta SAJPN)")
 
-    model_words = [w for w in words if not TECH.match(w)]
+    model_words = [w for w in words if not TECH.match(w) and w.upper() not in BRAND_FILLER]
     model = " ".join(model_words).upper().strip()
     if not brand:
         if model_words:
@@ -234,20 +356,61 @@ def split_other(desc, category, flags):
     d = desc.upper().strip()
     if category == "CAMARA":
         rest = d[len("CAMARA DE AR"):].strip()
-        m = re.search(r"(\d{1,2}(?:\.\d)?-\d{2})\s*$", rest) or \
-            re.search(r"(\d{3}/\d{2}\s*R\s?\d{2}(?:\.\d)?)", rest) or \
-            re.search(r"(\d{1,4}(?:\.\d)?(?:/\d{2,3})?(?:\s*-\s*\d{2})?(?:X\d{2})?)", rest)
-        size = re.sub(r"\s+", "", m.group(1)).replace("R", " R") if m else ""
-        model = (rest[:m.start()] + " " + rest[m.end():]).strip() if m else rest
-        return size, "CAMARA DE AR", re.sub(r"\s+", " ", model).replace("- ", "").strip(" -")
+        # Da mais específica para a mais genérica. A versão anterior aceitava
+        # só uma casa decimal: "10.00 - 20" virava medida "10.0" e "0 20" ia
+        # parar no modelo.
+        cam_rx = [
+            (r"(\d{1,2}\.\d)/(\d{2})\s*-\s*(\d{2})", lambda m: f"{m[1]}/{m[2]}-{m[3]}"),      # 12.5/80 - 18
+            (r"(\d{3}/\d{2})\s*R\s?(\d{2}(?:\.\d)?)", lambda m: f"{m[1]} R{m[2]}"),           # 275/80 R22.5
+            (r"(\d{1,2}\.\d{1,2})\s*R\s?(\d{2})", lambda m: f"{m[1]} R{m[2]}"),                # 11.00 R22
+            (r"(\d{1,2}\.\d{1,2})\s*-\s*(\d{1,2}(?:\.\d)?)", lambda m: f"{m[1]}-{m[2]}"),      # 10.00 - 20 · 9.5-24
+            (r"(\d{3,4})\s*X\s*(\d{2})", lambda m: f"{m[1]}X{m[2]}"),                          # 1100X22
+            (r"(\d{3,4})\s*-\s*(\d{2})", lambda m: f"{m[1]}-{m[2]}"),                          # 750 - 18
+            (r"(\d{1,2}\.\d)/(\d{2})", lambda m: f"{m[1]}/{m[2]}"),                            # 14.9/24
+            (r"(\d{3,4}/\d{2})", lambda m: m[1]),                                              # 750/16
+        ]
+        size, model = "", rest
+        for rx, fmt in cam_rx:
+            m = re.search(rx, rest)
+            if m:
+                size = fmt(m)
+                model = (rest[:m.start()] + " " + rest[m.end():]).strip()
+                break
+        return size, "CAMARA DE AR", re.sub(r"\s+", " ", model).strip(" -")
     if category == "PROTETOR":
-        m = re.search(r"(?:ARO\s*|R)(\d{1,2})", d)
-        return (f"ARO {m.group(1)}" if m else ""), "PROTETOR", ""
-    # RODA
-    m = re.search(r"(\d{3}/\d{2}\.\d)", d) or re.search(r"RODA\s+(\d{3})\b", d)
-    size = m.group(1) if m else ""
+        # O resto da descrição vira modelo: três "PROTETOR ARO 25" diferentes
+        # (ECOBOR RADIAL, 520MM, 430mm) não podem ficar idênticos no catálogo.
+        m = re.search(r"ARO\s*(\d{1,2}(?:\.\d)?)(?:\s*-\s*(\d{2}))?", d)
+        if m:
+            aro = str(int(m.group(1))) if m.group(1).isdigit() else m.group(1)
+            size = f"ARO {aro}-{m.group(2)}" if m.group(2) else f"ARO {aro}"
+        else:
+            m = re.search(r"\bR(\d{1,2})\b", d)
+            size = f"ARO {int(m.group(1))}" if m else ""
+        model = (d[:m.start()] + " " + d[m.end():]) if m else d
+        model = model.replace("PROTETOR", "", 1)
+        return size, "PROTETOR", re.sub(r"\s+", " ", model).strip()
+    if category in ("VALVULA", "LONA"):
+        return "", category, d[len(category):].strip()
+    # RODA: "275/22.5", "ARO 17.5", "RODA 275 10 FUROS", "RODA RAIADA 295".
+    m = re.search(r"(\d{3}/\d{2}\.\d)", d)
+    if m:
+        size = m.group(1)
+    else:
+        m = re.search(r"ARO\s*(\d{2}(?:\.\d)?)", d)
+        if m:
+            size = f"ARO {m.group(1)}"
+        else:
+            m = re.search(r"\b(\d{2}\.\d)\b(?!\d)", d)
+            if m:
+                size = f"ARO {m.group(1)}"                          # "SPEEDMAX 17.5 6 FUROS"
+            else:
+                m = re.search(r"\b(\d{3})\b(?=\s+\d{1,2}\s*(?:F\b|FUROS))", d) or \
+                    re.search(r"RODA\s+(\d{3})\b", d) or re.search(r"\b(\d{3})\s*$", d)
+                size = m.group(1) if m else ""
     model = d.replace("RODA", "", 1)
-    if m: model = model.replace(m.group(1), "", 1)
+    if m:
+        model = model.replace(m.group(0) if m.group(0).startswith("ARO") else m.group(1), "", 1)
     return size, "RODA", re.sub(r"\s+", " ", model).strip()
 
 items, report = [], []
@@ -259,7 +422,10 @@ for r in rows:
         size, brand, model = split_tire(desc, flags)
     else:
         size, brand, model = split_other(desc, cat, flags)
-    if r["referencia"]:
+    # Referência só é anomalia quando tem cara de preço ("910,00"). Um código
+    # de fornecedor ("1000836") é dado de verdade e vai para as observações.
+    ref_is_price = bool(r["referencia"]) and bool(re.fullmatch(r"[\d.]+,\d{2}", r["referencia"]))
+    if ref_is_price:
         flags.append(f"campo Referência do ERP com \"{r['referencia']}\" (parece preço digitado no lugar errado)")
     if r["varejo"] == 0 and r["atacado"] == 0:
         flags.append("SEM PREÇO no ERP — vai aparecer sem valor no catálogo")
@@ -279,7 +445,8 @@ for r in rows:
         "priceInstallment": fnum(inst),
         "price": fnum(cash),
         "costPrice": 0,
-        "notes": f"Estoque {STORE} — relatório Time Sistemas de {report_date}. Código no ERP: {r['codigo']}",
+        "notes": f"Estoque {STORE} — relatório Time Sistemas de {report_date}. Código no ERP: {r['codigo']}"
+                 + (f". Referência: {r['referencia']}" if r["referencia"] and not ref_is_price else ""),
         "description": desc
     })
     report.append({"codigo": r["codigo"], "cat": cat, "size": size, "brand": brand, "model": model, "flags": flags, "desc": desc, "qty": int(r["saldo"]), "cash": cash, "inst": inst})
@@ -291,7 +458,8 @@ cats = Counter(x["cat"] for x in report)
 units = Counter()
 for x in report: units[x["cat"]] += x["qty"]
 print("== CATEGORIAS ==")
-for c in ("PNEU", "CAMARA", "PROTETOR", "RODA"):
+for c in ("PNEU", "CAMARA", "PROTETOR", "RODA", "VALVULA", "LONA"):
+    if not cats[c]: continue
     print(f"  {c:<9} {cats[c]:>3} produtos  {units[c]:>3} un")
 print(f"  total     {len(report):>3} produtos  {sum(units.values()):>3} un")
 
