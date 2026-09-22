@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useRef, useMemo } from "react";
 import { StockItem, Company, UserRole, StockFlowPayload, StockFlowResult, StockExitOrigin, RestoreResult } from "../types";
 import { availableQuantity, formatBRL, matchesTireSize, parsePriceInput, reservedQuantityOf } from "../utils";
 import sajEstoqueData from "../saj_estoque.json";
@@ -188,146 +188,110 @@ export default function StockTable({
 
   const [isInjecting, setIsInjecting] = useState(false);
 
-  const handleInjectSajEstoque = async () => {
-    if (!window.confirm("ATENÇÃO: Deseja injetar todo o estoque da SAJ Pneus no banco de dados agora? Isso pode demorar alguns segundos.")) return;
+  // ── Carga do estoque de uma loja a partir do JSON embutido ─────────
+  //
+  // ANTES eram quatro funções quase idênticas (SAJ, Autocar, Valença, Central
+  // Autocenter), e todas cadastravam o arquivo INTEIRO a cada clique. Um clique
+  // duplo, ou uma queda de rede no meio seguida de nova tentativa, dobrava o
+  // estoque da loja — os duplicados nasciam com ids próprios e pareciam
+  // produtos legítimos. É o mesmo defeito que a restauração de backup tinha.
+  //
+  // AGORA é uma função só e ela é IDEMPOTENTE: todo código (sku) que já existe
+  // naquela loja é pulado. Clicar de novo depois de uma carga completa não faz
+  // nada; clicar de novo depois de uma carga interrompida termina só o que
+  // faltou. Antes de gravar, mostra quantos produtos e unidades vão entrar.
+  //
+  // O ref segura o clique duplo: as duas chamadas aconteceriam antes de o
+  // estado `isInjecting` re-renderizar o botão como desabilitado.
+  const injectingRef = useRef(false);
+
+  const injectStoreStock = async (
+    label: string,
+    matchesCompany: (upperName: string) => boolean,
+    data: any[]
+  ) => {
+    if (injectingRef.current) return;
+
+    const company = companies.find(c => matchesCompany(c.name.toUpperCase()));
+    if (!company) {
+      alert(
+        `Não encontrei a empresa ${label} no cadastro. Crie a empresa primeiro (coluna nova no ` +
+        `Estoque Unificado) — sem ela, os pneus iriam para a empresa errada.`
+      );
+      return;
+    }
+
+    const existing = new Set(
+      items
+        .filter(i => i.companyId === company.id)
+        .map(i => String(i.sku || "").trim().toUpperCase())
+    );
+    const toAdd = data.filter(d => !existing.has(String(d.sku || "").trim().toUpperCase()));
+    const skipped = data.length - toAdd.length;
+    const units = toAdd.reduce((acc, d) => acc + (Number(d.quantity) || 0), 0);
+
+    if (toAdd.length === 0) {
+      alert(
+        `Nada a carregar: os ${data.length} produtos do arquivo de ${company.name} já estão no ` +
+        `estoque. (Nenhum produto foi repetido.)`
+      );
+      return;
+    }
+
+    const ok = window.confirm(
+      `Carregar o estoque de ${company.name}?\n\n` +
+      `• ${toAdd.length} produto(s) novos, ${units} unidades, serão cadastrados.\n` +
+      (skipped > 0 ? `• ${skipped} produto(s) já existem nesta loja e serão ignorados.\n` : "") +
+      `\nPode clicar de novo sem medo: o que já foi cadastrado não é repetido.`
+    );
+    if (!ok) return;
+
+    injectingRef.current = true;
     setIsInjecting(true);
-    let successCount = 0;
+    let done = 0;
     try {
-      // Find SAJ company ID
-      const sajCompany = companies.find(c => c.name.toUpperCase().includes("SAJ PNEUS") || c.name.toUpperCase().includes("SAJ"));
-      const cid = sajCompany ? sajCompany.id : (user.companyId || "");
-      const cname = sajCompany ? sajCompany.name : (user.companyName || "");
-      
-      for (const item of sajEstoqueData) {
+      for (const item of toAdd) {
         await onAddItem({
           sku: item.sku,
           brand: item.brand,
           model: item.model,
           size: item.size,
-          quantity: item.quantity,
-          price: item.price,
-          priceCash: item.priceCash,
-          priceInstallment: item.priceInstallment,
-          notes: item.notes,
-          description: item.description,
+          quantity: Number(item.quantity) || 0,
+          price: Number(item.price) || 0,
+          priceCash: Number(item.priceCash ?? item.price) || 0,
+          priceInstallment: Number(item.priceInstallment ?? item.price) || 0,
+          costPrice: Number(item.costPrice) || 0,
+          notes: item.notes || "",
+          description: item.description || "",
           imageUrl: "",
-          companyId: cid,
-          companyName: cname
+          companyId: company.id,
+          companyName: company.name
         });
-        successCount++;
+        done++;
       }
-      alert(`Sucesso! ${successCount} itens foram injetados com perfeição.`);
+      alert(`Pronto: ${done} produto(s) de ${company.name} cadastrados, ${units} unidades.`);
     } catch (err: any) {
-      alert("Erro ao injetar: " + err.message);
+      alert(
+        `A carga parou no produto ${done + 1} de ${toAdd.length}: ${err?.message || err}\n\n` +
+        `Os ${done} já cadastrados ficaram. Clique de novo para terminar — só o que faltou será enviado.`
+      );
     } finally {
+      injectingRef.current = false;
       setIsInjecting(false);
     }
   };
 
-  const handleInjectAutocarEstoque = async () => {
-    if (!window.confirm("ATENÇÃO: Deseja injetar todo o estoque da Autocar no banco de dados agora? Isso pode demorar alguns segundos.")) return;
-    setIsInjecting(true);
-    let successCount = 0;
-    try {
-      const autocarCompany = companies.find(c => c.name.toUpperCase().includes("AUTOCAR"));
-      const cid = autocarCompany ? autocarCompany.id : (user.companyId || "");
-      const cname = autocarCompany ? autocarCompany.name : (user.companyName || "");
-      
-      for (const item of autocarEstoqueData) {
-        await onAddItem({
-          sku: item.sku,
-          brand: item.brand,
-          model: item.model,
-          size: item.size,
-          quantity: item.quantity,
-          price: item.price,
-          priceCash: item.priceCash,
-          priceInstallment: item.priceInstallment,
-          notes: item.notes,
-          description: item.description,
-          imageUrl: "",
-          companyId: cid,
-          companyName: cname
-        });
-        successCount++;
-      }
-      alert(`Sucesso! ${successCount} itens foram injetados com perfeição.`);
-    } catch (err: any) {
-      alert("Erro ao injetar: " + err.message);
-    } finally {
-      setIsInjecting(false);
-    }
-  };
+  const handleInjectSajEstoque = () =>
+    injectStoreStock("SAJ", n => n.includes("SAJ"), sajEstoqueData as any[]);
 
-  const handleInjectValencaEstoque = async () => {
-    if (!window.confirm("ATENÇÃO: Deseja injetar todo o estoque da Valença no banco de dados agora? Isso pode demorar alguns segundos.")) return;
-    setIsInjecting(true);
-    let successCount = 0;
-    try {
-      const valencaCompany = companies.find(c => c.name.toUpperCase().includes("VALENÇA") || c.name.toUpperCase().includes("VALENCA"));
-      const cid = valencaCompany ? valencaCompany.id : (user.companyId || "");
-      const cname = valencaCompany ? valencaCompany.name : (user.companyName || "");
-      
-      for (const item of valencaEstoqueData) {
-        await onAddItem({
-          sku: item.sku,
-          brand: item.brand,
-          model: item.model,
-          size: item.size,
-          quantity: item.quantity,
-          price: item.price,
-          priceCash: item.priceCash,
-          priceInstallment: item.priceInstallment,
-          notes: item.notes,
-          description: item.description,
-          imageUrl: "",
-          companyId: cid,
-          companyName: cname
-        });
-        successCount++;
-      }
-      alert(`Sucesso! ${successCount} itens foram injetados com perfeição.`);
-    } catch (err: any) {
-      alert("Erro ao injetar: " + err.message);
-    } finally {
-      setIsInjecting(false);
-    }
-  };
+  const handleInjectAutocarEstoque = () =>
+    injectStoreStock("Central Autocar", n => n.includes("AUTOCAR"), autocarEstoqueData as any[]);
 
-  const handleInjectCentralAutocenterEstoque = async () => {
-    if (!window.confirm("ATENÇÃO: Deseja injetar todo o estoque da Central Autocenter no banco de dados agora? Isso pode demorar alguns segundos.")) return;
-    setIsInjecting(true);
-    let successCount = 0;
-    try {
-      const centralAutocenterCompany = companies.find(c => c.name.toUpperCase().includes("CENTRAL AUTOCENTER") || c.name.toUpperCase().includes("AUTOCENTER"));
-      const cid = centralAutocenterCompany ? centralAutocenterCompany.id : (user.companyId || "");
-      const cname = centralAutocenterCompany ? centralAutocenterCompany.name : (user.companyName || "");
+  const handleInjectValencaEstoque = () =>
+    injectStoreStock("Valença", n => n.includes("VALENÇA") || n.includes("VALENCA"), valencaEstoqueData as any[]);
 
-      for (const item of centralAutocenterEstoqueData) {
-        await onAddItem({
-          sku: item.sku,
-          brand: item.brand,
-          model: item.model,
-          size: item.size,
-          quantity: item.quantity,
-          price: item.price,
-          priceCash: item.priceCash,
-          priceInstallment: item.priceInstallment,
-          notes: item.notes,
-          description: item.description,
-          imageUrl: "",
-          companyId: cid,
-          companyName: cname
-        });
-        successCount++;
-      }
-      alert(`Sucesso! ${successCount} itens foram injetados com perfeição.`);
-    } catch (err: any) {
-      alert("Erro ao injetar: " + err.message);
-    } finally {
-      setIsInjecting(false);
-    }
-  };
+  const handleInjectCentralAutocenterEstoque = () =>
+    injectStoreStock("Central Autocenter", n => n.includes("AUTOCENTER"), centralAutocenterEstoqueData as any[]);
 
   // Helper to open print window for thermal receipt
   const handlePrintReceipt = (receipt: any) => {
