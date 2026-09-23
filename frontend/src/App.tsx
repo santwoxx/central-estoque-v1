@@ -39,6 +39,7 @@ import {
   getDoc,
   getDocFromServer,
   getDocs,
+  setDoc,
   runTransaction,
   serverTimestamp,
   writeBatch,
@@ -53,6 +54,7 @@ import {
   UserRole,
   Company,
   TransferOrder,
+  SaleDetails,
   AppNotification,
   StockFlowPayload,
   StockFlowResult,
@@ -285,6 +287,59 @@ async function resolveSessionProfile(firebaseUser: {
       if (cached.exists()) profile = cached.data();
     } catch {
       profile = null;
+    }
+  }
+
+  // ── A credencial manda; users/{uid} e so a copia que o servidor le ──
+  //
+  // O papel e a empresa da sessao vivem em users/{uid} — e e esse documento que
+  // as regras do Firestore consultam para decidir TUDO (isAdmin, isAlimentador,
+  // isVendedor). Mas quem muda o acesso de alguem nao mexe nele: mexe na
+  // credencial, em custom_credentials. E users/{uid} so era reescrito no login.
+  //
+  // O resultado era uma promocao que nao valia: "coloquei fulano como admin",
+  // fulano continuava logado, a tela dele continuava mostrando os botoes da
+  // loja antiga e o banco recusava a gravacao com "sem permissao" — porque para
+  // o servidor ele ainda era o dono de uma loja so. A unica saida era sair e
+  // entrar de novo, e ninguem adivinha isso olhando o erro.
+  //
+  // Agora toda abertura de sessao reconfere a credencial e reescreve o perfil
+  // quando ele ficou para tras. As regras aceitam essa reescrita justamente
+  // porque ela copia a credencial (users/{uid}: role e companyId tem que ser
+  // identicos aos da credencial apontada por credentialId).
+  const credentialId = String(profile?.credentialId || "");
+  if (credentialId) {
+    try {
+      const credSnap = await getDocFromServer(doc(db, "custom_credentials", credentialId));
+      if (credSnap.exists()) {
+        const cred: any = credSnap.data();
+        const fromCred = {
+          role: cred.role || "user",
+          displayName: cred.displayName || profile.displayName || "",
+          companyId: cred.companyId || "",
+          companyName: cred.companyName || ""
+        };
+        const changed =
+          fromCred.role !== (profile.role || "") ||
+          fromCred.companyId !== (profile.companyId || "") ||
+          fromCred.companyName !== (profile.companyName || "") ||
+          fromCred.displayName !== (profile.displayName || "");
+
+        if (changed) {
+          const synced = { ...profile, ...fromCred, credentialId, updatedAt: new Date() };
+          await setDoc(doc(db, "users", firebaseUser.uid), synced);
+          profile = synced;
+          console.log(
+            `Acesso atualizado pela credencial: ${fromCred.role} • ` +
+            `${fromCred.companyName || "todas as empresas"}`
+          );
+        }
+      }
+    } catch (err) {
+      // Sem rede, credencial apagada ou regra recusando a copia: a sessao segue
+      // com o ultimo perfil validado. Isto aqui nunca pode derrubar o login —
+      // seria trocar um acesso desatualizado por acesso nenhum.
+      console.warn("Nao foi possivel reconferir a credencial da sessao:", err);
     }
   }
 
@@ -3118,10 +3173,20 @@ export default function App() {
   // Mensagem util no lugar do "Missing or insufficient permissions" seco.
   const describeTransferWriteError = (err: any, fallback: string) => {
     if (err?.code === "permission-denied") {
+      // Dizer COM O QUE o servidor está te vendo resolve quase todos os casos
+      // reais: quem teve a credencial promovida continua na sessão antiga até
+      // recarregar a página, e o erro sozinho não contava isso.
+      const papel =
+        user?.role === "admin" ? "ADMINISTRADOR" :
+        user?.role === "vendedor" ? "VENDEDOR" :
+        "DONO DA LOJA";
+      const loja = user?.companyName || (user?.companyId ? "" : "todas as empresas");
       return new Error(
-        "O banco recusou a operação por permissão. Só a empresa de ORIGEM (ou um administrador) " +
-        "pode aprovar, recusar ou mexer na reserva de um pedido. Se sua credencial mudou de empresa " +
-        "recentemente, saia e entre novamente no sistema."
+        `O banco recusou a operação por permissão. Sua sessão está valendo como ${papel}` +
+        (loja ? ` de ${loja}` : "") +
+        ". Só a empresa de ORIGEM (ou um administrador) pode aprovar, recusar ou mexer na reserva " +
+        "de um pedido. Se seu acesso foi alterado agora há pouco, recarregue a página (F5): o " +
+        "sistema reconfere sua credencial ao abrir."
       );
     }
     return new Error(err?.message || fallback);
@@ -3679,20 +3744,33 @@ export default function App() {
             );
           }
 
+          // Mesma trava da conclusão de venda: a saída só é aceita pelo servidor
+          // quando a reserva cai junto com a quantidade (exitWentThroughQueue,
+          // no firestore.rules). Um pedido cuja reserva se perdeu pelo caminho
+          // batia num "sem permissão" que não explicava nada.
+          if (wasReserved && currentReserved < item.quantity && user.role !== "admin") {
+            throw new Error(
+              `O estoque não está mais segurando ${item.quantity} un de ${item.sku} para este ` +
+              `pedido (preso hoje: ${currentReserved} un). Peça a um administrador para concluir ` +
+              `este despacho — ele consegue acertar o saldo preso.`
+            );
+          }
+
           stockDataToUpdate.push({
             ref: sourceStockRef,
             newQty,
             newReserved,
-            reservedChanged: newReserved !== currentReserved,
             item: item
           });
         }
 
         // --- ALL WRITES ---
         for (const updateData of stockDataToUpdate) {
+          // Vai sempre: é este campo que prova ao servidor que a saída consumiu
+          // uma reserva, e não um saldo editado à mão.
           transaction.update(updateData.ref, {
             quantity: updateData.newQty,
-            ...(updateData.reservedChanged ? { reservedQuantity: updateData.newReserved } : {}),
+            reservedQuantity: updateData.newReserved,
             updatedAt: serverTimestamp()
           });
 
@@ -3947,8 +4025,22 @@ export default function App() {
   // Não há dupla contagem: quem debita o saldo é só este passo — a criação da
   // reserva apenas prende o pneu, nunca baixa.
   // ─────────────────────────────────────────────────────────────────
-  const handleCompleteSale = async (transferId: string) => {
+  // `details` e o que a pessoa conferiu na tela de confirmacao: nome do cliente
+  // como sai na nota, CPF/CNPJ, numero da OS, placa e o preco realmente
+  // praticado. Tudo opcional — sem nada, a venda fecha exatamente como antes,
+  // com o que o vendedor digitou na reserva e o preco a vista do cadastro.
+  const handleCompleteSale = async (transferId: string, details?: SaleDetails) => {
     if (!user) return;
+
+    const clean = (v: any) => String(v ?? "").trim();
+    const typed = {
+      customerName: clean(details?.customerName),
+      customerDoc: clean(details?.customerDoc),
+      docNumber: clean(details?.docNumber),
+      vehiclePlate: clean(details?.vehiclePlate).toUpperCase(),
+      observation: clean(details?.observation),
+      unitPrices: details?.unitPrices || {}
+    };
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -3995,7 +4087,9 @@ export default function App() {
         // tiver sido liberada antes, a venda disputa o saldo livre como qualquer
         // outra saída — e pode legitimamente faltar pneu.
         const wasReserved = transferData.reservation?.active === true;
-        const customerName = (transferData.customerName || "").trim() || "Não informado";
+        const customerName =
+          typed.customerName || (transferData.customerName || "").trim() || "Não informado";
+        const observation = typed.observation || (transferData.reason || "").trim();
         const operationId = `VENDA-${transferId}`;
 
         // --- TODAS AS LEITURAS PRIMEIRO (exigência do Firestore) ---
@@ -4024,9 +4118,27 @@ export default function App() {
 
           const newQty = currentQty - qty;
           // A reserva DESTE pedido sai do contador; a de outros pedidos permanece.
-          const newReserved = wasReserved
-            ? Math.max(0, currentReserved - qty)
-            : currentReserved;
+          const reservedDrop = wasReserved ? Math.min(qty, currentReserved) : 0;
+          const newReserved = currentReserved - reservedDrop;
+
+          // A reserva tem que cair NA MESMA MEDIDA em que a quantidade cai. Essa
+          // trava e a prova, para o servidor, de que a baixa veio de um pedido —
+          // e nao de alguem editando o saldo a mao (exitWentThroughQueue, no
+          // firestore.rules). Quando o pedido diz "preso" mas o estoque nao esta
+          // segurando as unidades, os dois numeros se separaram em algum momento
+          // e esta baixa viraria uma saida sem fila: o banco recusa, e recusa
+          // com a mensagem seca de permissao, que nao explica nada. Dizer a
+          // verdade aqui, antes de tentar, custa uma linha.
+          //
+          // O administrador passa: ele e quem conserta esses casos, e a regra do
+          // servidor tambem o deixa passar.
+          if (reservedDrop < qty && user.role !== "admin") {
+            throw new Error(
+              `O estoque não está mais segurando ${qty} un de ${item.sku} para este pedido ` +
+              `(preso hoje: ${currentReserved} un). Dê esta saída pelo módulo de Entradas e Saídas — ` +
+              `ela passa pela fila de aprovação — e depois cancele esta reserva.`
+            );
+          }
 
           // Uma venda sem reserva própria não pode comer o que outro pedido já
           // prendeu — aquele saldo está prometido a outra filial ou cliente.
@@ -4037,12 +4149,20 @@ export default function App() {
             );
           }
 
+          // Preco praticado na venda: o que foi digitado na confirmacao vale
+          // mais do que a tabela. Sem digitacao (ou digitando zero), fica o
+          // preco a vista do cadastro, como sempre foi.
+          const typedPrice = Number(typed.unitPrices[String(item.sourceStockItemId)]);
+          const unitPrice =
+            Number.isFinite(typedPrice) && typedPrice > 0
+              ? typedPrice
+              : Number(sourceData.priceCash ?? sourceData.price ?? 0) || 0;
+
           stockDataToUpdate.push({
             ref: sourceStockRef,
             newQty,
             newReserved,
-            reservedChanged: newReserved !== currentReserved,
-            unitPrice: Number(sourceData.priceCash ?? sourceData.price ?? 0) || 0,
+            unitPrice,
             item
           });
         }
@@ -4051,9 +4171,13 @@ export default function App() {
         for (const updateData of stockDataToUpdate) {
           const qty = Number(updateData.item.quantity) || 0;
 
+          // `reservedQuantity` vai SEMPRE, mesmo quando o valor nao muda: e ele
+          // que prova ao servidor que esta baixa consumiu uma reserva (ver a
+          // conferencia de lockstep acima). Omitir o campo quando nao mudava
+          // fazia a gravacao chegar ao banco com a cara de uma baixa solta.
           transaction.update(updateData.ref, {
             quantity: updateData.newQty,
-            ...(updateData.reservedChanged ? { reservedQuantity: updateData.newReserved } : {}),
+            reservedQuantity: updateData.newReserved,
             updatedAt: serverTimestamp()
           });
 
@@ -4080,18 +4204,51 @@ export default function App() {
             stockItemId: updateData.item.sourceStockItemId,
             operationId,
             operationReason: "Venda",
-            docNumber: "",
+            docNumber: typed.docNumber,
             partyName: customerName,
-            partyDoc: "",
-            vehiclePlate: "",
-            observation: (transferData.reason || "").trim(),
+            partyDoc: typed.customerDoc,
+            vehiclePlate: typed.vehiclePlate,
+            observation,
             unitPrice: updateData.unitPrice,
             totalAmount: updateData.unitPrice * qty,
             transferId
           });
         }
 
+        // O que foi conferido na confirmação volta para o pedido, senão a aba
+        // Reservas continuaria mostrando o nome antigo depois de a venda ter
+        // saído certa no histórico. Grava SÓ o que mudou de fato: uma
+        // confirmação sem edição escreve exatamente os mesmos campos de antes —
+        // e por isso continua valendo mesmo nas regras publicadas hoje.
+        const typedAnything =
+          !!(typed.customerName || typed.customerDoc || typed.docNumber ||
+             typed.vehiclePlate || typed.observation) ||
+          Object.keys(typed.unitPrices).length > 0;
+
+        const saleEdits: any = {};
+        if (typed.customerName && typed.customerName !== (transferData.customerName || "").trim()) {
+          saleEdits.customerName = typed.customerName;
+        }
+        if (observation !== (transferData.reason || "").trim()) {
+          saleEdits.reason = observation;
+        }
+        if (typedAnything) {
+          const unitPrices: Record<string, number> = {};
+          for (const u of stockDataToUpdate) {
+            unitPrices[String(u.item.sourceStockItemId)] = u.unitPrice;
+          }
+          saleEdits.sale = {
+            customerName,
+            customerDoc: typed.customerDoc,
+            docNumber: typed.docNumber,
+            vehiclePlate: typed.vehiclePlate,
+            observation,
+            unitPrices
+          };
+        }
+
         transaction.update(transferRef, {
+          ...saleEdits,
           status: "CONCLUIDO",
           // A reserva vira saída real: fica registrada como encerrada,
           // preservando quem reservou e quando (auditoria não se apaga).

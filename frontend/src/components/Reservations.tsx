@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   Company,
+  SaleDetails,
   StockExitRequest,
   TransferOrder,
   UserRole,
@@ -66,7 +67,7 @@ interface ReservationsProps {
   companies: Company[];
   user: { uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string };
   // Confirma uma reserva da própria loja: dá a baixa e registra a venda.
-  onConfirmSale: (transferId: string) => Promise<void>;
+  onConfirmSale: (transferId: string, details?: SaleDetails) => Promise<void>;
   // Registra um dos dois avais de uma reserva vinda de outra filial.
   onApproveStep: (transferId: string, step: "SOURCE" | "ADMIN") => Promise<void>;
   onReject: (transferId: string, reason: string) => Promise<void>;
@@ -109,6 +110,17 @@ export default function Reservations({
   const [searchTerm, setSearchTerm] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
   const [processingId, setProcessingId] = useState("");
+
+  // Reserva em confirmação: o rascunho do que vai ser gravado na saída.
+  const [saleDraft, setSaleDraft] = useState<{
+    t: TransferOrder;
+    customerName: string;
+    customerDoc: string;
+    docNumber: string;
+    vehiclePlate: string;
+    observation: string;
+    unitPrices: Record<string, string>;
+  } | null>(null);
 
   const totalUnitsOf = (t: TransferOrder) =>
     (t.items || []).reduce((acc, i) => acc + (Number(i.quantity) || 0), 0);
@@ -255,18 +267,42 @@ export default function Reservations({
     }
   };
 
+  // Confirmar a venda deixou de ser um "tem certeza?". Quem reserva é o vendedor,
+  // no meio do atendimento, e quase sempre sem a OS aberta: o que ele digita é o
+  // primeiro nome do cliente e mais nada. Quem confirma é o dono, depois, com a
+  // OS na mão — e era justamente ele que não tinha onde corrigir. A saída nascia
+  // no histórico com o nome pela metade e sem documento nenhum.
   const handleConfirm = (t: TransferOrder) => {
-    const units = totalUnitsOf(t);
-    if (
-      !window.confirm(
-        `Confirmar a reserva de ${units} un para ${t.customerName || "o cliente"}?\n\n` +
-          `O pneu SAI do estoque de ${t.sourceCompanyName} agora e a venda fica registrada ` +
-          `em Entradas e Saídas no nome do cliente. Só confirme quando o pneu for entregue.`
-      )
-    ) {
-      return;
+    setSaleDraft({
+      t,
+      customerName: t.customerName || "",
+      customerDoc: "",
+      docNumber: "",
+      vehiclePlate: "",
+      observation: t.reason || "",
+      unitPrices: {}
+    });
+  };
+
+  const submitSale = () => {
+    if (!saleDraft) return;
+    const d = saleDraft;
+    const unitPrices: Record<string, number> = {};
+    for (const [id, raw] of Object.entries(d.unitPrices)) {
+      const n = Number(String(raw).replace(",", "."));
+      if (Number.isFinite(n) && n > 0) unitPrices[id] = n;
     }
-    run(t.id, () => onConfirmSale(t.id));
+    setSaleDraft(null);
+    run(d.t.id, () =>
+      onConfirmSale(d.t.id, {
+        customerName: d.customerName,
+        customerDoc: d.customerDoc,
+        docNumber: d.docNumber,
+        vehiclePlate: d.vehiclePlate,
+        observation: d.observation,
+        unitPrices
+      })
+    );
   };
 
   const handleApprove = (t: TransferOrder, step: "SOURCE" | "ADMIN") => {
@@ -860,6 +896,165 @@ export default function Reservations({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── Confirmação da venda ────────────────────────────────────
+          A última parada antes de o pneu sair do estoque. Tudo aqui é
+          opcional: em branco, vale o que o vendedor já tinha digitado e o
+          preço à vista do cadastro — que é exatamente o que o sistema fazia
+          antes desta tela existir. */}
+      {saleDraft && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setSaleDraft(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <ShoppingBag size={15} className="text-emerald-600" /> Confirmar venda e dar baixa
+                </h3>
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                  {totalUnitsOf(saleDraft.t)} un saem do estoque de {saleDraft.t.sourceCompanyName} agora.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSaleDraft(null)}
+                className="shrink-0 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+                  Cliente
+                </label>
+                <input
+                  autoFocus
+                  value={saleDraft.customerName}
+                  onChange={e => setSaleDraft({ ...saleDraft, customerName: e.target.value })}
+                  placeholder="Nome como sai na nota"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-[12px] font-bold outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+                    CPF / CNPJ
+                  </label>
+                  <input
+                    value={saleDraft.customerDoc}
+                    onChange={e => setSaleDraft({ ...saleDraft, customerDoc: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-[12px] font-bold outline-none focus:border-emerald-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+                    OS / Nº do pedido
+                  </label>
+                  <input
+                    value={saleDraft.docNumber}
+                    onChange={e => setSaleDraft({ ...saleDraft, docNumber: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-[12px] font-bold outline-none focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+                  Placa do veículo
+                </label>
+                <input
+                  value={saleDraft.vehiclePlate}
+                  onChange={e => setSaleDraft({ ...saleDraft, vehiclePlate: e.target.value.toUpperCase() })}
+                  placeholder="ABC1D23"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-[12px] font-bold uppercase outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              {/* Preço praticado. Em branco = preço à vista do cadastro. */}
+              <div className="space-y-2">
+                <span className="block text-[10px] font-black uppercase tracking-wider text-slate-500">
+                  Pneus e valor unitário
+                </span>
+                {(saleDraft.t.items || []).map(i => (
+                  <div
+                    key={i.sourceStockItemId}
+                    className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-black text-slate-800 truncate">
+                        {i.brand} {i.model}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-500 truncate">
+                        {i.size} • {i.sku} • {i.quantity} un
+                      </p>
+                    </div>
+                    <div className="shrink-0 flex items-center gap-1">
+                      <span className="text-[10px] font-black text-slate-400">R$</span>
+                      <input
+                        inputMode="decimal"
+                        value={saleDraft.unitPrices[i.sourceStockItemId] || ""}
+                        onChange={e =>
+                          setSaleDraft({
+                            ...saleDraft,
+                            unitPrices: { ...saleDraft.unitPrices, [i.sourceStockItemId]: e.target.value }
+                          })
+                        }
+                        placeholder="cadastro"
+                        className="w-24 px-2 py-1.5 rounded-lg border border-slate-200 text-[12px] font-bold text-right outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+                  Observação
+                </label>
+                <textarea
+                  rows={2}
+                  value={saleDraft.observation}
+                  onChange={e => setSaleDraft({ ...saleDraft, observation: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-[12px] font-bold outline-none focus:border-emerald-400 resize-none"
+                />
+              </div>
+
+              <p className="flex items-start gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+                <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                <span>
+                  Só confirme quando o pneu for entregue: a baixa é imediata e a venda entra no
+                  histórico de Entradas e Saídas em nome do cliente.
+                </span>
+              </p>
+            </div>
+
+            <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSaleDraft(null)}
+                className="px-4 py-2 rounded-xl text-[11px] font-black text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={submitSale}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-[11px] shadow-sm cursor-pointer"
+              >
+                <ShoppingBag size={13} /> Confirmar e dar baixa
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

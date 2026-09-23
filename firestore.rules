@@ -593,8 +593,14 @@ service cloud.firestore {
         ) &&
         (resource.data.status == 'PENDENTE' || resource.data.status == 'AGENDADO' || resource.data.status == 'SOLICITADO') &&
         request.resource.data.status == 'CONCLUIDO' &&
+        // 'customerName', 'reason' e 'sale' entram porque a confirmacao e o
+        // momento em que a venda ganha os dados de verdade: o vendedor reserva
+        // no balco, sem OS e as vezes so com o primeiro nome do cliente; quem
+        // fecha, com a nota na mao, corrige. O que ele conferiu fica no pedido
+        // ('sale') e no movimento de saida — os dois passam a contar a mesma
+        // historia. Nada disso mexe em quantidade, empresa ou item.
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'reservation', 'approvedByUid', 'approvedByName', 'approvedAt', 'sourceApprovedByUid', 'sourceApprovedByName', 'sourceApprovedAt', 'saleCompletedByUid', 'saleCompletedByName', 'saleCompletedAt', 'updatedAt'])
+          .hasOnly(['status', 'reservation', 'customerName', 'reason', 'sale', 'approvedByUid', 'approvedByName', 'approvedAt', 'sourceApprovedByUid', 'sourceApprovedByName', 'sourceApprovedAt', 'saleCompletedByUid', 'saleCompletedByName', 'saleCompletedAt', 'updatedAt'])
       );
 
       // Exclusao definitiva do registro.

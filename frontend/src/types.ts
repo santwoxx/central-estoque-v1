@@ -374,6 +374,26 @@ export interface TransferOrderItem {
   quantity: number; // immutable after creation
 }
 
+// Dados conferidos na CONFIRMACAO da venda de uma reserva de cliente.
+//
+// Quem reserva e o vendedor, no balcao, quase sempre com o cliente na frente e
+// sem a OS aberta ainda. Quem confirma e da a baixa e o dono da loja, depois —
+// e e nesse momento que existe numero de OS, placa do carro e o nome do cliente
+// como ele vai sair na nota. Antes, tudo isso ficava travado no que o vendedor
+// digitou: o historico de saidas nascia com "Cliente: Jo" e sem documento
+// nenhum, e nao havia onde corrigir.
+//
+// `unitPrices` e por item (chave = sourceStockItemId). Vazio ou ausente = usa o
+// preco a vista do cadastro do pneu, que e o que o sistema sempre fez.
+export interface SaleDetails {
+  customerName?: string;
+  customerDoc?: string;    // CPF / CNPJ
+  docNumber?: string;      // OS, pedido ou nota
+  vehiclePlate?: string;
+  observation?: string;
+  unitPrices?: Record<string, number>;
+}
+
 export interface TransferOrder {
   id: string;
 
@@ -417,6 +437,12 @@ export interface TransferOrder {
   // Reserva de cliente (destino CLIENTE_COMPANY_ID): nome do cliente informado
   // pelo vendedor. Vira o `partyName` do movimento de saida quando a venda fecha.
   customerName?: string;
+
+  // O que quem confirmou a venda conferiu/corrigiu na hora da baixa. O vendedor
+  // reserva no meio do atendimento e nem sempre tem a OS, a placa ou o nome
+  // completo do cliente; quem fecha, tem. Fica gravado no pedido para a nota
+  // bater com o historico depois.
+  sale?: SaleDetails | null;
 
   // Loja a que o vendedor esta vinculado no momento do pedido. Guardado no
   // documento porque a loja que recebe a solicitacao precisa saber se quem pediu
