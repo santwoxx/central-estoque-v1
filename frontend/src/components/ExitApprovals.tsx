@@ -128,6 +128,14 @@ export default function ExitApprovals({
 }: ExitApprovalsProps) {
   const [view, setView] = useState<ViewFilter>("PENDENTES");
   const [searchTerm, setSearchTerm] = useState("");
+  // Loja escolhida na fila. Quem administra mais de uma recebe os pedidos das
+  // quatro na mesma lista, e a pergunta de quem está decidindo quase sempre é
+  // sobre UMA loja: "o que a SAJ está pedindo agora". Sem isto, só dava para
+  // chegar lá digitando o nome da loja na busca.
+  const [companyFilter, setCompanyFilter] = useState("");
+  // Quem enxerga mais de uma loja: administrador, ou quem entrou sem loja
+  // vinculada. Para o dono de uma loja só, o seletor teria uma opção.
+  const seesAllCompanies = user.role === "admin" || !user.companyId;
   const [busyId, setBusyId] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState("");
   const [okMsg, setOkMsg] = useState("");
@@ -192,6 +200,10 @@ export default function ExitApprovals({
     let meusPendentes = 0;
     let aprovados = 0;
     exits.forEach(e => {
+      // Os números seguem a loja escolhida: eles são o resumo da fila que está
+      // logo abaixo, e um "Esperando você: 6" em cima de uma lista com 2 faria
+      // procurar os outros 4 para sempre.
+      if (companyFilter && e.companyId !== companyFilter) return;
       if (e.status === "PENDENTE") {
         if (canReviewStockExit(e, user)) {
           paraDecidir += 1;
@@ -202,11 +214,12 @@ export default function ExitApprovals({
       if (e.status === "APROVADO") aprovados += 1;
     });
     return { paraDecidir, unidades, meusPendentes, aprovados };
-  }, [exits, user]);
+  }, [exits, user, companyFilter]);
 
   const visible = useMemo(() => {
     const lower = searchTerm.trim().toLowerCase();
     return exits.filter(e => {
+      if (companyFilter && e.companyId !== companyFilter) return false;
       if (view === "PENDENTES" && e.status !== "PENDENTE") return false;
       if (view === "MEUS" && e.requestedByUid !== user.uid) return false;
       if (view === "DECIDIDOS" && e.status === "PENDENTE") return false;
@@ -233,7 +246,7 @@ export default function ExitApprovals({
           matchesTireSize(i.size, lower)
       );
     });
-  }, [exits, view, searchTerm, user.uid]);
+  }, [exits, view, searchTerm, user.uid, companyFilter]);
 
   const runApprove = async (exit: StockExitRequest) => {
     setBusyId(exit.id);
@@ -304,6 +317,21 @@ export default function ExitApprovals({
       </div>
 
       {/* ── Números ───────────────────────────────────────────────── */}
+      {companyFilter && (
+        <div className="flex items-center gap-2 -mb-2">
+          <Store size={13} className="text-gold-600 shrink-0" />
+          <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 truncate">
+            Números e fila de {companyName(companyFilter) || "uma loja"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setCompanyFilter("")}
+            className="text-[10px] font-black uppercase tracking-wider text-gold-700 hover:text-gold-900 underline cursor-pointer shrink-0"
+          >
+            ver todas
+          </button>
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           label="Esperando você"
@@ -343,7 +371,7 @@ export default function ExitApprovals({
 
       {/* ── Filtros ───────────────────────────────────────────────── */}
       <div className="bg-white border border-slate-200 rounded-2xl p-3 space-y-3">
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {(Object.keys(VIEW_LABELS) as ViewFilter[]).map(key => (
             <button
               key={key}
@@ -363,6 +391,27 @@ export default function ExitApprovals({
               )}
             </button>
           ))}
+
+          {/* Filtro de loja — só para quem administra mais de uma */}
+          {seesAllCompanies && companies.length > 0 && (
+            <select
+              value={companyFilter}
+              onChange={e => setCompanyFilter(e.target.value)}
+              title="Ver só os pedidos de uma loja"
+              className={`ml-auto rounded-lg border px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider outline-none cursor-pointer focus:ring-2 focus:ring-gold-500/20 focus:border-gold-500 transition-all ${
+                companyFilter
+                  ? "bg-gold-50 border-gold-300 text-gold-900"
+                  : "bg-white border-slate-200 text-slate-600"
+              }`}
+            >
+              <option value="">Todas as lojas</option>
+              {companies.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div className="flex items-center gap-2 border border-slate-200 rounded-xl px-3 py-2 focus-within:border-gold-500 focus-within:ring-2 focus-within:ring-gold-500/15 transition-all">
@@ -384,11 +433,14 @@ export default function ExitApprovals({
           <Hourglass size={26} className="text-slate-300 mx-auto mb-3" />
           <p className="text-xs font-black text-slate-600 uppercase tracking-wider">
             {view === "PENDENTES" ? "Nenhuma baixa esperando decisão" : "Nada por aqui"}
+            {companyFilter && ` em ${companyName(companyFilter)}`}
           </p>
           <p className="text-[11px] text-slate-400 font-bold mt-1">
-            {view === "PENDENTES"
-              ? "Quando alguém pedir uma saída, ela aparece aqui para você conferir."
-              : "Troque o filtro acima para ver outros pedidos."}
+            {companyFilter
+              ? "Pode haver pedidos de outras lojas — volte para 'Todas as lojas' para vê-los."
+              : view === "PENDENTES"
+                ? "Quando alguém pedir uma saída, ela aparece aqui para você conferir."
+                : "Troque o filtro acima para ver outros pedidos."}
           </p>
         </div>
       ) : (
