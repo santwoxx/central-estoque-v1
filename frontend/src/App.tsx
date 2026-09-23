@@ -5412,6 +5412,8 @@ export default function App() {
               stock={stock}
               movements={movements}
               movementsTruncated={movementsTruncated}
+              onLoadMore={() => setMovementsLimit(prev => prev + MOVEMENTS_STEP)}
+              loadingMore={loadingData}
               companies={companies}
               user={user}
               transfers={transfers}

@@ -50,6 +50,12 @@ interface StockFlowProps {
   // Precisa ser dito na tela: os numeros daqui sao os da JANELA, nao os do
   // historico inteiro.
   movementsTruncated?: boolean;
+  // Aumenta a janela carregada. Fica aqui porque o filtro de loja corta a
+  // janela ainda mais: escolher uma empresa mostra só a fatia dela dentro dos
+  // últimos movimentos de TODAS — sem poder pedir mais, o administrador via
+  // meia dúzia de linhas da loja e concluía que foi um dia parado.
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
   companies: Company[];
   user: { uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string };
   // Pedidos de transferência já assinados — usados só para conferir se cada um
@@ -101,6 +107,10 @@ interface FlowOperation {
   totalUnits: number;
   totalAmount: number;
   userEmail: string;
+  // A loja da operação. Uma operação nunca mistura lojas: cada movimento nasce
+  // com o companyId de quem mexeu no estoque, e o agrupamento é por operationId
+  // dentro da mesma loja. Guardado aqui para o filtro do histórico.
+  companyId: string;
   companyName: string;
   reason: string;
   docNumber: string;
@@ -118,9 +128,13 @@ interface FlowOperation {
   rebuilt: boolean;
 }
 
-export default function StockFlow({ stock, movements, movementsTruncated, companies, user, transfers = [], onRegister, onReverse, onSyncTransfers }: StockFlowProps) {
+export default function StockFlow({ stock, movements, movementsTruncated, onLoadMore, loadingMore, companies, user, transfers = [], onRegister, onReverse, onSyncTransfers }: StockFlowProps) {
   const isAdmin = user.role === "admin";
   const canOperate = isAdmin || user.role === "alimentador";
+  // Quem recebe o movimento de mais de uma loja (ver a consulta em App.tsx):
+  // o administrador e quem entrou sem loja vinculada. Para o dono de uma loja
+  // só, um seletor de empresa seria uma caixa com uma opção dentro.
+  const seesAllCompanies = isAdmin || !user.companyId;
 
   // ── Estado da operação em andamento (gaveta aberta) ──────────────
   const [mode, setMode] = useState<StockFlowType | null>(null);
@@ -148,6 +162,11 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
   const [histSearch, setHistSearch] = useState("");
   const [histType, setHistType] = useState<"ALL" | StockFlowType>("ALL");
   const [histPeriod, setHistPeriod] = useState<"TODAY" | "7D" | "30D" | "ALL">("7D");
+  // Loja escolhida no histórico. Só existe para quem enxerga mais de uma: o
+  // administrador carrega o movimento de TODAS as lojas, e sem este filtro a
+  // lista vinha com as quatro embaralhadas — dava para ler tudo, menos "o que
+  // saiu na Central Autocenter hoje", que é a pergunta que se faz todo dia.
+  const [histCompany, setHistCompany] = useState("");
   const [expandedKey, setExpandedKey] = useState("");
   const [reversingId, setReversingId] = useState("");
 
@@ -429,6 +448,7 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
           totalUnits: Math.abs(log.quantity),
           totalAmount: Number(log.totalAmount) || 0,
           userEmail: log.userEmail || "",
+          companyId: log.companyId || "",
           companyName: log.companyName || "",
           reason: log.operationReason || log.reason || "",
           docNumber: log.docNumber || "",
@@ -552,6 +572,7 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
 
     return operations.filter(op => {
       if (histType !== "ALL" && op.type !== histType) return false;
+      if (histCompany && op.companyId !== histCompany) return false;
       if (op.timestamp < periodStart) return false;
       if (!term) return true;
       return (
@@ -572,9 +593,13 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
         )
       );
     });
-  }, [operations, histSearch, histType, histPeriod]);
+  }, [operations, histSearch, histType, histPeriod, histCompany]);
 
-  // KPIs do dia (sempre "hoje", independente do filtro do histórico).
+  // KPIs do dia: sempre "hoje", independente do período, do tipo e da busca do
+  // histórico — esses filtros escolhem QUAIS LINHAS ver. O filtro de loja é de
+  // outra natureza: ele troca o assunto da tela inteira. Deixar o número do dia
+  // somando as quatro lojas enquanto a lista embaixo mostra uma só seria dois
+  // relatórios diferentes na mesma tela.
   const todayStats = useMemo(() => {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
@@ -587,6 +612,7 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
 
     operations.forEach(op => {
       if (op.timestamp < start) return;
+      if (histCompany && op.companyId !== histCompany) return;
       opsCount += 1;
       if (op.type === "ENTRADA") {
         entryUnits += op.totalUnits;
@@ -597,7 +623,7 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
     });
 
     return { entryUnits, exitUnits, exitValue, opsCount, net: entryUnits - exitUnits };
-  }, [operations]);
+  }, [operations, histCompany]);
 
   // ── Estorno (admin) ──────────────────────────────────────────────
   const handleReverse = async (op: FlowOperation) => {
@@ -665,7 +691,14 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
         { key: "companyName", label: "Empresa" },
         { key: "userEmail", label: "Operador" }
       ],
-      `Central_Stoque_Entradas_Saidas_${Date.now()}`
+      // A loja escolhida entra no nome do arquivo: quem baixa o histórico de
+      // três lojas seguidas fica com três arquivos e nenhum jeito de saber
+      // qual é qual depois.
+      `Central_Stoque_Entradas_Saidas${
+        histCompany
+          ? "_" + (companies.find(c => c.id === histCompany)?.name || "").replace(/[^\w]+/g, "_")
+          : ""
+      }_${Date.now()}`
     );
   };
 
@@ -940,6 +973,23 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
       </div>
 
       {/* ═══════════ INDICADORES DO DIA ═══════════ */}
+      {/* Com uma loja escolhida, os números do dia são dela — e a tela precisa
+          dizer isso, senão "-12 un" parece o total da rede. */}
+      {histCompany && (
+        <div className="flex items-center gap-2 -mb-2">
+          <Building2 size={13} className="text-gold-600 shrink-0" />
+          <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 truncate">
+            Números do dia e histórico de {companies.find(c => c.id === histCompany)?.name || "uma loja"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setHistCompany("")}
+            className="text-[10px] font-black uppercase tracking-wider text-gold-700 hover:text-gold-900 underline cursor-pointer shrink-0"
+          >
+            ver todas
+          </button>
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-4 rounded-2xl border-l-4 border-l-emerald-500 border-y border-r border-slate-200/80 shadow-xs flex items-center gap-3.5">
           <div className="h-10 w-10 shrink-0 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100/60 shadow-sm">
@@ -1054,9 +1104,20 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
             {movementsTruncated && (
               <span
                 className="px-2 py-0.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 text-[9px] font-black uppercase tracking-wider"
-                title="A lista mostra os movimentos mais recentes. Para ver mais para tras, use a aba Auditoria e Historico e carregue mais."
+                title={
+                  histCompany
+                    ? "A janela carregada é dos movimentos mais recentes de TODAS as lojas juntas — " +
+                      "o que você vê é a fatia desta loja dentro dela. Use 'Carregar mais' para puxar " +
+                      "mais histórico."
+                    : "A lista mostra os movimentos mais recentes. Use 'Carregar mais' para puxar mais histórico."
+                }
               >
                 Janela recente
+              </span>
+            )}
+            {histCompany && (
+              <span className="px-2 py-0.5 rounded-lg bg-gold-50 text-gold-800 border border-gold-300 text-[9px] font-black uppercase tracking-wider truncate max-w-[180px]">
+                {companies.find(c => c.id === histCompany)?.name || "Loja"}
               </span>
             )}
           </div>
@@ -1075,6 +1136,27 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* Filtro de loja — só para quem enxerga mais de uma */}
+            {seesAllCompanies && companies.length > 0 && (
+              <select
+                value={histCompany}
+                onChange={e => setHistCompany(e.target.value)}
+                title="Ver o histórico de uma loja específica"
+                className={`border rounded-xl px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-gold-500/20 focus:border-gold-500 font-bold text-[11px] cursor-pointer ${
+                  histCompany
+                    ? "bg-gold-50 border-gold-300 text-gold-900"
+                    : "bg-white border-slate-200 text-slate-900"
+                }`}
+              >
+                <option value="">Todas as empresas</option>
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            )}
+
             {/* Filtro de tipo */}
             <div className="flex items-center rounded-xl border border-slate-200 overflow-hidden divide-x divide-slate-200">
               {([
@@ -1113,6 +1195,19 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
               <option value="ALL">Todo o período</option>
             </select>
 
+            {movementsTruncated && onLoadMore && (
+              <button
+                type="button"
+                onClick={onLoadMore}
+                disabled={loadingMore}
+                title="Puxa mais movimentos do servidor para trás no tempo"
+                className="flex items-center gap-1.5 px-3 py-2 font-black text-[10px] uppercase tracking-wider rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40 transition-all cursor-pointer"
+              >
+                <History size={13} className="stroke-[2.5px]" />
+                {loadingMore ? "Carregando..." : "Carregar mais"}
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleExportCSV}
@@ -1128,11 +1223,18 @@ export default function StockFlow({ stock, movements, movementsTruncated, compan
         {filteredOperations.length === 0 ? (
           <div className="py-14 flex flex-col items-center justify-center text-center text-slate-400 px-6">
             <History size={44} className="stroke-[1.5px] text-slate-200 mb-2" />
-            <p className="font-bold text-slate-800 text-base">Nenhuma movimentação no período</p>
+            <p className="font-bold text-slate-800 text-base">
+              {histCompany
+                ? `Nenhuma movimentação de ${companies.find(c => c.id === histCompany)?.name || "esta loja"} no período`
+                : "Nenhuma movimentação no período"}
+            </p>
             <p className="text-xs text-slate-500 mt-1 max-w-md">
-              Registre uma entrada ou uma saída nos botões acima e a operação aparece aqui na hora,
-              junto com as transferências concluídas entre filiais,
-              com todos os pneus, saldos e responsável.
+              {histCompany && movementsTruncated
+                ? "A janela carregada traz os movimentos mais recentes de todas as lojas juntas — " +
+                  "pode ser que os desta aqui estejam mais para trás. Use 'Carregar mais', " +
+                  "aumente o período ou volte para 'Todas as empresas'."
+                : "Registre uma entrada ou uma saída nos botões acima e a operação aparece aqui na hora, " +
+                  "junto com as transferências concluídas entre filiais, com todos os pneus, saldos e responsável."}
             </p>
           </div>
         ) : (
