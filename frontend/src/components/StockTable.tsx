@@ -212,7 +212,10 @@ export default function StockTable({
   ) => {
     if (injectingRef.current) return;
 
-    const company = companies.find(c => matchesCompany(c.name.toUpperCase()));
+    // Sem os espaços: o relatório do ERP chama a loja de "CENTRAL AUTO CAR" e
+    // o cadastro pode ter qualquer uma das duas grafias. Com o espaço no meio,
+    // "AUTOCAR" não casava e o botão dizia que a empresa não existe.
+    const company = companies.find(c => matchesCompany(c.name.toUpperCase().replace(/\s+/g, "")));
     if (!company) {
       alert(
         `Não encontrei a empresa ${label} no cadastro. Crie a empresa primeiro (coluna nova no ` +
@@ -221,11 +224,8 @@ export default function StockTable({
       return;
     }
 
-    const existing = new Set(
-      items
-        .filter(i => i.companyId === company.id)
-        .map(i => String(i.sku || "").trim().toUpperCase())
-    );
+    const jaNaLoja = items.filter(i => i.companyId === company.id);
+    const existing = new Set(jaNaLoja.map(i => String(i.sku || "").trim().toUpperCase()));
     const toAdd = data.filter(d => !existing.has(String(d.sku || "").trim().toUpperCase()));
     const skipped = data.length - toAdd.length;
     const units = toAdd.reduce((acc, d) => acc + (Number(d.quantity) || 0), 0);
@@ -238,11 +238,46 @@ export default function StockTable({
       return;
     }
 
+    // ── O mesmo pneu com dois códigos ────────────────────────────────
+    //
+    // Pular código repetido só protege contra recarregar O MESMO arquivo. Não
+    // protege do caso real que apareceu na Central Autocar: a loja tinha sido
+    // carregada antes por outro caminho, com códigos inventados na hora
+    // ("AUTOCAR-11-1786329486472"), e o relatório novo do ERP traz os códigos
+    // de verdade ("AUTOCAR-603"). Para o sistema são produtos diferentes — e a
+    // loja terminaria com o estoque em dobro, que é exatamente o erro que o
+    // resto do sistema passou a impedir.
+    //
+    // Não dá para casar os dois automaticamente (as descrições vêm escritas de
+    // formas diferentes), então aqui a tela mostra o que sabe e deixa a decisão
+    // com quem está olhando: quantos produtos a loja já tem e quantos do
+    // arquivo têm a MESMA medida e marca de algo que já está lá.
+    const chave = (medida: any, marca: any) =>
+      `${String(medida || "").toUpperCase().replace(/[^A-Z0-9]/g, "")}|` +
+      `${String(marca || "").toUpperCase().replace(/[^A-Z0-9]/g, "")}`;
+    const jaTem = new Set(jaNaLoja.map(i => chave(i.size, i.brand)));
+    const parecidos = toAdd.filter(d => jaTem.has(chave(d.size, d.brand)));
+    const unidadesNaLoja = jaNaLoja.reduce((acc, i) => acc + (Number(i.quantity) || 0), 0);
+
+    const exemplos = parecidos
+      .slice(0, 3)
+      .map(d => `${d.size} ${d.brand}`)
+      .join("; ");
+
     const ok = window.confirm(
       `Carregar o estoque de ${company.name}?\n\n` +
       `• ${toAdd.length} produto(s) novos, ${units} unidades, serão cadastrados.\n` +
-      (skipped > 0 ? `• ${skipped} produto(s) já existem nesta loja e serão ignorados.\n` : "") +
-      `\nPode clicar de novo sem medo: o que já foi cadastrado não é repetido.`
+      (skipped > 0 ? `• ${skipped} produto(s) já existem nesta loja (mesmo código) e serão ignorados.\n` : "") +
+      (jaNaLoja.length > 0
+        ? `\nATENÇÃO: esta loja JÁ TEM ${jaNaLoja.length} produto(s) cadastrados (${unidadesNaLoja} un).\n` +
+          (parecidos.length > 0
+            ? `${parecidos.length} do arquivo têm a mesma medida e marca de algo que já está lá ` +
+              `(ex.: ${exemplos}).\n`
+            : "") +
+          `Se esse cadastro veio de uma carga anterior DESTE MESMO estoque, a loja vai ficar com ` +
+          `${jaNaLoja.length + toAdd.length} produtos e o estoque dobrado. Confira antes de seguir.\n`
+        : "") +
+      `\nClicar de novo não repete o que já foi cadastrado com o mesmo código.`
     );
     if (!ok) return;
 

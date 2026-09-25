@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
 # ─────────────────────────────────────────────────────────────────
-# Relatório de estoque do ERP Time Sistemas (PDF) → JSON de carga do sistema
+# Relatório de estoque do ERP (PDF) → JSON de carga do sistema
 #
 #   python tools/estoque-time-sistemas.py <relatorio.pdf> <PREFIXO> <saida.json> [--loja=Nome] [--varejo-nos-dois]
 #
 # Exemplo (Valença, 22/09/2026):
 #   python tools/estoque-time-sistemas.py "estoque valencia.pdf" VALENCA frontend/src/valenca_estoque.json --loja=Valença
+#
+# DOIS RELATÓRIOS são aceitos, reconhecidos sozinhos pelo cabeçalho:
+#
+#   1. Time Sistemas — "RELATÓRIO DE ESTOQUE", com P. Varejo e P. Atacado.
+#      Usado em Valença, SAJ e Central Autocenter.
+#
+#   2. "LISTAGEM DE PRODUTOS" — o relatório da Central Autocar. Tem um preço
+#      só, e a coluna do preço cabe em 6 caracteres: de mil reais para cima o
+#      ERP corta o último centavo na impressão ("1079,00" sai "1079,0") e a
+#      quantidade vem grudada logo depois. A conferência contra o rodapé é o
+#      que garante que a separação preço/quantidade ficou certa — em 74
+#      produtos, um erro de um dígito muda o total e o script se recusa a
+#      gravar.
 #
 # O JSON gerado é o que o botão "Injetar Estoque <loja>" (Cadastros e Ajustes,
 # só administrador) carrega. A carga pula todo código que já existe na loja,
@@ -33,6 +46,12 @@ import re, json, io, sys, os
 from collections import Counter
 from pypdf import PdfReader
 
+# O console do Windows abre em cp1252 e derrubava o relatório de alertas na
+# primeira seta "→" — depois de já ter gravado o JSON, o que dava a impressão
+# de que a carga tinha falhado.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 if len(sys.argv) < 4:
     print("uso: estoque-time-sistemas.py <relatorio.pdf> <PREFIXO> <saida.json> [--loja=Nome] [--varejo-nos-dois]")
     sys.exit(2)
@@ -48,50 +67,160 @@ num = lambda s: float(s.replace(".", "").replace(",", "."))
 
 seg = re.compile(r"\S+(?: \S+)*")
 
-rows, footer, report_date = [], None, ""
-for pi, page in enumerate(PdfReader(PDF).pages, 1):
-    for line in page.extract_text(extraction_mode="layout").splitlines():
-        parts = [(m.start(), m.group()) for m in seg.finditer(line)]
-        if not parts:
-            continue
-        text = line.strip()
-        dm = re.search(r"(\d{2}/\d{2}/\d{4} \d{2}:\d{2})", text)
-        if dm and "Time Sistemas" in text:
-            report_date = dm.group(1)
-        if "Quantidade de produtos na lista" in text:
-            nums = re.findall(r"[\d.]+,\d+|\d+", text.split(":", 1)[1])
-            footer = {"produtos": int(nums[0]), "saldo": num(nums[1]), "varejo": num(nums[2]), "atacado": num(nums[3])}
-            continue
-        # Linha de produto: começa com o código e tem "UN" seguido de 3 números.
-        if not re.fullmatch(r"\d+", parts[0][1]):
-            continue
-        un_idx = next((i for i, (_, t) in enumerate(parts) if t == "UN"), None)
-        if un_idx is None or len(parts) < un_idx + 4:
-            continue
-        codigo = parts[0][1]
-        ref, barcode = "", ""
-        desc_parts = []
-        for col, t in parts[1:un_idx]:
-            if col >= DESC_COL:
-                desc_parts.append(t)
-            elif col < REF_MAX:
-                ref = t
-            else:
-                barcode = t
-        saldo, varejo, atacado = (num(parts[un_idx + k][1]) for k in (1, 2, 3))
-        rows.append({
-            "page": pi, "codigo": codigo, "referencia": ref, "barcode": barcode,
-            "descricao": " ".join(desc_parts), "saldo": saldo, "varejo": varejo, "atacado": atacado
-        })
+PAGES = [p.extract_text(extraction_mode="layout") for p in PdfReader(PDF).pages]
 
 
-tot = {
-    "produtos": len(rows),
-    "saldo": round(sum(r["saldo"] for r in rows), 3),
-    "varejo": round(sum(r["saldo"] * r["varejo"] for r in rows), 2),
-    "atacado": round(sum(r["saldo"] * r["atacado"] for r in rows), 2),
-}
-if not footer or any(abs(footer[k] - tot[k]) >= 0.005 for k in footer):
+def segments(line):
+    return [(m.start(), m.group()) for m in seg.finditer(line)]
+
+
+def ler_time_sistemas():
+    """RELATÓRIO DE ESTOQUE do Time Sistemas: P. Varejo e P. Atacado separados."""
+    rows, footer, report_date = [], None, ""
+    for pi, page in enumerate(PAGES, 1):
+        for line in page.splitlines():
+            parts = segments(line)
+            if not parts:
+                continue
+            text = line.strip()
+            dm = re.search(r"(\d{2}/\d{2}/\d{4} \d{2}:\d{2})", text)
+            if dm and "Time Sistemas" in text:
+                report_date = dm.group(1)
+            if "Quantidade de produtos na lista" in text:
+                nums = re.findall(r"[\d.]+,\d+|\d+", text.split(":", 1)[1])
+                footer = {"produtos": int(nums[0]), "saldo": num(nums[1]), "varejo": num(nums[2]), "atacado": num(nums[3])}
+                continue
+            # Linha de produto: começa com o código e tem "UN" seguido de 3 números.
+            if not re.fullmatch(r"\d+", parts[0][1]):
+                continue
+            un_idx = next((i for i, (_, t) in enumerate(parts) if t == "UN"), None)
+            if un_idx is None or len(parts) < un_idx + 4:
+                continue
+            codigo = parts[0][1]
+            ref, barcode = "", ""
+            desc_parts = []
+            for col, t in parts[1:un_idx]:
+                if col >= DESC_COL:
+                    desc_parts.append(t)
+                elif col < REF_MAX:
+                    ref = t
+                else:
+                    barcode = t
+            saldo, varejo, atacado = (num(parts[un_idx + k][1]) for k in (1, 2, 3))
+            rows.append({
+                "page": pi, "codigo": codigo, "referencia": ref, "barcode": barcode,
+                "descricao": " ".join(desc_parts), "saldo": saldo, "varejo": varejo, "atacado": atacado
+            })
+
+    tot = {
+        "produtos": len(rows),
+        "saldo": round(sum(r["saldo"] for r in rows), 3),
+        "varejo": round(sum(r["saldo"] * r["varejo"] for r in rows), 2),
+        "atacado": round(sum(r["saldo"] * r["atacado"] for r in rows), 2),
+    }
+    ok = bool(footer) and all(abs(footer[k] - tot[k]) < 0.005 for k in footer)
+    resumo = (f"{tot['produtos']} produtos, {int(tot['saldo'])} un, "
+              f"varejo R$ {tot['varejo']:,.2f}, atacado R$ {tot['atacado']:,.2f}")
+    return rows, report_date, ok, footer, tot, resumo, "Time Sistemas"
+
+
+# Preço e quantidade saem GRUDADOS numa coluna só ("330,005" = R$ 330,00 e 5
+# un). O que separa os dois é a quantidade de casas: até 999,99 o ERP imprime
+# os dois centavos; de 1.000,00 para cima a coluna tem 6 caracteres e ele corta
+# o último ("1079,00" vira "1079,0"). O total do rodapé é a prova de que a
+# separação ficou certa.
+PRECO_QTD = [
+    re.compile(r"^(\d{1,3},\d{2})(\d+)$"),   # 330,005 → 330,00 + 5
+    re.compile(r"^(\d{4,},\d)(\d+)$"),       # 1079,04 → 1079,0 + 4
+]
+LISTAGEM_DESC_COL = 36
+
+# Linhas de cabeçalho/rodapé de página, que não são continuação de descrição.
+CABECALHO = ("LISTAGEM DE PRODUTOS", "SITUA", "CÓDIGO", "C�DIGO", "GRUPO", "emitido em", "Pág.")
+
+
+def ler_listagem_produtos():
+    """LISTAGEM DE PRODUTOS: um preço só, e a descrição quebra em várias linhas."""
+    linhas = [(line, segments(line)) for page in PAGES for line in page.splitlines()]
+    linhas = [(l, p) for l, p in linhas if p]
+
+    # O GRUPO fica entre a descrição e a coluna UND. Quando a descrição é larga,
+    # os dois saem grudados num segmento só ("...ULTRACONTACT PNEUS (ITABUNA
+    # PNEUS)"). Então primeiro recolhemos os nomes de grupo que aparecem
+    # sozinhos e depois usamos essa lista para separar os grudados — em vez de
+    # chutar por posição de coluna, que muda de linha para linha neste relatório.
+    candidatos = set()
+    for line, parts in linhas:
+        un = next((i for i, (_, t) in enumerate(parts) if t == "UN"), None)
+        if un and re.match(r"^\d+\s", parts[0][1]):
+            candidatos.add(parts[un - 1][1])
+    grupos = []
+    for g in sorted(candidatos, key=len):
+        if not any(g.endswith(" " + real) for real in grupos):
+            grupos.append(g)
+
+    rows, footer, report_date, problemas = [], None, "", []
+    for line, parts in linhas:
+        m = re.search(r"CUSTO COMPRA>+\s*([\d.,]+).*QTD\. TOTAL>+\s*(\d+).*VALOR TOTAL>+\s*([\d.,]+)", line)
+        if m:
+            footer = {"custo": num(m[1]), "qtd": int(m[2]), "valor": num(m[3])}
+            continue
+        d = re.search(r"emitido em (\d{2}/\d{2}/\d{4})-?\s*(\d{2}:\d{2})", line)
+        if d:
+            report_date = f"{d[1]} {d[2]}"
+        un = next((i for i, (_, t) in enumerate(parts) if t == "UN"), None)
+        cabeca = re.match(r"^(\d+)\s+(.*)$", parts[0][1]) if parts[0][0] < 20 else None
+
+        if un is not None and cabeca and un + 1 < len(parts):
+            bruto = parts[un + 1][1]
+            pq = next((rx.match(bruto) for rx in PRECO_QTD if rx.match(bruto)), None)
+            if not pq:
+                problemas.append(f"preço/quantidade ilegível: {bruto!r}")
+                continue
+            ref = next((t for c, t in parts[1:un] if 20 <= c < LISTAGEM_DESC_COL), "")
+            desc = [t for c, t in parts[1:un] if c >= LISTAGEM_DESC_COL]
+            if desc:
+                for g in grupos:
+                    if desc[-1] == g:
+                        desc.pop()
+                        break
+                    if desc[-1].endswith(" " + g):
+                        desc[-1] = desc[-1][:-len(g) - 1]
+                        break
+            preco = num(pq[1])
+            rows.append({
+                "page": 0, "codigo": cabeca[1], "referencia": ref if ref != cabeca[1] else "",
+                "barcode": "" if cabeca[2].startswith("SEM GTIN") else cabeca[2],
+                "descricao": " ".join(desc), "saldo": float(pq[2]),
+                "varejo": preco, "atacado": preco
+            })
+        elif (rows and un is None and parts[0][0] <= 55
+              and all(LISTAGEM_DESC_COL <= c <= 70 for c, _ in parts)
+              and not any(k in line for k in CABECALHO)):
+            # Continuação da descrição da linha de cima ("CONTACT", "ONE").
+            # O teste de coluna sozinho não bastava: o cabeçalho da página
+            # seguinte ("LISTAGEM DE PRODUTOS", na coluna 67) caía aqui e era
+            # colado no fim da descrição do último pneu da página anterior.
+            rows[-1]["descricao"] += " " + " ".join(t for _, t in parts)
+
+    tot = {
+        "produtos": len(rows),
+        "qtd": int(sum(r["saldo"] for r in rows)),
+        "valor": round(sum(r["saldo"] * r["varejo"] for r in rows), 2),
+    }
+    ok = (not problemas) and bool(footer) and footer["qtd"] == tot["qtd"] and abs(footer["valor"] - tot["valor"]) < 0.005
+    for p in problemas:
+        print("  !", p)
+    resumo = f"{tot['produtos']} produtos, {tot['qtd']} un, total R$ {tot['valor']:,.2f}"
+    return rows, report_date, ok, footer, tot, resumo, "Listagem de Produtos"
+
+
+EH_LISTAGEM = any("LISTAGEM DE PRODUTOS" in p for p in PAGES)
+rows, report_date, conferiu, footer, tot, resumo, REPORT_NAME = (
+    ler_listagem_produtos() if EH_LISTAGEM else ler_time_sistemas()
+)
+
+if not conferiu:
     print("NÃO CONFERE com o rodapé do relatório — nada foi gravado.")
     print("  rodapé  :", footer)
     print("  extraído:", tot)
@@ -100,8 +229,7 @@ dups = sorted({r["codigo"] for r in rows if [x["codigo"] for x in rows].count(r[
 if dups:
     print("Códigos repetidos no relatório:", dups, "— nada foi gravado.")
     sys.exit(1)
-print(f"Conferido com o rodapé: {tot['produtos']} produtos, {int(tot['saldo'])} un, "
-      f"varejo R$ {tot['varejo']:,.2f}, atacado R$ {tot['atacado']:,.2f}")
+print(f"Conferido com o rodapé ({REPORT_NAME}): {resumo}")
 
 old = []
 if os.path.exists(OUT):
@@ -145,6 +273,8 @@ BRANDS = [
     ("BONNA", ["BONNA"]),
     ("FLEXEN", ["FLEXEN"]),
     ("MICHELIN", ["MICHELIN"]),
+    ("FIRESTONE", ["FIRESTONE"]),
+    ("APLUS", ["APLUS"]),
     ("BRIDGESTONE", ["BRIDGESTONE"]),
     ("GOODYEAR", ["GOODYEAR"]),
     ("DUNLOP", ["DUNLOP"]),
@@ -177,6 +307,12 @@ GLUED_CONTI = re.compile(r"^CONTI?(CROSS|PREMIUM|ECO|SPORT|VAN|ULTRA|POWER)", re
 # Altimax e Grabber são General Tire, ainda que a loja escreva "CONT" ao lado.
 PRIORITY_IMPLIES = [
     (r"\bALTIMAX\b|\bGRABBER\b", "GENERAL TIRE", {"CONT", "GENERAL", "GEN", "CO", "GENERALTIRE"}),
+    # Bravuris é da Barum, que é da Continental. Valença e SAJ escrevem "CONT"
+    # ou nada e já estão cadastradas como CONTINENTAL; a Central Autocar escreve
+    # "BARUM". Sem esta linha, o MESMO pneu entraria como duas marcas e duas
+    # descrições diferentes, e o sistema deixaria de enxergar que a outra loja
+    # tem o pneu que falta aqui. A palavra BARUM continua na descrição do ERP.
+    (r"\bBRAVURIS\b", "CONTINENTAL", {"CONT", "BARUM"}),
 ]
 
 # Linha de produto que o ERP não marca, mas é inconfundível — e a própria loja
@@ -201,7 +337,7 @@ MODEL_IMPLIES = [
 UNSURE = {"DRIVE FORCE"}
 
 # Correções de digitação evidentes (o texto original fica em `description`).
-TYPOS = {"ZUPHIRA": "ZYPHIRA", "QUADRICULO": "QUADRICICLO"}
+TYPOS = {"ZUPHIRA": "ZYPHIRA", "QUADRICULO": "QUADRICICLO", "OADTRACK": "ROADTRACK"}
 
 # Tokens técnicos que ficam só na descrição: índice de carga/velocidade
 # ("81T", "112A8", "143/141", "106/104R"), lonas ("8PR", "8L"), construção
@@ -211,7 +347,7 @@ TECH = re.compile(
     r"^(\d{2,3}[A-Za-z]\d?|\d{2,3}/\d{2,3}[A-Za-z]?|\d{1,2}PR|\d{1,2}L|XL|FR|TL|SL|LT|RWL|OWL|WL|-)$", re.I)
 
 # Palavras que acompanham a marca e não são modelo ("JK TIRE").
-BRAND_FILLER = {"TIRE", "TYRE"}
+BRAND_FILLER = {"TIRE", "TIRES", "TYRE"}
 
 def fnum(v):
     return int(v) if float(v).is_integer() else round(v, 2)
@@ -227,10 +363,22 @@ def classify(desc):
 
 # Ordem importa: do padrão mais específico para o mais genérico.
 SIZE_RX = [
-    # 165/70 R14 · 225/45 ZR17 · 215/75 R17.5 · 195/70 R15C
-    (re.compile(r"\b(\d{3}/\d{2})\s+(Z?R)\s?(\d{2}(?:\.\d)?C?)\b", re.I), lambda m: f"{m[1]} {m[2].upper()}{m[3].upper()}"),
-    # 195 R14C · 195 R14
-    (re.compile(r"\b(\d{3})\s+R(\d{2}C?)\b", re.I), lambda m: f"{m[1]} R{m[2].upper()}"),
+    # 165/70 R14 · 225/45 ZR17 · 215/75 R17.5 · 195/70 R15C · 175/80R14 · 185/60R14XL
+    #
+    # O espaço antes do "R" é opcional (`\s*`) e o aro termina em qualquer coisa
+    # que não seja dígito: a Central Autocar escreve a medida grudada
+    # ("175/80R14") e ainda cola o XL no aro ("185/60R14XL"). Com `\s+` e `\b`,
+    # esses dois casos saíam SEM MEDIDA, e a palavra "PNEU" acabava virando a
+    # marca do produto. O XL fica de fora da medida de propósito: é indicação de
+    # carga reforçada, não aro, e o filtro de termos técnicos já o remove.
+    # O "C" de carga comercial às vezes vem solto depois do aro ("195 R14 C"):
+    # ele entra na medida, mas só quando é uma palavra inteira — senão o C de
+    # "R15 CROSSWIND" seria comido e sobraria "ROSSWIND" no modelo.
+    (re.compile(r"\b(\d{3}/\d{2})\s*(Z?R)\s?(\d{2}(?:\.\d)?C?)(?![\d.])(?:\s(C)\b)?", re.I),
+     lambda m: f"{m[1]} {m[2].upper()}{m[3].upper()}{(m[4] or '').upper()}"),
+    # 195 R14C · 195 R14 · 185 R14LT · 195 R14 C
+    (re.compile(r"\b(\d{3})\s+R(\d{2}C?)(?![\d.])(?:\s(C)\b)?", re.I),
+     lambda m: f"{m[1]} R{m[2].upper()}{(m[3] or '').upper()}"),
     # 31X10.50 R15LT (polegada)
     (re.compile(r"\b(\d{2})X(\d{1,2}\.\d{2})\s+R(\d{2})(LT)?\b", re.I), lambda m: f"{m[1]}X{m[2]} R{m[3]}{(m[4] or '').upper()}"),
     # 24X10-11 · 24X8.00 - 12 (quadriciclo)
@@ -269,6 +417,13 @@ def split_tire(desc, flags):
         # "85VEVOXX": índice de velocidade grudado na marca.
         g = re.fullmatch(r"(\d{2,3}[A-Z])([A-Z]{3,})", w, re.I)
         words.extend([g[1], g[2]] if g else [TYPOS.get(w.upper(), w)])
+
+    # A Central Autocar começa TODA descrição com a palavra "PNEU" ("PNEU
+    # 225/70R17 DUNLOP"). Sem tirá-la, ela sobrava no modelo de 74 produtos
+    # ("PNEU MH01 EASY") e, nos que não têm marca conhecida, virava a própria
+    # marca. Os outros relatórios começam pela medida, então aqui não muda nada.
+    if words and words[0].upper() in ("PNEU", "PNEUS"):
+        words.pop(0)
 
     # Truncamento no fim da descrição: "(9" solto, "C30 Z" / "C30 ZMA" (Zmax),
     # "A/T COM" (Comforser), "A/T C" / "M/T C".
@@ -429,6 +584,9 @@ for r in rows:
         flags.append(f"campo Referência do ERP com \"{r['referencia']}\" (parece preço digitado no lugar errado)")
     if r["varejo"] == 0 and r["atacado"] == 0:
         flags.append("SEM PREÇO no ERP — vai aparecer sem valor no catálogo")
+    if EH_LISTAGEM and r["varejo"] >= 1000:
+        flags.append("preço de 4 dígitos: o ERP corta o último centavo na impressão "
+                     f"(R$ {r['varejo']:,.2f} — confirmado pelo total do relatório)")
 
     if PRICE_MODE == "atacado_vista":
         cash, inst = r["atacado"], r["varejo"]
@@ -445,7 +603,7 @@ for r in rows:
         "priceInstallment": fnum(inst),
         "price": fnum(cash),
         "costPrice": 0,
-        "notes": f"Estoque {STORE} — relatório Time Sistemas de {report_date}. Código no ERP: {r['codigo']}"
+        "notes": f"Estoque {STORE} — relatório {REPORT_NAME} de {report_date}. Código no ERP: {r['codigo']}"
                  + (f". Referência: {r['referencia']}" if r["referencia"] and not ref_is_price else ""),
         "description": desc
     })
