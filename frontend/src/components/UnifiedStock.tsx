@@ -4,7 +4,7 @@ import {
   Search, Plus, Minus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon,
   PackagePlus, PackageMinus, AlertTriangle, CheckCircle2, ArrowRight, ArrowRightLeft, Lock
 } from "lucide-react";
-import { availableQuantity, compareTireSize, formatBRL, matchesTireSize, parsePriceInput, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import { availableQuantity, compareTireSize, compareTireSizeDesc, formatBRL, matchesTireSize, parsePriceInput, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
 import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
 
 interface UnifiedStockProps {
@@ -386,7 +386,11 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       })
       .sort((a, b) => {
         if (reportSort === "BRAND") return (a.brand || "").localeCompare(b.brand || "") || a.sku.localeCompare(b.sku);
-        if (reportSort === "SIZE") return (a.size || "").localeCompare(b.size || "") || a.sku.localeCompare(b.sku);
+        // Medida de verdade, do maior para o menor: 265/65 R17 antes de
+        // 185/65 R15. Antes era localeCompare, ordem de dicionário — "1000-20"
+        // vinha antes de "185/65 R15" e "95" depois de "265", que não é ordem
+        // nenhuma para quem está conferindo pneu na prateleira.
+        if (reportSort === "SIZE") return compareTireSizeDesc(a.size || "", b.size || "") || a.sku.localeCompare(b.sku);
         if (reportSort === "QTY") return qtyIn(b) - qtyIn(a) || a.sku.localeCompare(b.sku);
         return a.sku.localeCompare(b.sku);
       });
@@ -408,7 +412,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
 
     const sortLabel =
       reportSort === "BRAND" ? "MARCA"
-      : reportSort === "SIZE" ? "MEDIDA"
+      : reportSort === "SIZE" ? "MEDIDA (MAIOR PARA MENOR)"
       : reportSort === "QTY" ? "QUANTIDADE"
       : "CÓDIGO";
 
@@ -2570,7 +2574,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                   >
                     <option value="SKU">Código (SKU)</option>
                     <option value="BRAND">Marca</option>
-                    <option value="SIZE">Medida</option>
+                    <option value="SIZE">Medida (maior primeiro)</option>
                     <option value="QTY">Quantidade (maior primeiro)</option>
                   </select>
                 </div>

@@ -61,9 +61,21 @@ export function matchesTireSize(itemSize: string, query: string): boolean {
 // cai depois do 185/80 e antes do 195, que é onde a pessoa procura.
 // Medida que não casa com nenhum formato vai para o fim (Infinity), nunca
 // para o meio da lista sem explicação.
+//
+// CAMINHÃO, AGRÍCOLA E MÁQUINA também são polegada, só que escritos de outro
+// jeito: "17.5-25", "12.4-24", "11.00 R22", "1000-20", "900/20", "1300 24".
+// Eram 94 dos 698 produtos do sistema — todos os pneus grandes — e nenhum
+// deles casava: metade caía no fim da lista sem ordem nenhuma e a outra
+// metade era lida como milímetro, o que punha "750/16" (7.50-16, um pneu de
+// caminhão estreito) na frente de um 295. Aqui os dois formatos viram
+// polegada de verdade: "17.5-25" é 444mm e abre a lista; "750/16" é 190mm e
+// fica onde deve. O código de três ou quatro dígitos ("1000-20" = 10.00-20)
+// só é lido como polegada de 400 para cima — abaixo disso é largura em mm de
+// pneu de passeio ("185/65"), e confundir os dois trocaria a lista inteira.
 // ─────────────────────────────────────────────────────────────────
 const NO_PROFILE = 82;
 const INCH_TO_MM = 25.4;
+const MIN_CODIGO_POLEGADA = 400;
 
 export function tireSizeSortKey(size: string): { width: number; profile: number; rim: number } {
   const raw = (size || "").toUpperCase().replace(/,/g, ".");
@@ -79,6 +91,34 @@ export function tireSizeSortKey(size: string): { width: number; profile: number;
       width: parseFloat(inchMatch[1]) * INCH_TO_MM,
       profile: parseFloat(inchMatch[2]),
       rim
+    };
+  }
+
+  // 12.5/80-18 · 14.9/24 — agrícola com perfil declarado. Vem antes das
+  // outras de polegada porque "12.5/80" também casaria com elas, e aí o 80
+  // (perfil) seria lido como aro.
+  const agroMatch = raw.match(/(?:^|[^\d.])(\d{1,2}\.\d)\s*\/\s*(\d{2})(?:\s*-\s*(\d{2}))?(?![\d.])/);
+  if (agroMatch) {
+    return {
+      width: parseFloat(agroMatch[1]) * INCH_TO_MM,
+      profile: agroMatch[3] ? parseFloat(agroMatch[2]) : NO_PROFILE,
+      rim: parseFloat(agroMatch[3] || agroMatch[2])
+    };
+  }
+
+  // 17.5-25 · 12.4-24 · 9.5-24 · 7.50-16 · 11.00 R22 · 10.00 - 20
+  const polMatch = raw.match(/(?:^|[^\d.])(\d{1,2}\.\d{1,2})\s*(?:-|\/|R)\s*(\d{1,2}(?:\.\d)?)(?![\d.])/);
+  if (polMatch) {
+    return { width: parseFloat(polMatch[1]) * INCH_TO_MM, profile: NO_PROFILE, rim: parseFloat(polMatch[2]) };
+  }
+
+  // 1000-20 · 900/20 · 1300 24 · 1400/24 — o mesmo pneu sem o ponto decimal.
+  const codMatch = raw.match(/(?:^|[^\d.])(\d{3,4})\s*[-\/ ]\s*(\d{1,2}(?:\.\d)?)(?![\d.])/);
+  if (codMatch && parseFloat(codMatch[1]) >= MIN_CODIGO_POLEGADA) {
+    return {
+      width: (parseFloat(codMatch[1]) / 100) * INCH_TO_MM,
+      profile: NO_PROFILE,
+      rim: parseFloat(codMatch[2])
     };
   }
 
@@ -101,6 +141,19 @@ export function compareTireSize(a: string, b: string): number {
     ka.rim - kb.rim ||
     (a || "").localeCompare(b || "")
   );
+}
+
+// Do MAIOR para o menor — a ordem em que a conferência de estoque é feita no
+// galpão, começando pelos pneus grandes.
+//
+// Não é o inverso puro de compareTireSize: medida que o sistema não reconhece
+// vale Infinity lá para cair no FIM da lista, e trocar o sinal a traria para a
+// frente — o relatório abriria justamente com o que não tem medida. Aqui ela
+// continua no fim, nos dois sentidos.
+export function compareTireSizeDesc(a: string, b: string): number {
+  const semMedidaA = Number.isFinite(tireSizeSortKey(a).width) ? 0 : 1;
+  const semMedidaB = Number.isFinite(tireSizeSortKey(b).width) ? 0 : 1;
+  return semMedidaA - semMedidaB || -compareTireSize(a, b);
 }
 
 // ─────────────────────────────────────────────────────────────────
