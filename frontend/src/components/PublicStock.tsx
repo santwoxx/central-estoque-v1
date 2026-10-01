@@ -3,7 +3,7 @@ import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../firebase";
 import { StockItem, Company, Suggestion, CLIENTE_COMPANY_ID } from "../types";
 import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X, Lock, Lightbulb, Check, Archive } from "lucide-react";
-import { availableQuantity, formatDate, mapStockDoc, mapSuggestionDoc, matchesTireSize, reservedQuantityOf, suggestionTime } from "../utils";
+import { availableQuantity, formatDate, mapStockDoc, mapSuggestionDoc, matchesTireSize, reservedQuantityOf, suggestionTime, tireSizeSortKey } from "../utils";
 
 interface ConsolidatedItem {
   sku: string;
@@ -60,7 +60,14 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
-  
+
+  // ── Filtros do catálogo ───────────────────────────────────────────
+  // A busca por texto só serve para quem já sabe o que quer. Quem abre o link
+  // da consulta quase sempre sabe outra coisa: o aro que o carro calça e, no
+  // máximo, uma marca de preferência — e antes disso, qual loja fica perto.
+  const [brandFilter, setBrandFilter] = useState("");
+  const [rimFilter, setRimFilter] = useState("");
+
   const [reserveTarget, setReserveTarget] = useState<{ item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number, own: boolean } | null>(null);
   const [reserveQty, setReserveQty] = useState(1);
   const [reserveCustomer, setReserveCustomer] = useState("");
@@ -399,9 +406,57 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
       .sort((a, b) => a.sku.localeCompare(b.sku));
   }, [stock, companies, showReserved]);
 
+  // Marcas e aros que EXISTEM no catálogo agora. Montar a lista a partir do
+  // próprio estoque evita o pior tipo de filtro: aquele que oferece uma opção
+  // e devolve lista vazia.
+  const availableBrands = useMemo(
+    () => Array.from(new Set<string>(consolidatedItems.map(i => i.brand).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b)),
+    [consolidatedItems]
+  );
+
+  // Aro do produto. Vem da medida do pneu ("195/65 R15" → 15) e, quando não
+  // houver, da própria palavra: protetor e roda são cadastrados como "ARO 15",
+  // e quem filtra por aro 15 quer ver esses também.
+  const rimOf = (size: string): number => {
+    const { rim } = tireSizeSortKey(size);
+    if (Number.isFinite(rim)) return rim;
+    const m = String(size || "").toUpperCase().match(/ARO\s*(\d{1,2}(?:\.\d)?)/);
+    return m ? parseFloat(m[1]) : Infinity;
+  };
+
+  const availableRims = useMemo(() => {
+    const set = new Set<number>();
+    consolidatedItems.forEach(i => {
+      const rim = rimOf(i.size);
+      if (Number.isFinite(rim)) set.add(rim);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [consolidatedItems]);
+
+  const hasFilters = !!(searchTerm || brandFilter || rimFilter || focusCompanyId);
+
+  const clearFilters = () => {
+    setSearchTerm("");
+    setBrandFilter("");
+    setRimFilter("");
+    setFocusCompanyId("");
+    setOnlyFocusStore(false);
+  };
+
+  // Cliente escolhendo loja quer VER AQUELA LOJA, não uma lista reordenada com
+  // as outras filiais embaixo. Para ele o clique já filtra. Para o vendedor
+  // logado nada muda: a loja em foco sobe para o topo e ele continua enxergando
+  // as outras, que é como ele acha o pneu para solicitar.
+  const selectStore = (companyId: string) => {
+    const same = focusCompanyId === companyId;
+    setFocusCompanyId(same ? "" : companyId);
+    if (!user) setOnlyFocusStore(!same);
+  };
+
   const filteredItems = useMemo(() => {
     const lower = searchTerm.toLowerCase();
-    const matched = !searchTerm
+    const bySearch = !searchTerm
       ? consolidatedItems
       : consolidatedItems.filter(item =>
           item.sku.toLowerCase().includes(lower) ||
@@ -410,6 +465,11 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
           item.size.toLowerCase().includes(lower) ||
           matchesTireSize(item.size, lower)
         );
+
+    const matched = bySearch.filter(item =>
+      (!brandFilter || item.brand === brandFilter) &&
+      (!rimFilter || String(rimOf(item.size)) === rimFilter)
+    );
 
     if (!focusCompanyId) return matched;
 
@@ -437,7 +497,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
       return 2;
     };
     return [...matched].sort((a, b) => hasFree(a) - hasFree(b) || a.sku.localeCompare(b.sku));
-  }, [consolidatedItems, searchTerm, focusCompanyId, onlyFocusStore, showReserved]);
+  }, [consolidatedItems, searchTerm, brandFilter, rimFilter, focusCompanyId, onlyFocusStore, showReserved]);
 
   if (loading) {
     return (
@@ -484,6 +544,60 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
               </button>
             )}
           </div>
+
+          {/* ── Marca e aro ──────────────────────────────────────────
+              Ficam no cabeçalho, junto da busca, e não lá embaixo: num
+              celular — que é como quase todo mundo abre este link — o que
+              fica abaixo da primeira tela não existe. */}
+          {(availableBrands.length > 1 || availableRims.length > 1) && (
+            <div className="w-full max-w-2xl mt-3 flex flex-wrap items-center justify-center gap-2">
+              {availableBrands.length > 1 && (
+                <select
+                  value={brandFilter}
+                  onChange={e => setBrandFilter(e.target.value)}
+                  aria-label="Filtrar por marca"
+                  className={`px-3 py-2 rounded-xl text-xs font-bold outline-none cursor-pointer border transition-all ${
+                    brandFilter
+                      ? "bg-gold-500 text-slate-900 border-gold-500"
+                      : "bg-white/10 text-white border-white/20 hover:bg-white/20"
+                  }`}
+                >
+                  <option value="" className="text-slate-800">Todas as marcas</option>
+                  {availableBrands.map(b => (
+                    <option key={b} value={b} className="text-slate-800">{b}</option>
+                  ))}
+                </select>
+              )}
+
+              {availableRims.length > 1 && (
+                <select
+                  value={rimFilter}
+                  onChange={e => setRimFilter(e.target.value)}
+                  aria-label="Filtrar por aro"
+                  className={`px-3 py-2 rounded-xl text-xs font-bold outline-none cursor-pointer border transition-all ${
+                    rimFilter
+                      ? "bg-gold-500 text-slate-900 border-gold-500"
+                      : "bg-white/10 text-white border-white/20 hover:bg-white/20"
+                  }`}
+                >
+                  <option value="" className="text-slate-800">Todos os aros</option>
+                  {availableRims.map(r => (
+                    <option key={r} value={String(r)} className="text-slate-800">Aro {r}</option>
+                  ))}
+                </select>
+              )}
+
+              {hasFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="px-3 py-2 rounded-xl text-xs font-bold text-slate-300 hover:text-white border border-transparent hover:border-white/20 cursor-pointer transition-all"
+                >
+                  Limpar filtros
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -493,6 +607,15 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold text-slate-600">
             {filteredItems.length} {filteredItems.length === 1 ? 'Produto Encontrado' : 'Produtos Encontrados'}
+            {/* Com um filtro ligado, o número sozinho engana: parece o catálogo
+                inteiro. Dizer de onde ele veio custa uma linha. */}
+            {!user && focusCompanyId && (
+              <span className="font-medium text-slate-400">
+                {" "}em {companies.find(c => c.id === focusCompanyId)?.name}
+              </span>
+            )}
+            {brandFilter && <span className="font-medium text-slate-400"> · {brandFilter}</span>}
+            {rimFilter && <span className="font-medium text-slate-400"> · aro {rimFilter}</span>}
           </h2>
           {/* Sempre visível, não só quando a busca zera: metade dos pedidos que
               o estoque não atende aparece no meio de uma lista cheia ("tem essa
@@ -509,19 +632,36 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
           )}
         </div>
 
-        {/* ── Loja em foco ────────────────────────────────────────────────
-            Só para quem está logado: no catálogo público (rota /consulta) o
-            cliente não escolhe filial, ele procura o pneu.
+        {/* ── Loja ────────────────────────────────────────────────────────
+            Para o VENDEDOR logado isto ORDENA, não esconde: a loja escolhida
+            sobe para o topo de cada ficha e os pneus livres dela vêm primeiro,
+            mas as outras filiais continuam logo abaixo — é assim que ele acha,
+            em outra loja, o pneu que a dele não tem.
 
-            Isto ORDENA, não esconde: a loja escolhida sobe para o topo de cada
-            ficha e os pneus que ela tem livres vêm primeiro na lista. As outras
-            filiais continuam logo abaixo, porque o vendedor também precisa
-            enxergá-las para solicitar o que a dele não tem. */}
-        {user && companies.length > 1 && (
+            Para quem chega pelo link da consulta o clique FILTRA. O cliente
+            não está procurando logística entre filiais: ele quer saber o que
+            tem na loja em que ele vai entrar. Antes esta barra nem aparecia
+            para ele, e o catálogo misturava as quatro lojas sem dizer como
+            separar. */}
+        {companies.length > 1 && (
           <div className="mb-4 flex flex-wrap items-center gap-1.5 bg-white border border-slate-200 rounded-2xl px-3 py-2.5">
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mr-1 flex items-center gap-1">
-              <Store size={12} className="text-gold-600" /> Ver primeiro
+              <Store size={12} className="text-gold-600" /> {user ? "Ver primeiro" : "Escolha a loja"}
             </span>
+
+            {!user && (
+              <button
+                type="button"
+                onClick={() => { setFocusCompanyId(""); setOnlyFocusStore(false); }}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all cursor-pointer ${
+                  focusCompanyId
+                    ? "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900"
+                    : "bg-slate-900 text-gold-400 border-slate-900 shadow-sm"
+                }`}
+              >
+                Todas as lojas
+              </button>
+            )}
 
             {companies.map(comp => {
               const active = focusCompanyId === comp.id;
@@ -530,10 +670,14 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                 <button
                   key={comp.id}
                   type="button"
-                  onClick={() => setFocusCompanyId(active ? "" : comp.id)}
-                  title={active
-                    ? "Clique de novo para voltar à ordem alfabética"
-                    : `Mostrar primeiro os pneus de ${comp.name}`}
+                  onClick={() => selectStore(comp.id)}
+                  title={user
+                    ? (active
+                        ? "Clique de novo para voltar à ordem alfabética"
+                        : `Mostrar primeiro os pneus de ${comp.name}`)
+                    : (active
+                        ? "Clique de novo para ver todas as lojas"
+                        : `Ver só os pneus de ${comp.name}`)}
                   className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all cursor-pointer flex items-center gap-1 ${
                     active
                       ? "bg-gold-600 text-white border-gold-600 shadow-sm"
@@ -552,7 +696,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
               );
             })}
 
-            {focusCompanyId && (
+            {user && focusCompanyId && (
               <>
                 <span className="mx-0.5 h-4 w-px bg-slate-200" aria-hidden />
                 <button
@@ -585,7 +729,21 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
           <div className="bg-white rounded-3xl p-16 text-center shadow-sm border border-slate-200">
             <Package size={48} className="mx-auto text-slate-300 mb-4" />
             <h3 className="text-xl font-bold text-slate-700 mb-2">Pneu não encontrado</h3>
-            <p className="text-slate-500 font-medium">Não temos essa medida ou modelo disponível no momento.</p>
+            <p className="text-slate-500 font-medium">
+              {focusCompanyId && !user
+                ? `${companies.find(c => c.id === focusCompanyId)?.name || "Esta loja"} não tem esse pneu agora — ` +
+                  `pode ser que outra loja tenha.`
+                : "Não temos essa medida ou modelo disponível no momento."}
+            </p>
+            {hasFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="mt-4 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 text-xs font-black uppercase tracking-wider cursor-pointer transition-all"
+              >
+                Ver o catálogo inteiro
+              </button>
+            )}
             {/* É exatamente aqui que a venda é perdida — e o único instante em
                 que o vendedor ainda tem o cliente na frente dele para anotar a
                 medida e o telefone. */}
