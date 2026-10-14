@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useDeferredValue } from "react";
 import { StockItem, Company } from "../types";
 import { AlertTriangle, Ban, Check, Loader2, Pencil, Plus, Search, Tag, Trash2, X } from "lucide-react";
 import {
@@ -69,6 +69,7 @@ export default function PromotionsManager({ items, companies, user, onUpdateItem
     companies.find(c => c.id === doc.companyId)?.name || doc.companyName || "—";
 
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [companyFilter, setCompanyFilter] = useState<string>("ALL");
   const [listFilter, setListFilter] = useState<ListFilter>("ATIVAS");
   const [notice, setNotice] = useState("");
@@ -78,6 +79,7 @@ export default function PromotionsManager({ items, companies, user, onUpdateItem
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorDocId, setEditorDocId] = useState("");
   const [pickSearch, setPickSearch] = useState("");
+  const deferredPickSearch = useDeferredValue(pickSearch);
   const [promoCashStr, setPromoCashStr] = useState("");
   const [promoInstStr, setPromoInstStr] = useState("");
   // Enquanto ninguém mexe no a prazo, ele acompanha o à vista na proporção do
@@ -136,26 +138,28 @@ export default function PromotionsManager({ items, companies, user, onUpdateItem
     };
   }, [promotions, today]);
 
-  const visiblePromotions = promotions.filter(p =>
-    matchesSearch(p.doc, search) &&
-    (listFilter === "TODAS" ||
-      (listFilter === "ATIVAS" && p.status === "ATIVA") ||
-      (listFilter === "VENCIDAS" && p.status === "VENCIDA") ||
-      (listFilter === "SEM_EFEITO" && p.status === "SEM_EFEITO"))
-  );
+  const visiblePromotions = useMemo(() => {
+    return promotions.filter(p =>
+      matchesSearch(p.doc, deferredSearch) &&
+      (listFilter === "TODAS" ||
+        (listFilter === "ATIVAS" && p.status === "ATIVA") ||
+        (listFilter === "VENCIDAS" && p.status === "VENCIDA") ||
+        (listFilter === "SEM_EFEITO" && p.status === "SEM_EFEITO"))
+    );
+  }, [promotions, deferredSearch, listFilter]);
 
   // Candidatos da "Nova promoção": quem tem saldo primeiro, medida crescente.
   const pickResults = useMemo(() => {
     if (!editorOpen || editorDocId) return [];
     return editable
-      .filter(d => matchesSearch(d, pickSearch.trim()))
+      .filter(d => matchesSearch(d, deferredPickSearch.trim()))
       .sort((a, b) =>
         (availableQuantity(b) > 0 ? 1 : 0) - (availableQuantity(a) > 0 ? 1 : 0) ||
         compareTireSize(a.size, b.size) ||
         a.sku.localeCompare(b.sku)
       )
       .slice(0, 60);
-  }, [editable, editorOpen, editorDocId, pickSearch]);
+  }, [editable, editorOpen, editorDocId, deferredPickSearch]);
 
   const editorDoc = editorDocId ? items.find(d => d.id === editorDocId) || null : null;
 

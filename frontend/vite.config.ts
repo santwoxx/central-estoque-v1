@@ -13,6 +13,8 @@ export default defineConfig(() => {
       },
     },
     build: {
+      target: 'es2020',
+      chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
           // ── Bibliotecas em pedaços próprios ─────────────────────────────
@@ -27,6 +29,7 @@ export default defineConfig(() => {
             if (/[\\/]node_modules[\\/]@?firebase[\\/]auth[\\/]/.test(id)) return 'firebase-auth';
             if (/[\\/]node_modules[\\/](@firebase|firebase|re2js|idb)[\\/]/.test(id)) return 'firebase';
             if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'react';
+            if (/[\\/]node_modules[\\/]lucide-react[\\/]/.test(id)) return 'icons';
           },
         },
       },

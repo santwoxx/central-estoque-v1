@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useDeferredValue, useRef } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../firebase";
 import { StockItem, Company, Suggestion, CLIENTE_COMPANY_ID } from "../types";
@@ -66,6 +66,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
 
   // ── Filtros do catálogo ───────────────────────────────────────────
   // A busca por texto só serve para quem já sabe o que quer. Quem abre o link
@@ -78,6 +79,11 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
   const [promoOnly, setPromoOnly] = useState(false);
   // Muda à meia-noite: promoção vencida sai da tela sem recarregar.
   const today = useToday();
+
+  // Paginação progressiva: renderiza 48 cartões inicialmente para não travar
+  // o celular com 700+ itens no DOM. Conforme rola, carrega os próximos automaticamente.
+  const [visibleCount, setVisibleCount] = useState(48);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   const [reserveTarget, setReserveTarget] = useState<{ item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number, own: boolean } | null>(null);
   const [reserveQty, setReserveQty] = useState(1);
@@ -473,8 +479,8 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
   };
 
   const filteredItems = useMemo(() => {
-    const lower = searchTerm.toLowerCase();
-    const bySearch = !searchTerm
+    const lower = deferredSearchTerm.toLowerCase();
+    const bySearch = !deferredSearchTerm
       ? consolidatedItems
       : consolidatedItems.filter(item =>
           item.sku.toLowerCase().includes(lower) ||
@@ -516,7 +522,29 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
       return 2;
     };
     return [...matched].sort((a, b) => hasFree(a) - hasFree(b) || a.sku.localeCompare(b.sku));
-  }, [consolidatedItems, searchTerm, brandFilter, rimFilter, promoOnly, focusCompanyId, onlyFocusStore, showReserved]);
+  }, [consolidatedItems, deferredSearchTerm, brandFilter, rimFilter, promoOnly, focusCompanyId, onlyFocusStore, showReserved]);
+
+  // Reseta para os primeiros 48 ao mudar qualquer filtro
+  useEffect(() => {
+    setVisibleCount(48);
+  }, [deferredSearchTerm, brandFilter, rimFilter, promoOnly, focusCompanyId, onlyFocusStore]);
+
+  // Fatiamento progressivo para o grid
+  const displayedItems = useMemo(() => {
+    return filteredItems.slice(0, visibleCount);
+  }, [filteredItems, visibleCount]);
+
+  // Observer de rolagem infinita: ao chegar perto do fim, carrega mais 48 automaticamente
+  useEffect(() => {
+    if (!loadMoreRef.current || visibleCount >= filteredItems.length) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) {
+        setVisibleCount(prev => Math.min(prev + 48, filteredItems.length));
+      }
+    }, { rootMargin: "400px" });
+    observer.observe(loadMoreRef.current);
+    return () => observer.disconnect();
+  }, [visibleCount, filteredItems.length]);
 
   // Preço da loja escolhida no modal de reserva — com a promoção dela.
   const reservePrices = reserveTarget
@@ -811,7 +839,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
             
-            {filteredItems.map((item) => {
+            {displayedItems.map((item) => {
               // Quanto deste pneu está reservado, somando todas as filiais. Serve
               // para o cartão INTEIRO mudar de cor: numa grade de dezenas de
               // cartões, ninguém lê linha por linha — a borda âmbar é o que
@@ -1084,6 +1112,30 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
               </div>
               );
             })}
+
+            {filteredItems.length > visibleCount && (
+              <div ref={loadMoreRef} className="col-span-full py-8 flex flex-col items-center justify-center gap-3">
+                <p className="text-xs font-bold text-slate-500">
+                  Mostrando {Math.min(visibleCount, filteredItems.length)} de {filteredItems.length} pneus
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount(c => Math.min(c + 48, filteredItems.length))}
+                    className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-gold-400 font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-sm transition-all cursor-pointer"
+                  >
+                    Carregar mais 48 pneus
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount(filteredItems.length)}
+                    className="px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold text-xs uppercase tracking-wider rounded-xl shadow-sm transition-all cursor-pointer"
+                  >
+                    Mostrar todos ({filteredItems.length})
+                  </button>
+                </div>
+              </div>
+            )}
 
           </div>
         )}

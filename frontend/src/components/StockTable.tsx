@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo, useDeferredValue } from "react";
 import { StockItem, Company, UserRole, StockFlowPayload, StockFlowResult, StockExitOrigin, RestoreResult, ErpStockFile, ErpSyncResult, ErpSyncAction } from "../types";
 import { activePromo, availableQuantity, formatBRL, matchesTireSize, parsePriceInput, reservedQuantityOf, saleCashPrice } from "../utils";
 import { useToday } from "../hooks/useToday";
@@ -418,8 +418,10 @@ export default function StockTable({
 }: StockTableProps) {
   // Filtering & Search
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
   const today = useToday();
   const [searchId, setSearchId] = useState(""); // Dedicated magnifying glass ID search
+  const deferredSearchId = useDeferredValue(searchId);
   const [selectedBrand, setSelectedBrand] = useState("");
   const [selectedSize, setSelectedSize] = useState("");
   const [stockFilter, setStockFilter] = useState<"all" | "low" | "normal">("all");
@@ -778,20 +780,23 @@ export default function StockTable({
 
   // Combined Filtering
   const filteredItems = useMemo(() => {
+    const searchLower = deferredSearchTerm.trim().toLowerCase();
+    const idLower = deferredSearchId.trim().toLowerCase();
+
     return items.filter(item => {
       // 1. Text Search (Brand, Model, Size, Description)
-      const matchesSearchText = searchTerm === "" || 
-        item.brand.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.size.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        matchesTireSize(item.size, searchTerm) ||
-        (item.description && item.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        item.userEmail.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearchText = searchLower === "" || 
+        item.brand.toLowerCase().includes(searchLower) ||
+        item.model.toLowerCase().includes(searchLower) ||
+        item.size.toLowerCase().includes(searchLower) ||
+        matchesTireSize(item.size, searchLower) ||
+        (item.description && item.description.toLowerCase().includes(searchLower)) ||
+        item.userEmail.toLowerCase().includes(searchLower);
 
       // 2. ID / SKU Search (Magnifier Dedicated Search)
-      const matchesIdSearch = searchId === "" || 
-        item.sku.toLowerCase().includes(searchId.toLowerCase()) ||
-        item.id.toLowerCase().includes(searchId.toLowerCase());
+      const matchesIdSearch = idLower === "" || 
+        item.sku.toLowerCase().includes(idLower) ||
+        item.id.toLowerCase().includes(idLower);
 
       // 3. Brand Filter
       const matchesBrand = selectedBrand === "" || item.brand === selectedBrand;
@@ -809,7 +814,7 @@ export default function StockTable({
 
       return matchesSearchText && matchesIdSearch && matchesBrand && matchesSize && matchesStock && matchesCompany;
     });
-  }, [items, searchTerm, searchId, selectedBrand, selectedSize, stockFilter, selectedCompanyId]);
+  }, [items, deferredSearchTerm, deferredSearchId, selectedBrand, selectedSize, stockFilter, selectedCompanyId]);
 
   // Reset pagination to page 1 when filters change
   React.useEffect(() => {

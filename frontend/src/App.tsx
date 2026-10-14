@@ -99,7 +99,7 @@ import { useAppNotifications } from "./hooks/useAppNotifications";
 import AuthScreen from "./components/AuthScreen";
 // Catálogo dos vendedores (aba "catalogo"). A mesma tela, sem login, é a
 // consulta pública — essa rota é resolvida em main.tsx.
-import PublicStock from "./components/PublicStock";
+const PublicStock = lazy(() => import("./components/PublicStock"));
 const PDFImporter = lazy(() => import("./components/PDFImporter"));
 const StockTable = lazy(() => import("./components/StockTable"));
 const MovementReports = lazy(() => import("./components/MovementReports"));

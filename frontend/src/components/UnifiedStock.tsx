@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useDeferredValue } from "react";
 import { StockItem, Company, StockFlowType, StockFlowPayload, StockFlowResult } from "../types";
 import {
   Search, Plus, Minus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon,
@@ -55,6 +55,7 @@ interface ConsolidatedItem {
 
 export default function UnifiedStock({ items, user, companies: companiesProp, onUpdateItem, onAddItem, onAddCompany, onRegisterFlow }: UnifiedStockProps) {
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
   const [editingCell, setEditingCell] = useState<{ sku: string; field: string } | null>(null);
   const [editValue, setEditValue] = useState("");
 
@@ -257,8 +258,8 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       ? consolidatedItems
       : consolidatedItems.filter(item => !!item.docs[companyFilter]);
 
-    const lower = searchTerm.toLowerCase();
-    const searched = !searchTerm ? base : base.filter(item =>
+    const lower = deferredSearchTerm.toLowerCase();
+    const searched = !deferredSearchTerm ? base : base.filter(item =>
       item.sku.toLowerCase().includes(lower) ||
       item.description.toLowerCase().includes(lower) ||
       item.brand.toLowerCase().includes(lower) ||
@@ -283,7 +284,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         a.sku.localeCompare(b.sku)
       );
     });
-  }, [consolidatedItems, searchTerm, companyFilter, isAutocenterView]);
+  }, [consolidatedItems, deferredSearchTerm, companyFilter, isAutocenterView]);
 
   // Export Unified Stock to CSV
   const exportUnifiedToCSV = () => {

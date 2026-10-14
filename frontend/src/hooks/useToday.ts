@@ -8,7 +8,10 @@ import { localISODate } from "../utils";
 export function useToday(): string {
   const [today, setToday] = useState(() => localISODate());
   useEffect(() => {
-    const timer = window.setInterval(() => setToday(localISODate()), 60_000);
+    const timer = window.setInterval(() => {
+      const next = localISODate();
+      setToday(prev => (prev === next ? prev : next));
+    }, 60_000);
     return () => window.clearInterval(timer);
   }, []);
   return today;
