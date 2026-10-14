@@ -10,7 +10,7 @@ import {
   TransferOrder,
   TransferSyncResult
 } from "../types";
-import { availableQuantity, exportToCSV, formatBRL, formatDate, matchesTireSize, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import { availableQuantity, exportToCSV, formatBRL, formatDate, matchesTireSize, QUICK_QTY, reservedQuantityOf, saleCashPrice, STOCK_FLOW_REASONS, toMillis } from "../utils";
 import {
   PackagePlus,
   PackageMinus,
@@ -292,8 +292,10 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
   }, [mode, submitting, canOperate]);
 
   // ── Manipulação do carrinho ──────────────────────────────────────
+  // Saída abre com o preço que vale AGORA — o promocional, se o pneu estiver em
+  // promoção naquela loja (ver activePromo em utils).
   const defaultPriceFor = (item: StockItem, type: StockFlowType) =>
-    type === "SAIDA" ? (item.priceCash || item.price || 0) : (item.price || item.priceCash || 0);
+    type === "SAIDA" ? saleCashPrice(item) : (item.price || item.priceCash || 0);
 
   const addToCart = (item: StockItem, amount: number = 1) => {
     if (!mode) return;

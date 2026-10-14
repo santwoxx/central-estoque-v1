@@ -1,10 +1,9 @@
 import React, { useState, useRef, useMemo } from "react";
-import { StockItem, Company, UserRole, StockFlowPayload, StockFlowResult, StockExitOrigin, RestoreResult } from "../types";
-import { availableQuantity, formatBRL, matchesTireSize, parsePriceInput, reservedQuantityOf } from "../utils";
-import sajEstoqueData from "../saj_estoque.json";
-import autocarEstoqueData from "../autocar_estoque.json";
-import valencaEstoqueData from "../valenca_estoque.json";
-import centralAutocenterEstoqueData from "../central_autocenter_estoque.json";
+import { StockItem, Company, UserRole, StockFlowPayload, StockFlowResult, StockExitOrigin, RestoreResult, ErpStockFile, ErpSyncResult, ErpSyncAction } from "../types";
+import { activePromo, availableQuantity, formatBRL, matchesTireSize, parsePriceInput, reservedQuantityOf, saleCashPrice } from "../utils";
+import { useToday } from "../hooks/useToday";
+import { isErpSyncWrite } from "../utils/erpSync";
+import type { ErpFiles } from "../erpFiles";
 import { 
   Search, 
   Trash2, 
@@ -52,10 +51,49 @@ interface StockTableProps {
   // antes de confirmar. Restauracao e operacao de emergencia — quem executa
   // precisa ver o que vai acontecer antes que aconteca.
   onRestoreBackup?: (backupItems: any[], dryRun?: boolean) => Promise<RestoreResult>;
+  // Sincroniza o estoque de uma loja com o relatório do ERP. `dryRun` devolve a
+  // prévia sem gravar — ver handleSyncStoreStock no App e utils/erpSync.ts.
+  onSyncStoreStock?: (company: Company, file: ErpStockFile, dryRun?: boolean) => Promise<ErpSyncResult>;
   // Grava uma operacao inteira (varios pneus) numa UNICA transacao. E por aqui
   // que a venda do balcao passa a sair: ver handleSaveCheckout abaixo.
   onRegisterFlow?: (payload: StockFlowPayload) => Promise<StockFlowResult>;
 }
+
+// O rótulo de cada botão depende de o arquivo do ERP trazer ou não a hora do
+// relatório (com ela, sincroniza; sem ela, só cadastra o que falta). Os
+// arquivos chegam por import() — ver erpFiles.ts —, então até lá o botão
+// mostra só o nome da loja.
+const erpButtonLabel = (file: ErpStockFile | undefined, store: string) =>
+  file ? `${file.report ? "Sincronizar" : "Injetar"} Estoque ${store}` : `Estoque ${store}`;
+
+const erpButtonTitle = (file: ErpStockFile | undefined, loadError: boolean) =>
+  !file
+    ? loadError
+      ? "Não foi possível carregar o arquivo do ERP. Recarregue a página."
+      : "Carregando o arquivo do ERP..."
+    : file.report
+    ? `Relatório ${file.report.system} de ${file.report.issuedAt} — ${file.report.products} produtos, ` +
+      `${file.report.units} un. Mostra tudo o que vai mudar antes de gravar.`
+    : `Arquivo sem a data do relatório: só cadastra os produtos que faltam (${file.items.length} no arquivo).`;
+
+// Filtros da prévia da sincronização.
+type ErpSyncFilter = "ALTERACOES" | "CONFERIR" | "SEM_MUDANCA" | "TUDO";
+
+const ERP_SYNC_FILTERS: { key: ErpSyncFilter; label: string; actions: ErpSyncAction[] }[] = [
+  { key: "ALTERACOES", label: "Alterações", actions: ["CRIAR", "ATUALIZAR", "ZERAR"] },
+  { key: "CONFERIR", label: "Conferir", actions: ["CONFERIR", "IGNORAR"] },
+  { key: "SEM_MUDANCA", label: "Sem mudança", actions: ["SEM_MUDANCA"] },
+  { key: "TUDO", label: "Tudo", actions: ["CRIAR", "ATUALIZAR", "ZERAR", "CONFERIR", "IGNORAR", "SEM_MUDANCA"] }
+];
+
+const ERP_ACTION_STYLE: Record<ErpSyncAction, { label: string; className: string }> = {
+  CRIAR: { label: "Novo", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  ATUALIZAR: { label: "Atualizar", className: "bg-blue-50 text-blue-700 border-blue-200" },
+  ZERAR: { label: "Zerar", className: "bg-red-50 text-red-700 border-red-200" },
+  SEM_MUDANCA: { label: "Sem mudança", className: "bg-slate-50 text-slate-500 border-slate-200" },
+  CONFERIR: { label: "Conferir", className: "bg-amber-50 text-amber-800 border-amber-200" },
+  IGNORAR: { label: "Ignorado", className: "bg-slate-100 text-slate-500 border-slate-200" }
+};
 
 // Sentinel value for the "wipe every company" option in the clear-stock modal —
 // distinct from "" (which means "no company picked yet") so admins must make an
@@ -94,7 +132,278 @@ function MarginHint({ cost, cash }: { cost: string; cash: string }) {
   );
 }
 
-export default function StockTable({ 
+// ── Prévia da sincronização com o ERP ──────────────────────────────
+// Nada é gravado aqui. A tela mostra, produto a produto, o que entra, o que
+// muda de saldo ou preço, o que zera e o que precisa de conferência — tudo
+// calculado contra o estoque do servidor — e só o botão de confirmar grava.
+function ErpSyncPreviewModal({
+  result,
+  companyName,
+  filter,
+  onFilter,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  result: ErpSyncResult;
+  companyName: string;
+  filter: ErpSyncFilter;
+  onFilter: (f: ErpSyncFilter) => void;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const report = result.report;
+  const changes = result.created + result.updated + result.zeroed;
+  const active = ERP_SYNC_FILTERS.find(f => f.key === filter) || ERP_SYNC_FILTERS[0];
+
+  const view = useMemo(() => {
+    const sum = (action: ErpSyncAction, pick: (i: ErpSyncResult["items"][number]) => number) =>
+      result.items.filter(i => i.action === action).reduce((acc, i) => acc + pick(i), 0);
+    return {
+      rows: result.items.filter(i => active.actions.includes(i.action)),
+      counts: Object.fromEntries(
+        ERP_SYNC_FILTERS.map(f => [f.key, result.items.filter(i => f.actions.includes(i.action)).length])
+      ) as Record<ErpSyncFilter, number>,
+      unitsIn: sum("CRIAR", i => i.targetQuantity ?? 0),
+      unitsZeroed: sum("ZERAR", i => i.currentQuantity ?? 0),
+      quantityUpdates: result.items.filter(i => i.action === "ATUALIZAR" && i.quantityChanged).length
+    };
+  }, [result, active]);
+
+  const ageDays = report ? Math.floor((Date.now() - Date.parse(report.issuedAtISO)) / 86400000) : 0;
+  const filtersText = report?.filters
+    ? Object.entries(report.filters).map(([k, v]) => `${k}: ${v}`).join(" · ")
+    : "";
+
+  const cards: { label: string; value: string; hint: string; className: string }[] = [
+    { label: "Novos", value: String(result.created), hint: `+${view.unitsIn} un`, className: "border-emerald-200 bg-emerald-50 text-emerald-800" },
+    { label: "Saldo muda", value: String(view.quantityUpdates), hint: "produtos", className: "border-blue-200 bg-blue-50 text-blue-800" },
+    { label: "Zerados", value: String(result.zeroed), hint: `−${view.unitsZeroed} un`, className: "border-red-200 bg-red-50 text-red-800" },
+    { label: "Preço muda", value: String(result.priceChanges), hint: "produtos", className: "border-indigo-200 bg-indigo-50 text-indigo-800" },
+    { label: "Conferir", value: String(result.review + result.skipped), hint: "não serão mexidos", className: "border-amber-200 bg-amber-50 text-amber-800" },
+    { label: "Saldo da loja", value: `${result.unitsBefore} → ${result.unitsAfter}`, hint: "un", className: "border-slate-200 bg-slate-50 text-slate-800" }
+  ];
+
+  const warnings: string[] = [];
+  if (result.movedAfterReport > 0) {
+    warnings.push(
+      `${result.movedAfterReport} produto(s) foram movimentados no sistema depois da emissão do relatório. ` +
+      `O saldo deles é o do ERP somado a essas movimentações (coluna "Após rel.").`
+    );
+  }
+  if (report && ageDays >= 2) {
+    warnings.push(
+      `Este relatório tem ${ageDays} dias. O que o sistema movimentou desde então é somado, mas o que foi ` +
+      `lançado só no ERP depois da emissão não aparece aqui — o ideal é um relatório tirado hoje.`
+    );
+  }
+  if (result.mode === "SINCRONIZAR" && report && !report.complete) {
+    warnings.push(
+      `O relatório não cobre a loja inteira (${filtersText || "filtros não informados"}): produtos que não ` +
+      `vieram nele NÃO serão zerados.`
+    );
+  }
+  if (result.mode === "SO_CADASTRAR" && result.productsBefore > 0) {
+    warnings.push(
+      `Esta loja já tem ${result.productsBefore} produto(s) (${result.unitsBefore} un). Se esse cadastro veio ` +
+      `de uma carga anterior deste mesmo estoque com outros códigos, cadastrar por cima dobra o estoque — ` +
+      `confira os "possíveis duplicados" na lista.`
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-60 bg-slate-900/70 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 shrink-0">
+          <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide">
+            {result.mode === "SINCRONIZAR" ? "Sincronizar estoque com o ERP" : "Cadastrar estoque do ERP"} — {companyName}
+          </h3>
+          <p className="text-[11px] font-bold text-slate-500 mt-1">
+            {report ? (
+              <>
+                Relatório {report.system} de <span className="text-slate-800">{report.issuedAt}</span> ·{" "}
+                {report.products} produtos · {report.units} un
+                {report.footerVerified ? " · conferido com o rodapé do PDF" : ""}.
+              </>
+            ) : (
+              <>Arquivo sem a data do relatório: só os produtos que faltam serão cadastrados — saldo e preço do que já existe não mudam.</>
+            )}{" "}
+            Nada foi gravado ainda.
+          </p>
+        </div>
+
+        {/* Corpo. No celular ele rola inteiro: os cartões saem da frente e a
+            lista ganha a tela. Do sm para cima só a lista rola, com o
+            cabeçalho da tabela fixo. */}
+        <div className="flex-1 min-h-0 overflow-y-auto sm:overflow-hidden sm:flex sm:flex-col">
+          <div className="px-5 py-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 border-b border-slate-100 sm:shrink-0">
+            {cards.map(card => (
+              <div key={card.label} className={`rounded-xl border px-3 py-2 ${card.className}`}>
+                <span className="block text-[9px] font-black uppercase tracking-widest opacity-80">{card.label}</span>
+                <span className="block text-base font-black font-mono">{card.value}</span>
+                <span className="block text-[9px] font-bold opacity-70">{card.hint}</span>
+              </div>
+            ))}
+          </div>
+
+          {warnings.length > 0 && (
+            <div className="px-5 pt-3 space-y-1.5 sm:shrink-0">
+              {warnings.map(w => (
+                <div key={w} className="flex gap-2 items-start rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-800">
+                  <AlertTriangle size={13} className="shrink-0 mt-px" />
+                  <span>{w}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="px-5 py-2 flex flex-wrap gap-1.5 sm:shrink-0">
+            {ERP_SYNC_FILTERS.map(f => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => onFilter(f.key)}
+                className={`px-2.5 py-1 rounded-lg border text-[10px] font-black uppercase tracking-wider cursor-pointer transition-colors ${
+                  f.key === filter
+                    ? "bg-slate-900 border-slate-900 text-white"
+                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {f.label} <span className="font-mono">{view.counts[f.key]}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="overflow-x-auto sm:flex-1 sm:min-h-0 sm:overflow-auto px-5 pb-3">
+            {view.rows.length === 0 ? (
+              <p className="py-8 text-center text-[11px] font-bold text-slate-400">Nada nesta lista.</p>
+            ) : (
+              <table className="w-full text-[11px] min-w-[780px]">
+                <thead className="sticky top-0 bg-white">
+                  <tr className="text-[9px] uppercase tracking-widest text-slate-400 font-black border-b border-slate-200 whitespace-nowrap">
+                    <th className="text-left py-2">Código</th>
+                    <th className="text-left py-2">Produto</th>
+                    <th className="text-right py-2 pl-3">Hoje</th>
+                    <th className="text-right py-2 pl-3">ERP</th>
+                    <th className="text-right py-2 pl-3" title="Movimentado no sistema depois da emissão do relatório">Após rel.</th>
+                    <th className="text-right py-2 pl-3">Fica</th>
+                    <th className="text-right py-2 pl-3">À vista</th>
+                    <th className="text-left py-2 pl-3">O que acontece</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {view.rows.map((it, idx) => {
+                    const price = it.priceAfter ?? it.priceBefore;
+                    return (
+                      <tr key={`${it.sku}-${idx}`} className="border-b border-slate-50 align-top">
+                        <td className="py-1.5 pr-2 font-mono font-bold text-slate-900 whitespace-nowrap">{it.sku}</td>
+                        <td className="py-1.5 pr-2 font-semibold text-slate-700 max-w-[260px]">{it.label || "—"}</td>
+                        <td className="py-1.5 pl-3 text-right font-mono font-bold text-slate-600">{it.currentQuantity ?? "—"}</td>
+                        <td className="py-1.5 pl-3 text-right font-mono font-bold text-slate-600">{it.reportQuantity ?? "—"}</td>
+                        <td className="py-1.5 pl-3 text-right font-mono font-bold text-slate-500">
+                          {it.movedAfterReport > 0 ? `+${it.movedAfterReport}` : it.movedAfterReport < 0 ? `−${-it.movedAfterReport}` : ""}
+                        </td>
+                        <td className={`py-1.5 pl-3 text-right font-mono font-black ${it.quantityChanged ? "text-slate-900" : "text-slate-400"}`}>
+                          {it.targetQuantity ?? "—"}
+                        </td>
+                        <td className="py-1.5 pl-3 text-right font-mono font-bold whitespace-nowrap">
+                          {it.priceChanged && it.priceBefore && it.priceAfter ? (
+                            <>
+                              <span className="text-slate-400 line-through mr-1">{formatBRL(it.priceBefore.cash)}</span>
+                              <span className="text-indigo-700">{formatBRL(it.priceAfter.cash)}</span>
+                            </>
+                          ) : (
+                            <span className="text-slate-500">{price ? formatBRL(price.cash) : "—"}</span>
+                          )}
+                        </td>
+                        <td className="py-1.5 pl-3">
+                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] font-black uppercase tracking-wider ${ERP_ACTION_STYLE[it.action].className}`}>
+                            {ERP_ACTION_STYLE[it.action].label}
+                          </span>
+                          {it.notes.map(note => (
+                            <span key={note} className="block mt-0.5 text-[10px] font-bold text-amber-700 leading-snug">{note}</span>
+                          ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t border-slate-100 flex flex-wrap gap-2 justify-end items-center shrink-0">
+          <span className="text-[10px] font-bold text-slate-500 mr-auto max-w-md">
+            Nos produtos que já existem mudam só saldo e preço — marca, modelo, medida, custo e foto ficam
+            como estão. Reserva nunca é solta. Cada alteração fica na Auditoria como "Ajuste", com o saldo de
+            antes e o de depois.
+          </span>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="px-4 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 text-[11px] font-black uppercase tracking-wider cursor-pointer transition-colors disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={busy || changes === 0}
+            onClick={onConfirm}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gold-600 hover:bg-gold-700 disabled:opacity-50 text-white text-[11px] font-black uppercase tracking-wider cursor-pointer transition-colors"
+          >
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+            {changes === 0 ? "Nada a aplicar" : `Aplicar ${changes} ${changes === 1 ? "alteração" : "alterações"}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Resultado, depois de gravado.
+function ErpSyncDoneModal({ result, onClose }: { result: ErpSyncResult; onClose: () => void }) {
+  const writes = result.items.filter(i => isErpSyncWrite(i.action)).length;
+  return (
+    <div className="fixed inset-0 z-60 bg-slate-900/70 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md p-5 space-y-3">
+        <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide">
+          {result.mode === "SINCRONIZAR" ? "Sincronização concluída" : "Carga concluída"} — {result.companyName}
+        </h3>
+        <p className="text-[12px] font-bold text-slate-600">
+          {result.created} produto(s) novo(s), {result.updated} atualizado(s), {result.zeroed} zerado(s)
+          {result.review + result.skipped > 0 ? ` · ${result.review + result.skipped} para conferir` : ""}.
+          {" "}Saldo da loja: {result.unitsBefore} → {result.unitsAfter} un.
+        </p>
+        {result.conflicts.length > 0 && (
+          <p className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            {result.conflicts.length} produto(s) mudaram de saldo durante a gravação e ficaram de fora
+            ({result.conflicts.slice(0, 5).join(", ")}{result.conflicts.length > 5 ? "…" : ""}). Clique em
+            sincronizar de novo para terminar — o que já foi aplicado não se repete.
+          </p>
+        )}
+        <p className="text-[11px] font-bold text-slate-500">
+          {writes > 0
+            ? <>Cada alteração ficou registrada na Auditoria com o saldo de antes e o de depois (código <span className="font-mono text-slate-700">{result.syncId}</span>).</>
+            : "Nada precisou ser alterado."}
+        </p>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg bg-slate-900 text-white text-[11px] font-black uppercase tracking-wider cursor-pointer"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function StockTable({
   items, 
   isAdmin, 
   user, 
@@ -104,10 +413,12 @@ export default function StockTable({
   onAddItem,
   onClearStock,
   onRestoreBackup,
+  onSyncStoreStock,
   onRegisterFlow
 }: StockTableProps) {
   // Filtering & Search
   const [searchTerm, setSearchTerm] = useState("");
+  const today = useToday();
   const [searchId, setSearchId] = useState(""); // Dedicated magnifying glass ID search
   const [selectedBrand, setSelectedBrand] = useState("");
   const [selectedSize, setSelectedSize] = useState("");
@@ -188,29 +499,51 @@ export default function StockTable({
 
   const [isInjecting, setIsInjecting] = useState(false);
 
-  // ── Carga do estoque de uma loja a partir do JSON embutido ─────────
+  // ── Estoque de uma loja a partir do arquivo do ERP ─────────────────
   //
-  // ANTES eram quatro funções quase idênticas (SAJ, Autocar, Valença, Central
-  // Autocenter), e todas cadastravam o arquivo INTEIRO a cada clique. Um clique
-  // duplo, ou uma queda de rede no meio seguida de nova tentativa, dobrava o
-  // estoque da loja — os duplicados nasciam com ids próprios e pareciam
-  // produtos legítimos. É o mesmo defeito que a restauração de backup tinha.
+  // Histórico: eram quatro funções quase idênticas que cadastravam o arquivo
+  // INTEIRO a cada clique — clique duplo dobrava o estoque. Viraram uma função
+  // idempotente que pulava todo código já existente. Isso resolvia a primeira
+  // carga, mas um relatório ATUALIZADO não mudava nada do que já estava lá.
   //
-  // AGORA é uma função só e ela é IDEMPOTENTE: todo código (sku) que já existe
-  // naquela loja é pulado. Clicar de novo depois de uma carga completa não faz
-  // nada; clicar de novo depois de uma carga interrompida termina só o que
-  // faltou. Antes de gravar, mostra quantos produtos e unidades vão entrar.
+  // AGORA o botão abre uma PRÉVIA calculada contra o estoque do servidor: o que
+  // entra, o que muda de saldo ou preço, o que zera e o que precisa de
+  // conferência — e só grava depois da confirmação. Com arquivo no formato
+  // novo (com a hora do relatório) é uma sincronização; com arquivo antigo, só
+  // cadastra o que falta, como antes. A conta está em utils/erpSync.ts.
+  //
+  // Clicar de novo é sempre seguro: o que já foi aplicado não se repete.
   //
   // O ref segura o clique duplo: as duas chamadas aconteceriam antes de o
   // estado `isInjecting` re-renderizar o botão como desabilitado.
   const injectingRef = useRef(false);
 
-  const injectStoreStock = async (
+  // Arquivos do ERP: ~250 kB de JSON que só o administrador usa. Pedidos em
+  // segundo plano, depois que a tela já abriu — e nunca para os outros papéis.
+  const [erpFiles, setErpFiles] = useState<ErpFiles | null>(null);
+  const [erpFilesError, setErpFilesError] = useState(false);
+  React.useEffect(() => {
+    if (user.role !== "admin") return;
+    let alive = true;
+    import("../erpFiles")
+      .then(m => { if (alive) setErpFiles(m.ERP_FILES); })
+      .catch(err => {
+        console.error("Erro ao carregar os arquivos do ERP:", err);
+        if (alive) setErpFilesError(true);
+      });
+    return () => { alive = false; };
+  }, [user.role]);
+
+  const [erpSync, setErpSync] = useState<{ company: Company; file: ErpStockFile; result: ErpSyncResult } | null>(null);
+  const [erpSyncDone, setErpSyncDone] = useState<ErpSyncResult | null>(null);
+  const [erpSyncFilter, setErpSyncFilter] = useState<ErpSyncFilter>("ALTERACOES");
+
+  const openErpSync = async (
     label: string,
     matchesCompany: (upperName: string) => boolean,
-    data: any[]
+    file: ErpStockFile | undefined
   ) => {
-    if (injectingRef.current) return;
+    if (injectingRef.current || !onSyncStoreStock || !file) return;
 
     // Sem os espaços: o relatório do ERP chama a loja de "CENTRAL AUTO CAR" e
     // o cadastro pode ter qualquer uma das duas grafias. Com o espaço no meio,
@@ -224,91 +557,33 @@ export default function StockTable({
       return;
     }
 
-    const jaNaLoja = items.filter(i => i.companyId === company.id);
-    const existing = new Set(jaNaLoja.map(i => String(i.sku || "").trim().toUpperCase()));
-    const toAdd = data.filter(d => !existing.has(String(d.sku || "").trim().toUpperCase()));
-    const skipped = data.length - toAdd.length;
-    const units = toAdd.reduce((acc, d) => acc + (Number(d.quantity) || 0), 0);
-
-    if (toAdd.length === 0) {
-      alert(
-        `Nada a carregar: os ${data.length} produtos do arquivo de ${company.name} já estão no ` +
-        `estoque. (Nenhum produto foi repetido.)`
-      );
-      return;
-    }
-
-    // ── O mesmo pneu com dois códigos ────────────────────────────────
-    //
-    // Pular código repetido só protege contra recarregar O MESMO arquivo. Não
-    // protege do caso real que apareceu na Central Autocar: a loja tinha sido
-    // carregada antes por outro caminho, com códigos inventados na hora
-    // ("AUTOCAR-11-1786329486472"), e o relatório novo do ERP traz os códigos
-    // de verdade ("AUTOCAR-603"). Para o sistema são produtos diferentes — e a
-    // loja terminaria com o estoque em dobro, que é exatamente o erro que o
-    // resto do sistema passou a impedir.
-    //
-    // Não dá para casar os dois automaticamente (as descrições vêm escritas de
-    // formas diferentes), então aqui a tela mostra o que sabe e deixa a decisão
-    // com quem está olhando: quantos produtos a loja já tem e quantos do
-    // arquivo têm a MESMA medida e marca de algo que já está lá.
-    const chave = (medida: any, marca: any) =>
-      `${String(medida || "").toUpperCase().replace(/[^A-Z0-9]/g, "")}|` +
-      `${String(marca || "").toUpperCase().replace(/[^A-Z0-9]/g, "")}`;
-    const jaTem = new Set(jaNaLoja.map(i => chave(i.size, i.brand)));
-    const parecidos = toAdd.filter(d => jaTem.has(chave(d.size, d.brand)));
-    const unidadesNaLoja = jaNaLoja.reduce((acc, i) => acc + (Number(i.quantity) || 0), 0);
-
-    const exemplos = parecidos
-      .slice(0, 3)
-      .map(d => `${d.size} ${d.brand}`)
-      .join("; ");
-
-    const ok = window.confirm(
-      `Carregar o estoque de ${company.name}?\n\n` +
-      `• ${toAdd.length} produto(s) novos, ${units} unidades, serão cadastrados.\n` +
-      (skipped > 0 ? `• ${skipped} produto(s) já existem nesta loja (mesmo código) e serão ignorados.\n` : "") +
-      (jaNaLoja.length > 0
-        ? `\nATENÇÃO: esta loja JÁ TEM ${jaNaLoja.length} produto(s) cadastrados (${unidadesNaLoja} un).\n` +
-          (parecidos.length > 0
-            ? `${parecidos.length} do arquivo têm a mesma medida e marca de algo que já está lá ` +
-              `(ex.: ${exemplos}).\n`
-            : "") +
-          `Se esse cadastro veio de uma carga anterior DESTE MESMO estoque, a loja vai ficar com ` +
-          `${jaNaLoja.length + toAdd.length} produtos e o estoque dobrado. Confira antes de seguir.\n`
-        : "") +
-      `\nClicar de novo não repete o que já foi cadastrado com o mesmo código.`
-    );
-    if (!ok) return;
-
     injectingRef.current = true;
     setIsInjecting(true);
-    let done = 0;
     try {
-      for (const item of toAdd) {
-        await onAddItem({
-          sku: item.sku,
-          brand: item.brand,
-          model: item.model,
-          size: item.size,
-          quantity: Number(item.quantity) || 0,
-          price: Number(item.price) || 0,
-          priceCash: Number(item.priceCash ?? item.price) || 0,
-          priceInstallment: Number(item.priceInstallment ?? item.price) || 0,
-          costPrice: Number(item.costPrice) || 0,
-          notes: item.notes || "",
-          description: item.description || "",
-          imageUrl: "",
-          companyId: company.id,
-          companyName: company.name
-        });
-        done++;
-      }
-      alert(`Pronto: ${done} produto(s) de ${company.name} cadastrados, ${units} unidades.`);
+      const result = await onSyncStoreStock(company, file, true);
+      setErpSyncFilter(result.created + result.updated + result.zeroed > 0 ? "ALTERACOES" : "TUDO");
+      setErpSync({ company, file, result });
+    } catch (err: any) {
+      alert(err?.message || "Não foi possível calcular a prévia da sincronização.");
+    } finally {
+      injectingRef.current = false;
+      setIsInjecting(false);
+    }
+  };
+
+  const confirmErpSync = async () => {
+    if (!erpSync || !onSyncStoreStock || injectingRef.current) return;
+    injectingRef.current = true;
+    setIsInjecting(true);
+    try {
+      // A gravação refaz a conta com o estoque lido de novo do servidor.
+      const done = await onSyncStoreStock(erpSync.company, erpSync.file, false);
+      setErpSync(null);
+      setErpSyncDone(done);
     } catch (err: any) {
       alert(
-        `A carga parou no produto ${done + 1} de ${toAdd.length}: ${err?.message || err}\n\n` +
-        `Os ${done} já cadastrados ficaram. Clique de novo para terminar — só o que faltou será enviado.`
+        `A sincronização parou: ${err?.message || err}\n\n` +
+        `O que já foi gravado ficou. Clique de novo para terminar — o que já foi aplicado não se repete.`
       );
     } finally {
       injectingRef.current = false;
@@ -317,16 +592,16 @@ export default function StockTable({
   };
 
   const handleInjectSajEstoque = () =>
-    injectStoreStock("SAJ", n => n.includes("SAJ"), sajEstoqueData as any[]);
+    openErpSync("SAJ", n => n.includes("SAJ"), erpFiles?.saj);
 
   const handleInjectAutocarEstoque = () =>
-    injectStoreStock("Central Autocar", n => n.includes("AUTOCAR"), autocarEstoqueData as any[]);
+    openErpSync("Central Autocar", n => n.includes("AUTOCAR"), erpFiles?.autocar);
 
   const handleInjectValencaEstoque = () =>
-    injectStoreStock("Valença", n => n.includes("VALENÇA") || n.includes("VALENCA"), valencaEstoqueData as any[]);
+    openErpSync("Valença", n => n.includes("VALENÇA") || n.includes("VALENCA"), erpFiles?.valenca);
 
   const handleInjectCentralAutocenterEstoque = () =>
-    injectStoreStock("Central Autocenter", n => n.includes("AUTOCENTER"), centralAutocenterEstoqueData as any[]);
+    openErpSync("Central Autocenter", n => n.includes("AUTOCENTER"), erpFiles?.centralAutocenter);
 
   // Helper to open print window for thermal receipt
   const handlePrintReceipt = (receipt: any) => {
@@ -838,7 +1113,7 @@ export default function StockTable({
     setCheckoutItems(prev => [...prev, {
       id: item.id,
       quantity: qty,
-      priceUnit: item.priceCash || item.price || 0,
+      priceUnit: saleCashPrice(item, today),
       itemRef: item
     }]);
     
@@ -1112,10 +1387,11 @@ export default function StockTable({
             <button
               type="button"
               onClick={handleInjectSajEstoque}
-              disabled={isInjecting}
+              disabled={isInjecting || !erpFiles}
+              title={erpButtonTitle(erpFiles?.saj, erpFilesError)}
               className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-700 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
-              {isInjecting ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} Injetar Estoque SAJ
+              {isInjecting || (!erpFiles && !erpFilesError) ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} {erpButtonLabel(erpFiles?.saj, "SAJ")}
             </button>
           )}
 
@@ -1124,10 +1400,11 @@ export default function StockTable({
             <button
               type="button"
               onClick={handleInjectAutocarEstoque}
-              disabled={isInjecting}
+              disabled={isInjecting || !erpFiles}
+              title={erpButtonTitle(erpFiles?.autocar, erpFilesError)}
               className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-fuchsia-600 hover:bg-fuchsia-700 text-white border border-fuchsia-700 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
-              {isInjecting ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} Injetar Estoque Autocar
+              {isInjecting || (!erpFiles && !erpFilesError) ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} {erpButtonLabel(erpFiles?.autocar, "Autocar")}
             </button>
           )}
 
@@ -1136,10 +1413,11 @@ export default function StockTable({
             <button
               type="button"
               onClick={handleInjectValencaEstoque}
-              disabled={isInjecting}
+              disabled={isInjecting || !erpFiles}
+              title={erpButtonTitle(erpFiles?.valenca, erpFilesError)}
               className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-700 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
-              {isInjecting ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} Injetar Estoque Valença
+              {isInjecting || (!erpFiles && !erpFilesError) ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} {erpButtonLabel(erpFiles?.valenca, "Valença")}
             </button>
           )}
 
@@ -1148,10 +1426,11 @@ export default function StockTable({
             <button
               type="button"
               onClick={handleInjectCentralAutocenterEstoque}
-              disabled={isInjecting}
+              disabled={isInjecting || !erpFiles}
+              title={erpButtonTitle(erpFiles?.centralAutocenter, erpFilesError)}
               className="flex items-center justify-center gap-1.5 px-5 py-2.5 bg-orange-600 hover:bg-orange-700 text-white border border-orange-700 font-bold rounded-xl text-xs shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
-              {isInjecting ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} Injetar Estoque Central Autocenter
+              {isInjecting || (!erpFiles && !erpFilesError) ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />} {erpButtonLabel(erpFiles?.centralAutocenter, "Central Autocenter")}
             </button>
           )}
 
@@ -1462,6 +1741,13 @@ export default function StockTable({
                           {/* Unit Price columns */}
                           <td className="py-2 px-2 text-right font-bold text-emerald-700 align-middle whitespace-nowrap text-xs">
                             {(item.priceCash || item.price) > 0 ? formatBRL(item.priceCash || item.price) : <span className="text-slate-300 font-normal">—</span>}
+                            {/* A coluna é o preço NORMAL (o que a ficha edita); a
+                                promoção, quando vale, aparece embaixo. */}
+                            {activePromo(item, today) && (
+                              <span className="block text-[9px] font-black text-rose-600" title="Em promoção — gerencie no Estoque Unificado, aba Valor promocional.">
+                                promo {formatBRL(activePromo(item, today)!.cash)}
+                              </span>
+                            )}
                           </td>
                           <td className="py-2 px-2 text-right font-bold text-slate-900 align-middle whitespace-nowrap text-xs">
                             {(item.priceInstallment || item.price) > 0 ? formatBRL(item.priceInstallment || item.price) : <span className="text-slate-300 font-normal">—</span>}
@@ -1605,6 +1891,11 @@ export default function StockTable({
                           <span className="font-black text-emerald-700 text-sm">
                             {(item.priceCash || item.price) > 0 ? formatBRL(item.priceCash || item.price) : "—"}
                           </span>
+                          {activePromo(item, today) && (
+                            <span className="block text-[9px] font-black text-rose-600">
+                              promo {formatBRL(activePromo(item, today)!.cash)}
+                            </span>
+                          )}
                         </div>
                         <div>
                           <span className="text-[9px] text-slate-400 block font-bold uppercase leading-none">A Prazo</span>
@@ -2651,6 +2942,20 @@ export default function StockTable({
           </div>
         </div>
       )}
+
+      {erpSync && (
+        <ErpSyncPreviewModal
+          result={erpSync.result}
+          companyName={erpSync.company.name}
+          filter={erpSyncFilter}
+          onFilter={setErpSyncFilter}
+          busy={isInjecting}
+          onCancel={() => setErpSync(null)}
+          onConfirm={confirmErpSync}
+        />
+      )}
+
+      {erpSyncDone && <ErpSyncDoneModal result={erpSyncDone} onClose={() => setErpSyncDone(null)} />}
 
       {lastSaleReceipt && (
         <div className="fixed inset-0 z-55 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">

@@ -1,5 +1,4 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
 import {
   initializeFirestore,
   persistentLocalCache,
@@ -18,10 +17,12 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase App
-const app = initializeApp(firebaseConfig);
+export const app = initializeApp(firebaseConfig);
 
-// Initialize Authentication
-export const auth = getAuth(app);
+// O Authentication mora em firebaseAuth.ts, e não aqui: as páginas públicas
+// (consulta e assinatura do motorista) importam este arquivo para ler o banco
+// e não têm login. Com o getAuth aqui, elas baixavam e inicializavam o Auth
+// inteiro (~110 kB) sem usar.
 
 // ── Cache offline, ligado na CRIACAO do Firestore ────────────────────
 // ANTES: getFirestore(app) e, uma linha depois,

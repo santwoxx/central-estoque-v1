@@ -39,3 +39,19 @@ cd frontend
 npm run electron:build
 ```
 Gera o instalador em `frontend/dist-electron/`.
+
+## Estoque das lojas a partir do relatório do ERP
+
+1. No Time Sistemas, tire o **Relatório de estoque** da loja inteira (*Grupo: Todos*, *Marca: Todas*, *Saldo: Positivos*) em PDF e salve na raiz do projeto. PDFs na raiz não vão para o GitHub (ver `.gitignore`).
+2. Gere o JSON da loja (requer `pip install pypdf`):
+   ```bash
+   python tools/estoque-time-sistemas.py "estoque atualizado saj.pdf" SAJ frontend/src/saj_estoque.json "--loja=Saj pneus"
+   ```
+   O script confere tudo contra o rodapé do relatório (produtos, unidades e totais em R$) e não grava nada se não bater. No fim, lista o que mudou em relação ao arquivo anterior e os produtos cuja marca precisa de conferência.
+3. Publique o frontend e, como administrador, use **Sincronizar Estoque &lt;loja&gt;** em Cadastros e Ajustes. Antes de gravar, a tela mostra a prévia: produtos novos, saldo que muda, zerados, preço que muda e o que precisa de conferência.
+
+Regras da sincronização (detalhes em `frontend/src/utils/erpSync.ts`):
+- O saldo que fica é o do ERP na hora da emissão **somado ao que o sistema movimentou depois dela** — uma venda registrada no sistema depois do relatório não é desfeita.
+- Em produto que já existe, mudam só saldo e preço. Marca, modelo, medida, custo, foto e observações ficam como estão.
+- Produto que sumiu do relatório é zerado (nunca apagado), e só quando o relatório cobre a loja inteira. Reserva nunca é solta.
+- Cada alteração vai para a Auditoria como "Ajuste", com o saldo de antes e o de depois. Rodar de novo com o mesmo arquivo não muda nada.

@@ -209,6 +209,11 @@ export function mapStockDoc(id: string, data: any): StockItem {
     // (0 = nao informado). Herdar o preco de venda aqui faria toda margem
     // aparecer como zero e o capital imobilizado mentir de novo.
     costPrice: data.costPrice ?? 0,
+    promoPrice: Number(data.promoPrice) || 0,
+    promoPriceInstallment: Number(data.promoPriceInstallment) || 0,
+    promoUntil: typeof data.promoUntil === "string" && data.promoUntil ? data.promoUntil : null,
+    promoSetAt: data.promoSetAt || "",
+    promoSetBy: data.promoSetBy || "",
     notes: data.notes || "",
     description: data.description || "",
     imageUrl: data.imageUrl || "",
@@ -438,4 +443,143 @@ export function mapSuggestionDoc(id: string, data: any): Suggestion {
     resolvedByName: raw.resolvedByName || "",
     resolutionNote: raw.resolutionNote || ""
   };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Promoção
+//
+// O preço promocional fica AO LADO do normal (ver StockItem.promoPrice), e
+// toda tela decide "este pneu está em promoção?" por aqui. Uma regra só,
+// porque são vários lugares que mostram ou praticam preço — catálogo, planilha
+// unificada, saída de pneus, módulo de entrada e saída, confirmação de reserva
+// — e um deles fora do compasso venderia pelo preço errado.
+//
+// A promoção VALE quando: tem preço promocional, o último dia ainda não passou,
+// e ela é MENOR que o preço normal à vista. A última condição existe porque o
+// preço normal pode mudar depois (à mão ou pela sincronização com o ERP): uma
+// "promoção" acima do preço normal anunciaria aumento como desconto. Nesse caso
+// ela fica sem efeito, e a aba Valor Promocional aponta isso.
+// ─────────────────────────────────────────────────────────────────
+
+// Data local "AAAA-MM-DD" — o mesmo formato de `promoUntil`, para a
+// comparação ser de texto, sem fuso horário no meio.
+export function localISODate(d: Date = new Date()): string {
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+// "2026-10-31" → "31/10/2026". Texto que não for data volta como veio.
+export function formatISODateBR(iso: string | null | undefined): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso || "";
+}
+
+// Dias de `today` até `iso` (0 = é hoje; negativo = já passou). Conta em UTC
+// para o horário de verão de outros anos não roubar ou somar um dia.
+export function daysBetweenISO(today: string, iso: string): number {
+  const toUTC = (s: string) => {
+    const [y, m, d] = s.split("-").map(Number);
+    return Date.UTC(y, (m || 1) - 1, d || 1);
+  };
+  return Math.round((toUTC(iso) - toUTC(today)) / 86400000);
+}
+
+// Só o que a regra de promoção precisa ler — serve tanto para o StockItem das
+// telas quanto para o documento cru do Firestore dentro de uma transação.
+export type PromoPriceSource = {
+  price?: number;
+  priceCash?: number;
+  priceInstallment?: number;
+  promoPrice?: number;
+  promoPriceInstallment?: number;
+  promoUntil?: string | null;
+} | null | undefined;
+
+// Preço normal (de tabela), com o mesmo fallback do resto do sistema: documento
+// antigo só tem `price`, e pneu sem a prazo próprio é vendido pelo à vista.
+export function normalCashPrice(item: PromoPriceSource): number {
+  return Number(item?.priceCash) || Number(item?.price) || 0;
+}
+
+export function normalInstallmentPrice(item: PromoPriceSource): number {
+  return Number(item?.priceInstallment) || normalCashPrice(item);
+}
+
+export type PromoStatus = "SEM_PROMOCAO" | "ATIVA" | "VENCIDA" | "SEM_EFEITO";
+
+export function promoStatus(item: PromoPriceSource, today: string = localISODate()): PromoStatus {
+  const promo = Number(item?.promoPrice) || 0;
+  if (promo <= 0) return "SEM_PROMOCAO";
+  const until = typeof item?.promoUntil === "string" ? item.promoUntil : "";
+  if (until && until < today) return "VENCIDA";
+  const normal = normalCashPrice(item);
+  if (normal <= 0 || promo >= normal) return "SEM_EFEITO";
+  return "ATIVA";
+}
+
+export interface ActivePromo {
+  cash: number;               // à vista na promoção
+  installment: number;        // a prazo na promoção
+  normalCash: number;
+  normalInstallment: number;
+  until: string | null;       // último dia; null = sem prazo
+  discountPct: number;        // desconto do à vista, em %
+}
+
+export function activePromo(item: PromoPriceSource, today: string = localISODate()): ActivePromo | null {
+  if (!item || promoStatus(item, today) !== "ATIVA") return null;
+  const normalCash = normalCashPrice(item);
+  const normalInstallment = normalInstallmentPrice(item);
+  const cash = Number(item.promoPrice) || 0;
+  const typedInstallment = Number(item.promoPriceInstallment) || 0;
+  // A prazo na promoção: o informado, mas nunca abaixo do à vista promocional
+  // nem acima do a prazo normal — uma "promoção" que encarecesse o parcelado.
+  const ceiling = Math.max(normalInstallment, cash);
+  const installment = typedInstallment > 0 ? Math.min(Math.max(typedInstallment, cash), ceiling) : ceiling;
+  return {
+    cash,
+    installment,
+    normalCash,
+    normalInstallment,
+    until: typeof item.promoUntil === "string" && item.promoUntil ? item.promoUntil : null,
+    discountPct: Math.round((1 - cash / normalCash) * 1000) / 10
+  };
+}
+
+// O preço que vale AGORA: o promocional, se houver promoção ativa.
+export function effectivePrices(
+  item: PromoPriceSource,
+  today: string = localISODate()
+): { cash: number; installment: number; promo: ActivePromo | null } {
+  const promo = activePromo(item, today);
+  return promo
+    ? { cash: promo.cash, installment: promo.installment, promo }
+    : { cash: normalCashPrice(item), installment: normalInstallmentPrice(item), promo: null };
+}
+
+// Valor unitário que uma SAÍDA (venda) já abre preenchido.
+export function saleCashPrice(item: PromoPriceSource, today?: string): number {
+  return effectivePrices(item, today).cash;
+}
+
+// A prazo sugerido para a promoção: a mesma proporção entre a prazo e à vista
+// do preço normal (nas lojas, a prazo = à vista + 4%). Loja que cobra igual
+// nos dois continua igual.
+export function suggestPromoInstallment(normalCash: number, normalInstallment: number, promoCash: number): number {
+  if (promoCash <= 0) return 0;
+  if (normalCash <= 0 || normalInstallment <= normalCash) return promoCash;
+  return Math.round(promoCash * (normalInstallment / normalCash) * 100) / 100;
+}
+
+// Validade em texto curto, para selo: "Sem prazo", "Último dia hoje",
+// "Até 31/10" (com o ano só quando não é o ano corrente), "Venceu em 10/10".
+export function promoUntilLabel(until: string | null | undefined, today: string = localISODate()): string {
+  if (!until) return "Sem prazo";
+  const days = daysBetweenISO(today, until);
+  const full = formatISODateBR(until);
+  const short = until.slice(0, 4) === today.slice(0, 4) ? full.slice(0, 5) : full;
+  if (days < 0) return `Venceu em ${short}`;
+  if (days === 0) return "Último dia hoje";
+  return `Até ${short}`;
 }

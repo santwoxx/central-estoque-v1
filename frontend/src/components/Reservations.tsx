@@ -3,12 +3,14 @@ import {
   Company,
   SaleDetails,
   StockExitRequest,
+  StockItem,
   TransferOrder,
   UserRole,
   isCrossStoreReservation,
   isCustomerReservation
 } from "../types";
-import { exportToCSV, formatDate, matchesTireSize, toMillis } from "../utils";
+import { effectivePrices, exportToCSV, formatDate, matchesTireSize, toMillis } from "../utils";
+import { useToday } from "../hooks/useToday";
 import {
   AlertTriangle,
   ArrowRight,
@@ -77,6 +79,9 @@ interface ReservationsProps {
   onForceRelease: (transferId: string) => Promise<void>;
   // Apaga o registro de vez. Só vale para reserva recusada ou cancelada.
   onDelete: (transferId: string) => Promise<void>;
+  // Estoque atual: só para mostrar, na confirmação da venda, o preço que vai
+  // valer quando o campo ficar em branco (o promocional, se houver promoção).
+  stock?: StockItem[];
 }
 
 type ViewFilter = "ACAO" | "ANALISE" | "TRANSFERENCIA" | "CONCLUIDAS" | "ENCERRADAS" | "TODAS";
@@ -100,9 +105,12 @@ export default function Reservations({
   onReject,
   onCancel,
   onForceRelease,
-  onDelete
+  onDelete,
+  stock = []
 }: ReservationsProps) {
   const isAdmin = user.role === "admin";
+  const today = useToday();
+  const stockById = useMemo(() => new Map(stock.map(s => [s.id, s] as const)), [stock]);
   const isVendedor = user.role === "vendedor";
   const myCompanyId = user.companyId || "";
 
@@ -121,6 +129,17 @@ export default function Reservations({
     observation: string;
     unitPrices: Record<string, string>;
   } | null>(null);
+
+  // Preço que vale para cada pneu da venda em confirmação — o promocional, se
+  // houver promoção hoje. É o que entra quando o campo fica em branco.
+  const saleDefaults = useMemo(() => {
+    const map: Record<string, ReturnType<typeof effectivePrices>> = {};
+    for (const i of saleDraft?.t.items || []) {
+      const doc = stockById.get(String(i.sourceStockItemId));
+      if (doc) map[i.sourceStockItemId] = effectivePrices(doc, today);
+    }
+    return map;
+  }, [saleDraft, stockById, today]);
 
   const totalUnitsOf = (t: TransferOrder) =>
     (t.items || []).reduce((acc, i) => acc + (Number(i.quantity) || 0), 0);
@@ -999,6 +1018,16 @@ export default function Reservations({
                       </p>
                     </div>
                     <div className="shrink-0 flex items-center gap-1">
+                      {/* Em branco vale o preço do cadastro — e o placeholder
+                          mostra qual é, já com a promoção do dia. */}
+                      {saleDefaults[i.sourceStockItemId]?.promo && (
+                        <span
+                          title="Preço de promoção — é o que vale se o campo ficar em branco."
+                          className="px-1 py-0.5 rounded bg-rose-600 text-white text-[8px] font-black uppercase tracking-wider"
+                        >
+                          promo
+                        </span>
+                      )}
                       <span className="text-[10px] font-black text-slate-400">R$</span>
                       <input
                         inputMode="decimal"
@@ -1009,7 +1038,11 @@ export default function Reservations({
                             unitPrices: { ...saleDraft.unitPrices, [i.sourceStockItemId]: e.target.value }
                           })
                         }
-                        placeholder="cadastro"
+                        placeholder={
+                          (saleDefaults[i.sourceStockItemId]?.cash || 0) > 0
+                            ? saleDefaults[i.sourceStockItemId]!.cash.toFixed(2).replace(".", ",")
+                            : "cadastro"
+                        }
                         className="w-24 px-2 py-1.5 rounded-lg border border-slate-200 text-[12px] font-bold text-right outline-none focus:border-emerald-400"
                       />
                     </div>

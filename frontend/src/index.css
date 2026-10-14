@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* As fontes (Plus Jakarta Sans, Inter, JetBrains Mono) são carregadas no
+   index.html, com preconnect: um @import aqui só era descoberto depois que este
+   CSS inteiro chegava, e atrasava o primeiro texto da tela. */
 @import "tailwindcss";
 
 @theme {

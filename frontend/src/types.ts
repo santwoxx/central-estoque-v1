@@ -52,6 +52,17 @@ export interface StockItem {
   // Ausente em todo o estoque cadastrado antes deste campo — sempre leia com
   // `?? 0` e trate 0 como "custo nao informado", nunca como custo zero.
   costPrice?: number;
+  // ── Promoção (preço promocional DESTA loja) ──
+  // Mora AO LADO do preço normal, sem substituí-lo: enquanto vale, as telas
+  // mostram e vendem pelo promocional; quando vence, o normal volta sozinho —
+  // sem rotina agendada, porque nada foi sobrescrito. E a sincronização com o
+  // ERP, que reescreve o preço normal, não apaga a promoção. A regra de quando
+  // ela vale está em `activePromo` (utils.ts) — leia sempre por lá.
+  promoPrice?: number;             // à vista na promoção (0/ausente = sem promoção)
+  promoPriceInstallment?: number;  // a prazo na promoção (0/ausente = o a prazo normal)
+  promoUntil?: string | null;      // último dia, inclusive ("2026-10-31"); null = sem prazo
+  promoSetAt?: string;             // quando foi criada ou alterada (ISO, informativo)
+  promoSetBy?: string;             // quem criou ou alterou
   notes: string;
   description?: string; // Product description
   imageUrl?: string; // Product image url
@@ -741,4 +752,100 @@ export interface RestoreResult {
   updated: number;
   skipped: number;
   items: RestorePreviewItem[];
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Sincronização do estoque de uma loja com o relatório do ERP
+//
+// O arquivo é gerado por tools/estoque-time-sistemas.py a partir do PDF do ERP.
+// O formato novo traz, além dos produtos, o cabeçalho do relatório — e é ele
+// que transforma a antiga "injeção" (só cadastrava o que faltava) numa
+// sincronização de verdade. Ver src/utils/erpSync.ts.
+// ─────────────────────────────────────────────────────────────────
+export interface ErpStockFileItem {
+  sku: string;
+  brand: string;
+  model: string;
+  size: string;
+  quantity: number;
+  price?: number;
+  priceCash?: number;
+  priceInstallment?: number;
+  costPrice?: number;
+  notes?: string;
+  description?: string;
+}
+
+export interface ErpStockReport {
+  system: string;        // "Time Sistemas" | "Listagem de Produtos"
+  issuedAt: string;      // como sai impresso: "14/10/2026 08:17"
+  issuedAtISO: string;   // com segundos e fuso: "2026-10-14T08:17:54-03:00"
+  store: string;
+  prefix: string;        // todo sku do arquivo é `${prefix}-${código no ERP}`
+  sourceFile?: string;
+  products: number;
+  units: number;
+  totalRetail?: number;
+  totalWholesale?: number;
+  filters?: Record<string, string>;
+  // Relatório da loja INTEIRA (Grupo: Todos, Marca: Todas). Só com ele um
+  // produto que não veio na lista pode ser zerado: um relatório tirado com
+  // filtro de grupo zeraria tudo o que ficou fora do filtro.
+  complete: boolean;
+  footerVerified?: boolean;
+  generatedAt?: string;
+}
+
+export interface ErpStockFile {
+  report: ErpStockReport | null; // null = arquivo antigo (só a lista de produtos)
+  items: ErpStockFileItem[];
+}
+
+// SINCRONIZAR: o arquivo traz a hora do relatório — saldo e preço do ERP passam
+//   a valer, produto novo é cadastrado e (relatório completo) o que sumiu zera.
+// SO_CADASTRAR: arquivo antigo, sem a hora — só entra o que falta, como antes.
+export type ErpSyncMode = "SINCRONIZAR" | "SO_CADASTRAR";
+
+export type ErpSyncAction =
+  | "CRIAR"        // não existe na loja
+  | "ATUALIZAR"    // saldo e/ou preço mudam
+  | "ZERAR"        // estava na loja, não está mais no relatório
+  | "SEM_MUDANCA"
+  | "CONFERIR"     // o sistema não decide sozinho: fica como está e vai para a lista
+  | "IGNORAR";     // código duplicado — resolver antes
+
+export interface ErpSyncPreviewItem {
+  sku: string;
+  label: string;
+  action: ErpSyncAction;
+  currentQuantity: number | null;  // null = não existe na loja
+  reportQuantity: number | null;   // null = não está no relatório
+  movedAfterReport: number;        // movimentado no sistema depois da emissão
+  targetQuantity: number | null;   // saldo que fica (null = não mexe)
+  priceBefore?: { cash: number; installment: number };
+  priceAfter?: { cash: number; installment: number };
+  quantityChanged: boolean;
+  priceChanged: boolean;
+  notes: string[];
+}
+
+export interface ErpSyncResult {
+  mode: ErpSyncMode;
+  applied: boolean;              // false = prévia, nada gravado
+  syncId: string;
+  companyName: string;
+  report: ErpStockReport | null;
+  created: number;
+  updated: number;               // saldo e/ou preço
+  zeroed: number;
+  unchanged: number;
+  review: number;                // CONFERIR
+  skipped: number;               // IGNORAR
+  priceChanges: number;
+  movedAfterReport: number;      // produtos com movimentação depois do relatório
+  productsBefore: number;
+  unitsBefore: number;
+  unitsAfter: number;
+  conflicts: string[];           // gravação: sku cujo saldo mudou no meio (ficou de fora)
+  items: ErpSyncPreviewItem[];
 }

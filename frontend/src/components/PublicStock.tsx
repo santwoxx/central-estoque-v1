@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../firebase";
 import { StockItem, Company, Suggestion, CLIENTE_COMPANY_ID } from "../types";
-import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X, Lock, Lightbulb, Check, Archive } from "lucide-react";
-import { availableQuantity, formatDate, mapStockDoc, mapSuggestionDoc, matchesTireSize, reservedQuantityOf, suggestionTime, tireSizeSortKey } from "../utils";
+import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X, Lock, Lightbulb, Check, Archive, Tag } from "lucide-react";
+import { availableQuantity, effectivePrices, formatDate, mapStockDoc, mapSuggestionDoc, matchesTireSize, promoUntilLabel, reservedQuantityOf, suggestionTime, tireSizeSortKey } from "../utils";
+import { useToday } from "../hooks/useToday";
 
 interface ConsolidatedItem {
   sku: string;
@@ -19,16 +20,21 @@ interface ConsolidatedItem {
   // rodapé, e um aviso de que as outras cobram diferente.
   cheapestDoc: StockItem | null;
   priceVaries: boolean;
+  // Alguma loja tem este pneu LIVRE e em promoção: a ficha inteira ganha
+  // destaque, e o filtro "Promoções" a encontra.
+  hasPromo: boolean;
 }
 
-// Leitura tolerante de preço: documentos antigos só têm o campo legado `price`,
-// e um pneu sem preço a prazo próprio é vendido pelo valor à vista.
-function cashPriceOf(doc?: StockItem | null): number {
-  return doc ? doc.priceCash || doc.price || 0 : 0;
+// Preço que vale AGORA nesta loja: o promocional, se o pneu estiver em
+// promoção, senão o normal. A regra (e a leitura tolerante dos documentos
+// antigos, que só têm o campo legado `price`) mora em `effectivePrices`, em
+// utils — a mesma que a planilha e as telas de venda usam.
+function cashPriceOf(doc: StockItem | null | undefined, today: string): number {
+  return doc ? effectivePrices(doc, today).cash : 0;
 }
 
-function installmentPriceOf(doc?: StockItem | null): number {
-  return doc ? doc.priceInstallment || cashPriceOf(doc) : 0;
+function installmentPriceOf(doc: StockItem | null | undefined, today: string): number {
+  return doc ? effectivePrices(doc, today).installment : 0;
 }
 
 function formatPrice(value: number): string {
@@ -67,6 +73,11 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
   // máximo, uma marca de preferência — e antes disso, qual loja fica perto.
   const [brandFilter, setBrandFilter] = useState("");
   const [rimFilter, setRimFilter] = useState("");
+  // "Só promoções": o atalho do vendedor quando o cliente pergunta "tem alguma
+  // oferta?" — e do cliente que abre o link da consulta.
+  const [promoOnly, setPromoOnly] = useState(false);
+  // Muda à meia-noite: promoção vencida sai da tela sem recarregar.
+  const today = useToday();
 
   const [reserveTarget, setReserveTarget] = useState<{ item: ConsolidatedItem, companyId: string, companyName: string, sourceStockItemId: string, maxQty: number, own: boolean } | null>(null);
   const [reserveQty, setReserveQty] = useState(1);
@@ -354,6 +365,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
           description: `${item.size} ${item.brand} ${item.model}`.trim(),
           cheapestDoc: null,
           priceVaries: false,
+          hasPromo: false,
           docs: {}
         });
       }
@@ -392,19 +404,24 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
     return availableItems
       .map(item => {
         const inStock = Object.values(item.docs).filter(doc => availableQuantity(doc) > 0);
+        // Com promoção, o "a partir de" já sai pelo preço promocional: é ele
+        // que o cliente paga.
         const cheapestDoc = inStock.reduce<StockItem | null>(
-          (best, doc) => (!best || cashPriceOf(doc) < cashPriceOf(best) ? doc : best),
+          (best, doc) => (!best || cashPriceOf(doc, today) < cashPriceOf(best, today) ? doc : best),
           null
         );
         const priceVaries = inStock.length > 1 && inStock.some(
           doc =>
-            cashPriceOf(doc) !== cashPriceOf(cheapestDoc) ||
-            installmentPriceOf(doc) !== installmentPriceOf(cheapestDoc)
+            cashPriceOf(doc, today) !== cashPriceOf(cheapestDoc, today) ||
+            installmentPriceOf(doc, today) !== installmentPriceOf(cheapestDoc, today)
         );
-        return { ...item, cheapestDoc, priceVaries };
+        const hasPromo = inStock.some(doc => !!effectivePrices(doc, today).promo);
+        return { ...item, cheapestDoc, priceVaries, hasPromo };
       })
       .sort((a, b) => a.sku.localeCompare(b.sku));
-  }, [stock, companies, showReserved]);
+  }, [stock, companies, showReserved, today]);
+
+  const promoCount = useMemo(() => consolidatedItems.filter(i => i.hasPromo).length, [consolidatedItems]);
 
   // Marcas e aros que EXISTEM no catálogo agora. Montar a lista a partir do
   // próprio estoque evita o pior tipo de filtro: aquele que oferece uma opção
@@ -434,12 +451,13 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
     return Array.from(set).sort((a, b) => a - b);
   }, [consolidatedItems]);
 
-  const hasFilters = !!(searchTerm || brandFilter || rimFilter || focusCompanyId);
+  const hasFilters = !!(searchTerm || brandFilter || rimFilter || focusCompanyId || promoOnly);
 
   const clearFilters = () => {
     setSearchTerm("");
     setBrandFilter("");
     setRimFilter("");
+    setPromoOnly(false);
     setFocusCompanyId("");
     setOnlyFocusStore(false);
   };
@@ -468,7 +486,8 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
 
     const matched = bySearch.filter(item =>
       (!brandFilter || item.brand === brandFilter) &&
-      (!rimFilter || String(rimOf(item.size)) === rimFilter)
+      (!rimFilter || String(rimOf(item.size)) === rimFilter) &&
+      (!promoOnly || item.hasPromo)
     );
 
     if (!focusCompanyId) return matched;
@@ -497,7 +516,12 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
       return 2;
     };
     return [...matched].sort((a, b) => hasFree(a) - hasFree(b) || a.sku.localeCompare(b.sku));
-  }, [consolidatedItems, searchTerm, brandFilter, rimFilter, focusCompanyId, onlyFocusStore, showReserved]);
+  }, [consolidatedItems, searchTerm, brandFilter, rimFilter, promoOnly, focusCompanyId, onlyFocusStore, showReserved]);
+
+  // Preço da loja escolhida no modal de reserva — com a promoção dela.
+  const reservePrices = reserveTarget
+    ? effectivePrices(reserveTarget.item.docs[reserveTarget.companyId], today)
+    : null;
 
   if (loading) {
     return (
@@ -616,7 +640,28 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
             )}
             {brandFilter && <span className="font-medium text-slate-400"> · {brandFilter}</span>}
             {rimFilter && <span className="font-medium text-slate-400"> · aro {rimFilter}</span>}
+            {promoOnly && <span className="font-medium text-rose-500"> · em promoção</span>}
           </h2>
+          {/* Só aparece quando existe oferta valendo. Fica na mesma linha do
+              total, que é para onde o olho vai depois da busca. */}
+          {promoCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setPromoOnly(v => !v)}
+              title={promoOnly ? "Voltar a mostrar todos os pneus" : "Mostrar só os pneus em promoção"}
+              className={`mr-auto flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-[11px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                promoOnly
+                  ? "bg-rose-600 text-white border-rose-600 shadow-sm hover:bg-rose-700"
+                  : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+              }`}
+            >
+              <Tag size={13} className="stroke-[2.5px]" />
+              {promoOnly ? "✓ Só promoções" : "Promoções"}
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] leading-none ${promoOnly ? "bg-white/20" : "bg-rose-600 text-white"}`}>
+                {promoCount}
+              </span>
+            </button>
+          )}
           {/* Sempre visível, não só quando a busca zera: metade dos pedidos que
               o estoque não atende aparece no meio de uma lista cheia ("tem essa
               medida, mas na marca X"). */}
@@ -774,6 +819,8 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
               const itemReserved = showReserved
                 ? Object.values(item.docs).reduce<number>((acc, doc) => acc + reservedQuantityOf(doc), 0)
                 : 0;
+              // Preço do rodapé (a loja mais barata), já com a promoção dela.
+              const footer = effectivePrices(item.cheapestDoc, today);
 
               return (
               // Cartão compacto: sem foto (o estoque não tem imagem de pneu, e o
@@ -784,6 +831,8 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                 className={`rounded-2xl border shadow-xs hover:shadow-md transition-all flex flex-col ${
                   itemReserved > 0
                     ? "bg-amber-50/40 border-amber-300 hover:border-amber-400"
+                    : item.hasPromo
+                    ? "bg-white border-rose-300 ring-1 ring-rose-200/70 hover:border-rose-400"
                     : "bg-white border-slate-200 hover:border-slate-300"
                 }`}
               >
@@ -805,6 +854,14 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                     >
                       {item.sku}
                     </span>
+                    {item.hasPromo && (
+                      <span
+                        title="Este pneu está em promoção — o preço promocional está na linha da loja."
+                        className="shrink-0 inline-flex items-center gap-0.5 bg-rose-600 text-white border border-rose-700 rounded px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider shadow-sm"
+                      >
+                        <Tag size={9} className="stroke-[3px]" /> Promoção
+                      </span>
+                    )}
                     {itemReserved > 0 && (
                       <span
                         title={`${itemReserved} un deste pneu estão reservadas para clientes.`}
@@ -867,8 +924,9 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                       // O preço é DESTA filial. Duas lojas com o mesmo pneu
                       // cobram valores diferentes, e é esse número que vale para
                       // quem for comprar aqui.
-                      const cash = cashPriceOf(stockDoc);
-                      const installment = installmentPriceOf(stockDoc);
+                      const { cash, installment, promo } = stockDoc
+                        ? effectivePrices(stockDoc, today)
+                        : { cash: 0, installment: 0, promo: null };
 
                       return (
                         <div
@@ -917,7 +975,24 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                           {/* Preco desta loja e a acao, dividindo a segunda
                               linha — que e larga porque o nome saiu dela. */}
                           <div className="flex items-center justify-between gap-1.5">
-                            {cash > 0 ? (
+                            {promo ? (
+                              // Promoção: o preço normal riscado ao lado do
+                              // promocional, e até quando ele vale — é a frase
+                              // que o vendedor repete para o cliente.
+                              <span className="min-w-0 text-[10px] font-bold leading-tight">
+                                <span className="flex flex-wrap items-center gap-x-1">
+                                  <span className="inline-flex items-center gap-0.5 px-1 py-px rounded bg-rose-600 text-white text-[8px] font-black uppercase tracking-wider">
+                                    <Tag size={8} className="stroke-[3px]" /> Promo
+                                  </span>
+                                  <span className="text-slate-400 line-through">{formatPrice(promo.normalCash)}</span>
+                                  <span className="text-[11px] font-black text-rose-600">{formatPrice(cash)}</span>
+                                </span>
+                                <span className="block text-[9px] font-semibold text-slate-400">
+                                  {installment !== cash && <>{formatPrice(installment)} a prazo · </>}
+                                  <span className="text-rose-500 font-bold">{promoUntilLabel(promo.until, today).toLowerCase()}</span>
+                                </span>
+                              </span>
+                            ) : cash > 0 ? (
                               <span className="min-w-0 truncate text-[10px] font-bold text-emerald-700">
                                 {formatPrice(cash)}
                                 {installment > 0 && installment !== cash && (
@@ -972,24 +1047,35 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                 {/* Rodapé: o menor preço entre as lojas que têm o pneu.
                     Com filiais cobrando valores diferentes ele vira "a partir
                     de" — o preço exato de cada uma está na linha dela acima. */}
-                {cashPriceOf(item.cheapestDoc) > 0 && (
-                  <div className="flex items-end justify-between gap-2 px-4 py-2.5 border-t border-gold-100 bg-gradient-to-r from-gold-50/60 to-amber-50/40 rounded-b-2xl">
+                {footer.cash > 0 && (
+                  <div
+                    className={`flex items-end justify-between gap-2 px-4 py-2.5 border-t rounded-b-2xl ${
+                      footer.promo
+                        ? "border-rose-100 bg-gradient-to-r from-rose-50 to-rose-100/40"
+                        : "border-gold-100 bg-gradient-to-r from-gold-50/60 to-amber-50/40"
+                    }`}
+                  >
                     <div className="min-w-0">
-                      <div className="text-[9px] font-bold uppercase text-gold-700 tracking-wider leading-none">
-                        {item.priceVaries ? "À vista a partir de" : "À Vista"}
+                      <div className={`text-[9px] font-bold uppercase tracking-wider leading-none ${footer.promo ? "text-rose-600" : "text-gold-700"}`}>
+                        {footer.promo
+                          ? (item.priceVaries ? "Promoção a partir de" : "Promoção à vista")
+                          : (item.priceVaries ? "À vista a partir de" : "À Vista")}
                       </div>
-                      <div className="text-base font-black text-emerald-700 leading-none mt-1 truncate">
-                        {formatPrice(cashPriceOf(item.cheapestDoc))}
+                      <div className={`text-base font-black leading-none mt-1 truncate ${footer.promo ? "text-rose-600" : "text-emerald-700"}`}>
+                        {footer.promo && (
+                          <span className="mr-1 text-[10px] font-bold text-slate-400 line-through">{formatPrice(footer.promo.normalCash)}</span>
+                        )}
+                        {formatPrice(footer.cash)}
                       </div>
                     </div>
 
-                    {installmentPriceOf(item.cheapestDoc) > 0 && (
+                    {footer.installment > 0 && (
                       <div className="text-right min-w-0">
                         <div className="text-[9px] font-bold uppercase text-slate-500 tracking-wider leading-none">
                           {item.priceVaries ? "A prazo a partir de" : "A Prazo"}
                         </div>
                         <div className="text-sm font-black text-slate-800 leading-none mt-1 truncate">
-                          {formatPrice(installmentPriceOf(item.cheapestDoc))}
+                          {formatPrice(footer.installment)}
                         </div>
                       </div>
                     )}
@@ -1044,22 +1130,27 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
               <p className="text-xs"><strong>Livre agora:</strong> {reserveTarget.maxQty} un</p>
               {/* O preço é o DESTA loja — a mesma que o pedido vai para. É aqui
                   que a filial é escolhida, então é aqui que o número importa. */}
-              {cashPriceOf(reserveTarget.item.docs[reserveTarget.companyId]) > 0 && (
+              {reservePrices && reservePrices.cash > 0 && (
                 <p className="text-xs">
                   <strong>Preço em {reserveTarget.companyName}:</strong>{" "}
-                  <span className="font-black text-emerald-700">
-                    {formatPrice(cashPriceOf(reserveTarget.item.docs[reserveTarget.companyId]))}
+                  {reservePrices.promo && (
+                    <span className="text-slate-400 line-through mr-1">{formatPrice(reservePrices.promo.normalCash)}</span>
+                  )}
+                  <span className={`font-black ${reservePrices.promo ? "text-rose-600" : "text-emerald-700"}`}>
+                    {formatPrice(reservePrices.cash)}
                   </span>
                   <span className="text-slate-400"> à vista</span>
-                  {installmentPriceOf(reserveTarget.item.docs[reserveTarget.companyId]) !==
-                    cashPriceOf(reserveTarget.item.docs[reserveTarget.companyId]) && (
+                  {reservePrices.installment !== reservePrices.cash && (
                     <>
                       {" · "}
-                      <span className="font-black text-slate-700">
-                        {formatPrice(installmentPriceOf(reserveTarget.item.docs[reserveTarget.companyId]))}
-                      </span>
+                      <span className="font-black text-slate-700">{formatPrice(reservePrices.installment)}</span>
                       <span className="text-slate-400"> a prazo</span>
                     </>
+                  )}
+                  {reservePrices.promo && (
+                    <span className="block mt-0.5 font-bold text-rose-600">
+                      Preço de promoção — {promoUntilLabel(reservePrices.promo.until, today).toLowerCase()}.
+                    </span>
                   )}
                 </p>
               )}

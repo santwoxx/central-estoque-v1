@@ -2,10 +2,12 @@ import React, { useState, useMemo } from "react";
 import { StockItem, Company, StockFlowType, StockFlowPayload, StockFlowResult } from "../types";
 import {
   Search, Plus, Minus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon,
-  PackagePlus, PackageMinus, AlertTriangle, CheckCircle2, ArrowRight, ArrowRightLeft, Lock
+  PackagePlus, PackageMinus, AlertTriangle, CheckCircle2, ArrowRight, ArrowRightLeft, Lock, Tag
 } from "lucide-react";
-import { availableQuantity, compareTireSize, compareTireSizeDesc, formatBRL, matchesTireSize, parsePriceInput, QUICK_QTY, reservedQuantityOf, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import { activePromo, availableQuantity, compareTireSize, compareTireSizeDesc, formatBRL, matchesTireSize, parsePriceInput, promoUntilLabel, QUICK_QTY, reservedQuantityOf, saleCashPrice, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import { useToday } from "../hooks/useToday";
 import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
+import PromotionsManager from "./PromotionsManager";
 
 interface UnifiedStockProps {
   items: StockItem[];
@@ -100,6 +102,12 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
 
   const isAdmin = user.role === "admin";
   const isVendedor = user.role === "vendedor";
+
+  // Aba da tela: a planilha de estoque ou a gestão de promoções. A promoção
+  // tem aba própria porque é de UMA loja, com prazo — não cabe numa célula da
+  // planilha, que mostra o preço de uma loja só para N filiais.
+  const [view, setView] = useState<"ESTOQUE" | "PROMOCOES">("ESTOQUE");
+  const today = useToday();
 
   // A empresa do usuario aparece sempre como primeira coluna; as demais seguem
   // a ordem alfabetica vinda do App. Admin global (sem companyId) ve a ordem padrao.
@@ -943,9 +951,15 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
   }, [flowItem, flowCompanyId, flowCompanyName, flowQtyNumber, flowEffectiveReason, isEntrada, flowDoc, flowFree, flowReserved, flowBalance]);
 
   // Entrada é custo de compra (só quem tem a nota na mão sabe); saída sai pelo
-  // preço de venda à vista já cadastrado, que é o palpite certo no balcão.
-  const defaultFlowPrice = (item: ConsolidatedItem, type: StockFlowType) =>
-    type === "SAIDA" && item.priceCash > 0 ? String(item.priceCash) : "";
+  // preço de venda à vista DAQUELA loja — o promocional, se ela estiver com o
+  // pneu em promoção —, que é o palpite certo no balcão. (Antes saía o preço da
+  // loja que a linha da planilha mostra, que pode não ser a da saída.)
+  const defaultFlowPrice = (item: ConsolidatedItem, type: StockFlowType, companyId?: string) => {
+    if (type !== "SAIDA") return "";
+    const doc = companyId ? item.docs[companyId] : undefined;
+    const price = doc ? saleCashPrice(doc, today) : item.priceCash;
+    return price > 0 ? String(price) : "";
+  };
 
   const openFlowModal = (item: ConsolidatedItem, type: StockFlowType, companyId?: string) => {
     if (!canOperateFlow) return;
@@ -968,7 +982,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     setFlowPartyName("");
     setFlowPartyDoc("");
     setFlowPlate("");
-    setFlowUnitPrice(defaultFlowPrice(item, type));
+    setFlowUnitPrice(defaultFlowPrice(item, type, preferred?.id));
     setFlowObservation("");
     setFlowError("");
     setFlowSuccess(null);
@@ -981,7 +995,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     setFlowReasonChoice(STOCK_FLOW_REASONS[type][0]);
     setFlowCustomReason("");
     setFlowError("");
-    if (flowItem) setFlowUnitPrice(defaultFlowPrice(flowItem, type));
+    if (flowItem) setFlowUnitPrice(defaultFlowPrice(flowItem, type, flowCompanyId));
   };
 
   // Volta do comprovante para o formulário mantendo produto e empresa: quem dá
@@ -992,7 +1006,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     setFlowQty("1");
     setFlowReasonChoice(STOCK_FLOW_REASONS[flowType][0]);
     setFlowCustomReason("");
-    if (flowItem) setFlowUnitPrice(defaultFlowPrice(flowItem, flowType));
+    if (flowItem) setFlowUnitPrice(defaultFlowPrice(flowItem, flowType, flowCompanyId));
   };
 
   const closeFlowModal = () => {
@@ -1108,9 +1122,48 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         ring: "focus:ring-red-500/10 focus:border-red-500"
       };
 
+  // Promoções que esta pessoa administra e que valem agora: o número no selo
+  // da aba, para quem está na planilha saber que existe oferta rodando.
+  const activePromoCount = useMemo(
+    () => items.filter(d => canEditCompany(d.companyId || "") && activePromo(d, today)).length,
+    [items, today, user.role, user.companyId]
+  );
+
+  const tabClass = (active: boolean) =>
+    `flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[11px] font-black uppercase tracking-wider border transition-all cursor-pointer ${
+      active ? "bg-white text-slate-900 border-slate-200 shadow-sm" : "text-slate-500 border-transparent hover:text-slate-800"
+    }`;
+
+  // O vendedor não administra preço — para ele a promoção aparece no catálogo.
+  const tabBar = !isVendedor && (
+    <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 border border-slate-200 rounded-xl w-fit">
+      <button type="button" onClick={() => setView("ESTOQUE")} className={tabClass(view === "ESTOQUE")}>
+        <Building2 size={13} /> Estoque
+      </button>
+      <button type="button" onClick={() => setView("PROMOCOES")} className={tabClass(view === "PROMOCOES")}>
+        <Tag size={13} className="text-rose-600" /> Valor promocional
+        {activePromoCount > 0 && (
+          <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[9px] font-black leading-none">
+            {activePromoCount}
+          </span>
+        )}
+      </button>
+    </div>
+  );
+
+  if (view === "PROMOCOES" && !isVendedor) {
+    return (
+      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+        {tabBar}
+        <PromotionsManager items={items} companies={companies} user={user} onUpdateItem={onUpdateItem} />
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
-      
+      {tabBar}
+
       {/* Header section with search and actions */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         {/* Search Input */}
@@ -1297,6 +1350,9 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
           <tbody className="divide-y divide-slate-100 bg-white">
             {filteredItems.map((item) => {
               const isProcessing = loadingSku === item.sku;
+              // Promoção da loja cujo preço a linha mostra (a coluna de preço é
+              // de UMA loja — ver priceSourceCompanyId).
+              const rowPromo = activePromo(item.docs[item.priceCompanyId], today);
               return (
                 <tr key={item.sku} className={`hover:bg-gold-50/5 text-slate-800 transition-colors ${isProcessing ? "opacity-50" : ""}`}>
                   <td 
@@ -1397,6 +1453,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                     // e entender que aquele saldo já tem dono.
                     const isEditing = editingCell?.sku === item.sku && editingCell?.field === comp.id;
                     const editable = canEditCompany(comp.id);
+                    const cellPromo = activePromo(docItem, today);
 
                     return (
                       <td
@@ -1451,6 +1508,14 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                                   <Lock size={8} className="stroke-[3px]" /> {reserved} reserv.
                                 </span>
                               )}
+                              {cellPromo && (
+                                <span
+                                  title={`${comp.name}: em promoção por ${formatBRL(cellPromo.cash)} à vista (normal ${formatBRL(cellPromo.normalCash)}) — ${promoUntilLabel(cellPromo.until, today).toLowerCase()}.`}
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-rose-600 text-white border border-rose-700 text-[8px] font-black uppercase tracking-wider leading-none shadow-xs"
+                                >
+                                  <Tag size={8} className="stroke-[3px]" /> promo
+                                </span>
+                              )}
                             </span>
                           ) : (
                             <span className="text-slate-300 font-bold">—</span>
@@ -1483,6 +1548,14 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                         {item.priceVaries && (
                         <span className="ml-0.5 align-super text-[9px] font-black text-amber-500">≠</span>
                       )}
+                        {rowPromo && (
+                          <span
+                            className="block text-[9px] font-black text-rose-600 leading-tight"
+                            title={`Em promoção — ${promoUntilLabel(rowPromo.until, today).toLowerCase()}. Gerencie na aba Valor promocional.`}
+                          >
+                            promo {formatBRL(rowPromo.cash)}
+                          </span>
+                        )}
                       </>
                     )}
                   </td>
@@ -1510,6 +1583,11 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                         {item.priceVaries && (
                         <span className="ml-0.5 align-super text-[9px] font-black text-amber-500">≠</span>
                       )}
+                        {rowPromo && (
+                          <span className="block text-[9px] font-black text-rose-600 leading-tight">
+                            promo {formatBRL(rowPromo.installment)}
+                          </span>
+                        )}
                       </>
                     )}
                   </td>
@@ -1561,6 +1639,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       <div className="block md:hidden space-y-4">
         {filteredItems.map((item) => {
           const isProcessing = loadingSku === item.sku;
+          const rowPromo = activePromo(item.docs[item.priceCompanyId], today);
           // Mesma leitura do desktop, adaptada ao cartão: no celular não existe
           // grade de células para pintar, então quem carrega a cor é o cartão.
           const cardReserved = Object.values(item.docs).reduce<number>(
@@ -1690,6 +1769,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                     // da loja fica âmbar quando aquele saldo já tem dono.
                     const isEditing = editingCell?.sku === item.sku && editingCell?.field === comp.id;
                     const editable = canEditCompany(comp.id);
+                    const cellPromo = activePromo(docItem, today);
 
                     return (
                       <div 
@@ -1724,6 +1804,11 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                                 <Lock size={7} className="stroke-[3px]" /> {reserved} reserv.
                               </span>
                             )}
+                            {cellPromo && (
+                              <span className="mt-0.5 inline-flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-rose-600 text-white border border-rose-700 text-[7px] font-black uppercase tracking-wider leading-none">
+                                <Tag size={7} className="stroke-[3px]" /> promo {formatBRL(cellPromo.cash)}
+                              </span>
+                            )}
                           </>
                         )}
                       </div>
@@ -1753,9 +1838,14 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                       className="w-20 px-1 mt-1 text-center outline-none bg-white border border-gold-400 rounded font-bold text-xs"
                     />
                   ) : (
-                    <span className="mt-0.5 block font-black text-xs text-emerald-700">
-                      {item.priceCash > 0 ? `R$ ${item.priceCash.toFixed(2).replace(".", ",")}` : "—"}
-                    </span>
+                    <>
+                      <span className="mt-0.5 block font-black text-xs text-emerald-700">
+                        {item.priceCash > 0 ? `R$ ${item.priceCash.toFixed(2).replace(".", ",")}` : "—"}
+                      </span>
+                      {rowPromo && (
+                        <span className="block text-[9px] font-black text-rose-600">promo {formatBRL(rowPromo.cash)}</span>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -1778,9 +1868,14 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                       className="w-20 px-1 mt-1 text-center outline-none bg-white border border-gold-400 rounded font-bold text-xs"
                     />
                   ) : (
-                    <span className="mt-0.5 block font-black text-xs text-slate-900">
-                      {item.priceInstallment > 0 ? `R$ ${item.priceInstallment.toFixed(2).replace(".", ",")}` : "—"}
-                    </span>
+                    <>
+                      <span className="mt-0.5 block font-black text-xs text-slate-900">
+                        {item.priceInstallment > 0 ? `R$ ${item.priceInstallment.toFixed(2).replace(".", ",")}` : "—"}
+                      </span>
+                      {rowPromo && (
+                        <span className="block text-[9px] font-black text-rose-600">promo {formatBRL(rowPromo.installment)}</span>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -1974,7 +2069,15 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                             <button
                               type="button"
                               key={comp.id}
-                              onClick={() => { setFlowCompanyId(comp.id); setFlowError(""); }}
+                              onClick={() => {
+                                // O preço sugerido acompanha a loja — a menos que a
+                                // pessoa já tenha digitado o dela.
+                                if (flowItem && flowUnitPrice === defaultFlowPrice(flowItem, flowType, flowCompanyId)) {
+                                  setFlowUnitPrice(defaultFlowPrice(flowItem, flowType, comp.id));
+                                }
+                                setFlowCompanyId(comp.id);
+                                setFlowError("");
+                              }}
                               className={`px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
                                 selected ? "border-gold-500 bg-gold-50/60 shadow-xs" : "border-slate-200 bg-white hover:bg-slate-50"
                               }`}

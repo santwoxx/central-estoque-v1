@@ -44,9 +44,11 @@ import {
   serverTimestamp,
   writeBatch,
   limit,
-  orderBy
+  orderBy,
+  Timestamp
 } from "firebase/firestore";
-import { auth, db } from "./firebase";
+import { db } from "./firebase";
+import { auth } from "./firebaseAuth";
 import {
   StockItem,
   MovementLog,
@@ -72,10 +74,20 @@ import {
   StockExitItem,
   StockExitOrigin,
   RestoreResult,
-  RestorePreviewItem
+  RestorePreviewItem,
+  ErpStockFile,
+  ErpSyncResult
 } from "./types";
 import { CLIENTE_COMPANY_ID, canReviewStockExit, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "./types";
-import { availableQuantity, formatDate, mapMovementDoc, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, suggestionTime, toMillis } from "./utils";
+import { availableQuantity, formatBRL, formatDate, mapMovementDoc, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, saleCashPrice, suggestionTime, toMillis } from "./utils";
+import {
+  collectActivityAfterReport,
+  erpReportMillis,
+  isErpSyncWrite,
+  planErpSync,
+  summarizeErpSync,
+  toErpLiveDoc
+} from "./utils/erpSync";
 import { useAppNotifications } from "./hooks/useAppNotifications";
 
 // Components
@@ -85,8 +97,9 @@ import { useAppNotifications } from "./hooks/useAppNotifications";
 // tab — keeps the initial bundle from dragging in things like the WebUSB ADB stack
 // (ApkInstaller) for users who never open that tab.
 import AuthScreen from "./components/AuthScreen";
-import PublicStock from "./components/PublicStock"; // Nova tela de consulta
-import PublicSignature from "./components/PublicSignature"; // Assinatura do motorista via link
+// Catálogo dos vendedores (aba "catalogo"). A mesma tela, sem login, é a
+// consulta pública — essa rota é resolvida em main.tsx.
+import PublicStock from "./components/PublicStock";
 const PDFImporter = lazy(() => import("./components/PDFImporter"));
 const StockTable = lazy(() => import("./components/StockTable"));
 const MovementReports = lazy(() => import("./components/MovementReports"));
@@ -362,23 +375,8 @@ async function resolveSessionProfile(firebaseUser: {
 
 
 export default function App() {
-  // O caminho chega com a barra final quando alguem copia o link do navegador
-  // ou o WhatsApp "arruma" a URL. Sem normalizar, '/consulta/' nao batia com
-  // nenhuma rota e caia na tela de login — o cliente abria o catalogo e via um
-  // pedido de senha.
-  const route = window.location.pathname.replace(/\/+$/, "") || "/";
-
-  // Se for a rota pública, renderiza apenas o estoque público e ignora todo o resto
-  if (route === '/consulta') {
-    return <PublicStock />;
-  }
-
-  // Pagina publica de assinatura do motorista. Ele nao tem login: chega por um
-  // link com token e assina ali. Fica antes de qualquer checagem de sessao.
-  if (route === '/assinar') {
-    return <PublicSignature />;
-  }
-
+  // As rotas públicas (/consulta e /assinar) são decididas em main.tsx, antes
+  // de este arquivo ser baixado — o App só é carregado para o sistema com login.
   const [user, setUser] = useState<{ uid: string; email: string; displayName: string; role: UserRole; companyId?: string; companyName?: string; credentialId?: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [kpiCompanyId, setKpiCompanyId] = useState<string>("ALL");
@@ -2018,6 +2016,220 @@ export default function App() {
     }
 
     return result;
+  };
+
+  // ── SINCRONIZAÇÃO COM O RELATÓRIO DO ERP ───────────────────────────
+  //
+  // ANTES o botão "Injetar Estoque <loja>" só CADASTRAVA o que faltava: código
+  // que já existia era pulado. Servia para a primeira carga, mas um relatório
+  // ATUALIZADO não mudava nada do que já estava no sistema — saldo que caiu,
+  // preço que mudou e produto que esgotou ficavam como estavam. Com o relatório
+  // da SAJ de 14/10, seriam 46 produtos esgotados (144 un) continuando à venda.
+  //
+  // AGORA, com o arquivo no formato novo (que traz a hora do relatório), o
+  // saldo e o preço do ERP passam a valer — somados ao que o sistema
+  // movimentou depois da emissão. A conta inteira e as regras de segurança
+  // estão em utils/erpSync.ts; aqui ficam só a leitura e a gravação.
+  //
+  // `dryRun` devolve a prévia sem gravar nada. Na gravação o cálculo é refeito
+  // com o estoque lido de novo do servidor, e cada produto confere, dentro da
+  // transação, se saldo e reserva ainda são os do cálculo: se mudaram no meio,
+  // o produto fica de fora e é avisado (rodar de novo termina o serviço).
+  //
+  // Só do administrador, pelo mesmo motivo da restauração de backup: zerar e
+  // reduzir saldo fora da fila de aprovação é o que as regras do Firestore
+  // impedem para todo o resto.
+  const handleSyncStoreStock = async (
+    company: Company,
+    file: ErpStockFile,
+    dryRun: boolean = false
+  ): Promise<ErpSyncResult> => {
+    if (!user) throw new Error("Sessão expirada. Faça login novamente.");
+    if (user.role !== "admin") {
+      throw new Error(
+        "Sincronizar o estoque com o ERP é uma operação do administrador: ela pode reduzir e zerar " +
+        "saldo, e reduzir saldo fora da fila de aprovação é exatamente o que o sistema passou a impedir."
+      );
+    }
+    if (!company?.id) throw new Error("Empresa inválida.");
+    if (!file || file.items.length === 0) throw new Error("O arquivo do ERP está vazio.");
+
+    // Estoque da loja, lido do SERVIDOR — não o array em memória.
+    const liveSnap = await getDocs(query(collection(db, "stock"), where("companyId", "==", company.id)));
+    const live = liveSnap.docs.map(d => toErpLiveDoc(d.id, d.data()));
+
+    // O que o sistema movimentou nesta loja depois da emissão do relatório.
+    const reportMs = erpReportMillis(file.report);
+    let movementDocs: any[] = [];
+    if (reportMs > 0) {
+      const movementsRef = collection(db, "movements");
+      try {
+        const snap = await getDocs(query(
+          movementsRef,
+          where("companyId", "==", company.id),
+          where("timestamp", ">", Timestamp.fromMillis(reportMs)),
+          orderBy("timestamp", "desc")
+        ));
+        movementDocs = snap.docs.map(d => d.data());
+      } catch (err: any) {
+        // Sem o índice composto (companyId + timestamp, ver
+        // firestore.indexes.json) a consulta falha com failed-precondition — o
+        // mesmo caso tratado no listener de movimentos lá em cima. Traz a
+        // empresa inteira; o filtro por data acontece em
+        // collectActivityAfterReport. Mais leitura, mesmo resultado.
+        if (err?.code !== "failed-precondition") throw err;
+        movementDocs = (await getDocs(query(movementsRef, where("companyId", "==", company.id)))).docs.map(d => d.data());
+      }
+    }
+
+    const plan = planErpSync(file, live, collectActivityAfterReport(movementDocs, reportMs));
+    const syncId = `SYNC-${plan.prefix || "ERP"}-${Date.now().toString(36).toUpperCase()}`;
+    const summaryArgs = { companyName: company.name, report: file.report, syncId };
+
+    if (dryRun) return summarizeErpSync(plan, { ...summaryArgs, applied: false });
+
+    const origin = file.report
+      ? `Sincronização com o ERP (${file.report.system}, relatório de ${file.report.issuedAt})`
+      : `Carga do estoque de ${company.name} (arquivo do ERP)`;
+    const priceText = (p?: { cash: number; installment: number }) =>
+      p ? `à vista ${formatBRL(p.cash)}, a prazo ${formatBRL(p.installment)}` : "";
+
+    const writes = plan.entries.filter(e => isErpSyncWrite(e.action));
+    // O id do cadastro novo nasce aqui, fora da transação: se ela for repetida
+    // pelo Firestore (concorrência), o documento continua sendo o mesmo.
+    const newRefs = new Map(writes.filter(e => e.action === "CRIAR").map(e => [e, doc(collection(db, "stock"))] as const));
+    const conflicts: string[] = [];
+
+    // Até 100 produtos por transação (cada um grava 2 documentos). Se uma
+    // falhar, as anteriores ficam — e clicar de novo termina só o que faltou.
+    for (let i = 0; i < writes.length; i += 100) {
+      const chunk = writes.slice(i, i + 100);
+      const chunkConflicts: string[] = [];
+
+      await runTransaction(db, async (transaction) => {
+        chunkConflicts.length = 0;
+
+        // --- LEITURAS --- (em paralelo: todas terminam antes da 1ª escrita)
+        const fresh = new Map<string, any>();
+        const reads = await Promise.all(
+          chunk
+            .filter(e => e.action !== "CRIAR" && e.stockItemId)
+            .map(async e => [e.stockItemId!, await transaction.get(doc(db, "stock", e.stockItemId!))] as const)
+        );
+        for (const [id, snap] of reads) fresh.set(id, snap.exists() ? snap.data() : null);
+
+        // --- ESCRITAS ---
+        for (const e of chunk) {
+          const movementRef = doc(collection(db, "movements"));
+
+          if (e.action === "CRIAR") {
+            const item = e.fileItem!;
+            const ref = newRefs.get(e)!;
+            const quantity = e.targetQuantity ?? 0;
+            const cash = e.priceAfter?.cash ?? 0;
+            const installment = e.priceAfter?.installment ?? 0;
+            transaction.set(ref, {
+              sku: item.sku,
+              brand: item.brand || "",
+              model: item.model || "",
+              size: item.size || "—",
+              quantity,
+              price: Number(item.price ?? cash) || 0,
+              priceCash: cash,
+              priceInstallment: installment,
+              costPrice: Number(item.costPrice) || 0,
+              notes: item.notes || "",
+              description: item.description || "",
+              imageUrl: "",
+              companyId: company.id,
+              companyName: company.name,
+              userId: user.uid,
+              userEmail: user.email,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+            transaction.set(movementRef, {
+              sku: item.sku,
+              brand: item.brand || "",
+              model: item.model || "",
+              size: item.size || "—",
+              type: "IMPORTACAO",
+              quantity,
+              balanceAfter: quantity,
+              companyId: company.id,
+              companyName: company.name,
+              userId: user.uid,
+              userEmail: user.email,
+              timestamp: serverTimestamp(),
+              reason: `${origin} — produto novo: ${quantity} un`,
+              stockItemId: ref.id,
+              erpSyncId: syncId,
+              erpReportAt: file.report?.issuedAtISO || ""
+            });
+            continue;
+          }
+
+          const data = fresh.get(e.stockItemId!);
+          const before = Number(data?.quantity) || 0;
+          // Saldo ou reserva mudou entre o cálculo e agora: a conta deste
+          // produto está velha. Fica de fora e volta para a lista.
+          if (!data || before !== e.currentQuantity || reservedQuantityOf(data) !== (e.reservedQuantity ?? 0)) {
+            chunkConflicts.push(e.sku);
+            continue;
+          }
+
+          const target = e.targetQuantity ?? before;
+          const update: Record<string, any> = { updatedAt: serverTimestamp() };
+          if (target !== before) update.quantity = target;
+          if (e.priceChanged && e.priceAfter) {
+            update.priceCash = e.priceAfter.cash;
+            update.priceInstallment = e.priceAfter.installment;
+            update.price = e.priceAfter.cash;
+          }
+          transaction.update(doc(db, "stock", e.stockItemId!), update);
+
+          const parts: string[] = [];
+          if (target !== before) {
+            parts.push(
+              (e.action === "ZERAR" ? "fora do relatório (saldo 0 no ERP): " : "") +
+              `saldo ${before} → ${target} un` +
+              (e.movedAfterReport !== 0
+                ? ` (ERP ${e.reportQuantity ?? 0} ${e.movedAfterReport > 0 ? "+" : "−"} ` +
+                  `${Math.abs(e.movedAfterReport)} movimentadas no sistema depois do relatório)`
+                : "")
+            );
+          }
+          if (e.priceChanged) parts.push(`preço: ${priceText(e.priceBefore)} → ${priceText(e.priceAfter)}`);
+
+          // AJUSTE, e não ENTRADA/SAÍDA: a diferença é acerto de inventário
+          // contra o ERP, não uma venda ou compra feita agora. Gravada como
+          // SAÍDA, entraria no gráfico de saídas e no ranking de medidas mais
+          // vendidas (Histórico por Medida).
+          transaction.set(movementRef, {
+            sku: data.sku || e.sku,
+            brand: data.brand || "",
+            model: data.model || "",
+            size: data.size || "",
+            type: "AJUSTE",
+            quantity: target - before,
+            balanceAfter: target,
+            companyId: data.companyId || company.id,
+            companyName: data.companyName || company.name,
+            userId: user.uid,
+            userEmail: user.email,
+            timestamp: serverTimestamp(),
+            reason: `${origin} — ${parts.join(" · ")}`,
+            stockItemId: e.stockItemId,
+            erpSyncId: syncId,
+            erpReportAt: file.report?.issuedAtISO || ""
+          });
+        }
+      });
+
+      conflicts.push(...chunkConflicts);
+    }
+
+    return summarizeErpSync(plan, { ...summaryArgs, applied: true, conflicts });
   };
 
   // Add a new company/branch (creates a new column in unified stock)
@@ -4151,12 +4363,13 @@ export default function App() {
 
           // Preco praticado na venda: o que foi digitado na confirmacao vale
           // mais do que a tabela. Sem digitacao (ou digitando zero), fica o
-          // preco a vista do cadastro, como sempre foi.
+          // preco a vista do cadastro — o promocional, se o pneu estiver em
+          // promocao hoje (ver activePromo em utils).
           const typedPrice = Number(typed.unitPrices[String(item.sourceStockItemId)]);
           const unitPrice =
             Number.isFinite(typedPrice) && typedPrice > 0
               ? typedPrice
-              : Number(sourceData.priceCash ?? sourceData.price ?? 0) || 0;
+              : saleCashPrice(sourceData);
 
           stockDataToUpdate.push({
             ref: sourceStockRef,
@@ -5373,6 +5586,7 @@ export default function App() {
                 onDeleteItem={handleDeleteItem}
                 onClearStock={handleClearCompanyStock}
                 onRestoreBackup={handleRestoreBackup}
+                onSyncStoreStock={user.role === "admin" ? handleSyncStoreStock : undefined}
                 onRegisterFlow={
                   user.role === "admin" || user.role === "alimentador"
                     ? handleRegisterStockFlow
@@ -5473,6 +5687,7 @@ export default function App() {
               onCancel={handleCancelTransfer}
               onForceRelease={handleForceReleaseReservation}
               onDelete={handleDeleteTransfer}
+              stock={stock}
             />
           )}
 

@@ -15,7 +15,8 @@ import {
   doc,
   setDoc
 } from "firebase/firestore";
-import { auth, db } from "../firebase";
+import { db } from "../firebase";
+import { auth } from "../firebaseAuth";
 import { Lock, User, Eye, EyeOff, ShieldCheck, Mail, Key, Sparkles, ArrowRight, RefreshCw, ShoppingBag } from "lucide-react";
 
 interface AuthScreenProps {

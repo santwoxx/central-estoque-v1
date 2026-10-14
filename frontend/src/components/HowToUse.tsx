@@ -192,6 +192,9 @@ export default function HowToUse() {
                 <li>
                   <strong className="text-slate-900">Exportação em Planilha:</strong> O botão "Exportar CSV" gera um arquivo Excel instantaneamente com todas as colunas visíveis da busca atual.
                 </li>
+                <li>
+                  <strong className="text-slate-900">Valor Promocional:</strong> Na aba <strong>Valor promocional</strong>, clique em "Nova promoção", escolha o pneu e a loja e informe o preço promocional e a validade — até uma data ou sem prazo. Enquanto ela vale, o pneu aparece em destaque no catálogo dos vendedores e as vendas já abrem com o preço promocional. No fim do prazo o preço volta ao normal sozinho; para parar antes, use "Encerrar".
+                </li>
               </ul>
             </div>
           )}

@@ -7,6 +7,9 @@
 # Exemplo (Valença, 22/09/2026):
 #   python tools/estoque-time-sistemas.py "estoque valencia.pdf" VALENCA frontend/src/valenca_estoque.json --loja=Valença
 #
+# Exemplo (SAJ, 14/10/2026):
+#   python tools/estoque-time-sistemas.py "estoque atualizado saj.pdf" SAJ frontend/src/saj_estoque.json "--loja=Saj pneus"
+#
 # DOIS RELATÓRIOS são aceitos, reconhecidos sozinhos pelo cabeçalho:
 #
 #   1. Time Sistemas — "RELATÓRIO DE ESTOQUE", com P. Varejo e P. Atacado.
@@ -20,9 +23,19 @@
 #      produtos, um erro de um dígito muda o total e o script se recusa a
 #      gravar.
 #
-# O JSON gerado é o que o botão "Injetar Estoque <loja>" (Cadastros e Ajustes,
-# só administrador) carrega. A carga pula todo código que já existe na loja,
-# então rodar este script de novo e recarregar não duplica nada.
+# O JSON gerado é o que o botão "Sincronizar Estoque <loja>" (Cadastros e
+# Ajustes, só administrador) carrega. Formato:
+#
+#   { "report": { sistema, data/hora, filtros, totais conferidos... },
+#     "items":  [ { sku, brand, model, size, quantity, preços... }, ... ] }
+#
+# O bloco "report" é o que permite ao sistema SINCRONIZAR em vez de só
+# cadastrar: com a data/hora do relatório ele soma ao saldo do ERP o que foi
+# movimentado no sistema DEPOIS da emissão (senão uma venda feita às 10h seria
+# desfeita por um relatório das 8h), e com os filtros ele sabe se o relatório
+# cobre a loja inteira — só então um produto que sumiu da lista pode ser zerado.
+# Arquivos antigos (uma lista pura, sem "report") continuam aceitos: para eles
+# o botão só cadastra o que falta, como antes.
 #
 # O que ele faz, e por quê:
 #   • Lê o PDF pelas POSIÇÕES das colunas (modo "layout" do pypdf), não por
@@ -44,6 +57,7 @@
 # ─────────────────────────────────────────────────────────────────
 import re, json, io, sys, os
 from collections import Counter
+from datetime import datetime, timezone, timedelta
 from pypdf import PdfReader
 
 # O console do Windows abre em cp1252 e derrubava o relatório de alertas na
@@ -67,7 +81,21 @@ num = lambda s: float(s.replace(".", "").replace(",", "."))
 
 seg = re.compile(r"\S+(?: \S+)*")
 
-PAGES = [p.extract_text(extraction_mode="layout") for p in PdfReader(PDF).pages]
+READER = PdfReader(PDF)
+PAGES = [p.extract_text(extraction_mode="layout") for p in READER.pages]
+
+# Fuso do relatório: o PDF grava a hora de criação com o fuso ("-03'00'"). Sem
+# ele, assume o horário de Brasília — o ERP roda nas lojas, todas em UTC-3.
+try:
+    PDF_TZ = READER.metadata.creation_date.tzinfo if READER.metadata and READER.metadata.creation_date else None
+except Exception:
+    PDF_TZ = None
+PDF_TZ = PDF_TZ or timezone(timedelta(hours=-3))
+
+# Preenchidos pela leitura do relatório: os segundos da hora de emissão (o
+# texto das observações usa só hh:mm) e os filtros do cabeçalho.
+REPORT_TIME = {"segundos": "00"}
+FILTROS = {}
 
 
 def segments(line):
@@ -83,9 +111,15 @@ def ler_time_sistemas():
             if not parts:
                 continue
             text = line.strip()
-            dm = re.search(r"(\d{2}/\d{2}/\d{4} \d{2}:\d{2})", text)
+            dm = re.search(r"(\d{2}/\d{2}/\d{4} \d{2}:\d{2})(:\d{2})?", text)
             if dm and "Time Sistemas" in text:
                 report_date = dm.group(1)
+                REPORT_TIME["segundos"] = (dm.group(2) or ":00")[1:]
+            # Cabeçalho: "Grupo: Todos   Saldo: Positivos" / "Marca: Todas ...".
+            # São os filtros com que o relatório foi tirado — ver `completo`.
+            if pi == 1:
+                for k, v in re.findall(r"\b(Grupo|Marca|Saldo):\s*(\S+)", text):
+                    FILTROS.setdefault(k, v)
             if "Quantidade de produtos na lista" in text:
                 nums = re.findall(r"[\d.]+,\d+|\d+", text.split(":", 1)[1])
                 footer = {"produtos": int(nums[0]), "saldo": num(nums[1]), "varejo": num(nums[2]), "atacado": num(nums[3])}
@@ -235,6 +269,8 @@ old = []
 if os.path.exists(OUT):
     try:
         old = json.load(io.open(OUT, encoding="utf-8"))
+        # Formato novo ({"report", "items"}) ou o antigo (a lista pura).
+        old = old.get("items", []) if isinstance(old, dict) else old
     except Exception:
         old = []
 
@@ -293,12 +329,13 @@ BRANDS = [
     ("ASCENSO", ["ASCENSO"]),
     ("MRL", ["MRL"]),
     ("FARMAX", ["FARMAX"]),
+    ("KAPSEN", ["KAPSEN"]),
 ]
 ALIAS = {a: canon for canon, aliases in BRANDS for a in aliases}
 
 # Marcas de duas palavras, na ordem em que aparecem.
 TWO_WORD = [("LING", "LONG", "LINGLONG"), ("SPEED", "MAX", "SPEEDMAX"), ("ROYAL", "BLACK", "ROYAL BLACK"),
-            ("DRIVE", "FORCE", "DRIVE FORCE")]
+            ("DRIVE", "FORCE", "DRIVE FORCE"), ("GOLDEN", "CROWN", "GOLDEN CROWN")]
 
 # Palavras grudadas pelo ERP: "CONTICROSSCONTACT" = Continental CrossContact.
 GLUED_CONTI = re.compile(r"^CONTI?(CROSS|PREMIUM|ECO|SPORT|VAN|ULTRA|POWER)", re.I)
@@ -331,6 +368,10 @@ MODEL_IMPLIES = [
     (r"\bFRD\d+\b", "FARROAD"),
     (r"\bPEAKGRIP\b", "MAXZEZ"),
     (r"\bCF ?(?:1000|1100|3000)\b", "COMFORSER"),
+    # A SAJ escreve "295/80 R22.5 DIR XBRI CURVE PLUS F1" num produto e só
+    # "275/80R22.5 CURVE PLUS F1" no outro — sem esta linha, "CURVE" virava marca.
+    (r"\bCURVE ?PLUS\b", "XBRI"),
+    (r"\bDESTINATION\b", "FIRESTONE"),
 ]
 
 # Marca dada por regra, mas sem certeza — sai com aviso para conferir.
@@ -348,6 +389,13 @@ TECH = re.compile(
 
 # Palavras que acompanham a marca e não são modelo ("JK TIRE").
 BRAND_FILLER = {"TIRE", "TIRES", "TYRE"}
+
+# Posição e aplicação do pneu: ficam no modelo, mas nunca são a marca. Quando
+# a marca não está no dicionário, ela é a primeira palavra que sobra — e em
+# "1000-20 DIR CENTELLA CR600" e "235/75 R17.5 DIR KAPSEN" essa palavra era
+# "DIR" (direcional). Se TODAS as palavras forem destas, vale a primeira, como
+# antes ("1300 24 AGRICOLA").
+NOT_BRAND = {"DIR", "DIRECIONAL", "TRA", "TRACAO", "TRAÇÃO", "MISTO", "EMPILHADEIRA"}
 
 def fnum(v):
     return int(v) if float(v).is_integer() else round(v, 2)
@@ -393,6 +441,10 @@ SIZE_RX = [
     (re.compile(r"\b(\d{1,4}(?:\.\d{2})?)\s+X\s+(\d{2})\b", re.I), lambda m: f"{m[1]}-{m[2]}"),
     # 1300 24
     (re.compile(r"^(\d{4})\s+(\d{2})\b"), lambda m: f"{m[1]} {m[2]}"),
+    # 650.10 (empilhadeira, = 6.50-10): o ERP troca o hífen por ponto. Só no
+    # começo da descrição, que é onde a medida fica — sem esta linha o produto
+    # saía sem medida e com a marca "650.10".
+    (re.compile(r"^(\d{3})\.(\d{2})\b"), lambda m: f"{m[1]}-{m[2]}"),
     # 750/16 · 900/20 · 1000/20 · 600/9
     (re.compile(r"\b(\d{3,4}/\d{1,2})\b"), lambda m: m[1]),
 ]
@@ -435,6 +487,12 @@ def split_tire(desc, flags):
         words[-1] = "COMFORSER"; flags.append("descrição cortada pelo ERP")
     if len(words) >= 2 and words[-1].upper() == "C" and words[-2].upper() in ("A/T", "M/T"):
         words.pop(); flags.append("descrição cortada pelo ERP")
+    # "235/60 R18 107W CONMX SUVSP10 XL SPEED": SPEEDMAX cortado no fim. Só no
+    # FIM da descrição — no meio, "SPEED MAX" separado já é tratado abaixo.
+    if words and words[-1].upper() == "SPEED":
+        words[-1] = "SPEEDMAX"
+        flags.append("descrição cortada pelo ERP")
+        flags.append("marca pela palavra cortada SPEED (Speedmax) — conferir")
     if any(w.upper() in ("MAXTRE", "XBR", "XB", "AUTOGREE", "COMFORSE", "GRIPMASTE") for w in words):
         flags.append("descrição cortada pelo ERP")
 
@@ -502,8 +560,9 @@ def split_tire(desc, flags):
     model = " ".join(model_words).upper().strip()
     if not brand:
         if model_words:
-            brand = model_words[0].upper()
-            model = " ".join(model_words[1:]).upper()
+            i = next((k for k, w in enumerate(model_words) if w.upper() not in NOT_BRAND), 0)
+            brand = model_words[i].upper()
+            model = " ".join(model_words[:i] + model_words[i + 1:]).upper()
         flags.append("marca não identificada — conferir")
     return size, brand, model
 
@@ -515,6 +574,7 @@ def split_other(desc, category, flags):
         # só uma casa decimal: "10.00 - 20" virava medida "10.0" e "0 20" ia
         # parar no modelo.
         cam_rx = [
+            (r"(\d{3,4}X\d{1,2})\s*/\s*(\d{3,4}X\d{1,2})", lambda m: f"{m[1]}/{m[2]}"),      # 600X9/650X10 (serve nas duas)
             (r"(\d{1,2}\.\d)/(\d{2})\s*-\s*(\d{2})", lambda m: f"{m[1]}/{m[2]}-{m[3]}"),      # 12.5/80 - 18
             (r"(\d{3}/\d{2})\s*R\s?(\d{2}(?:\.\d)?)", lambda m: f"{m[1]} R{m[2]}"),           # 275/80 R22.5
             (r"(\d{1,2}\.\d{1,2})\s*R\s?(\d{2})", lambda m: f"{m[1]} R{m[2]}"),                # 11.00 R22
@@ -609,7 +669,50 @@ for r in rows:
     })
     report.append({"codigo": r["codigo"], "cat": cat, "size": size, "brand": brand, "model": model, "flags": flags, "desc": desc, "qty": int(r["saldo"]), "cash": cash, "inst": inst})
 
-io.open(OUT, "w", encoding="utf-8", newline="\n").write(json.dumps(items, ensure_ascii=False, indent=2) + "\n")
+# ── Cabeçalho do arquivo: o que o sistema precisa para SINCRONIZAR ────
+def iso_emissao(data_hora):
+    """'14/10/2026 08:17' → '2026-10-14T08:17:54-03:00' (segundos e fuso do PDF)."""
+    try:
+        dt = datetime.strptime(f"{data_hora}:{REPORT_TIME['segundos']}", "%d/%m/%Y %H:%M:%S")
+        return dt.replace(tzinfo=PDF_TZ).isoformat()
+    except ValueError:
+        return ""
+
+# Só um relatório da loja INTEIRA autoriza zerar o que não veio nele. Um
+# relatório tirado com "Grupo: PNEUS" zeraria todas as câmaras, protetores e
+# rodas da loja. Saldo "Positivos" ou "Todos": nos dois, quem não aparece não
+# tem saldo no ERP. A Listagem de Produtos não imprime os filtros — na dúvida,
+# não zera.
+_f = {k: v.upper() for k, v in FILTROS.items()}
+COMPLETO = (not EH_LISTAGEM and _f.get("Grupo") == "TODOS" and _f.get("Marca") == "TODAS"
+            and _f.get("Saldo") in ("POSITIVOS", "TODOS"))
+
+report_meta = {
+    "system": REPORT_NAME,
+    "issuedAt": report_date,
+    "issuedAtISO": iso_emissao(report_date),
+    "store": STORE,
+    "prefix": PREFIX,
+    "sourceFile": os.path.basename(PDF),
+    "products": len(items),
+    "units": int(round(sum(r["saldo"] for r in rows))),
+    "totalRetail": tot.get("varejo", tot.get("valor")),
+    "totalWholesale": tot.get("atacado", tot.get("valor")),
+    "filters": FILTROS,
+    "complete": COMPLETO,
+    "footerVerified": True,
+    "generatedAt": datetime.now(PDF_TZ).isoformat(timespec="seconds"),
+}
+if not report_meta["issuedAtISO"]:
+    print("Não achei a data/hora de emissão no relatório — nada foi gravado. Sem ela o sistema não "
+          "consegue separar o que foi movimentado antes e depois do relatório.")
+    sys.exit(1)
+
+io.open(OUT, "w", encoding="utf-8", newline="\n").write(
+    json.dumps({"report": report_meta, "items": items}, ensure_ascii=False, indent=2) + "\n")
+print(f"Relatório de {report_date} ({report_meta['issuedAtISO']}) · filtros {FILTROS or '—'} · "
+      + ("cobre a loja inteira (pode zerar o que não veio)" if COMPLETO
+         else "NÃO cobre a loja inteira — o sistema não vai zerar o que faltar"))
 
 # ── Análise ─────────────────────────────────────────────────────────
 cats = Counter(x["cat"] for x in report)
@@ -637,7 +740,10 @@ for x in report:
     if x["codigo"] in ("433", "596", "622", "151", "3", "626", "360", "438", "129", "661", "576", "163", "64", "637", "437", "374"):
         print(f"  {x['codigo']:>4} medida={x['size']!r:<16} marca={x['brand']!r:<14} modelo={x['model']!r}")
 
-# ── Diferença contra o estoque anterior (JSON apagado em 21/09) ────
+# ── Diferença contra o arquivo anterior ─────────────────────────────
+# É a prévia do que a sincronização vai fazer no sistema, se o estoque da loja
+# lá ainda for o do arquivo anterior. (O botão mostra a conta exata, contra o
+# saldo real de cada pneu, antes de gravar.)
 def old_code(sku):
     m = re.match(rf"{PREFIX}-(\d+)", sku or ""); return m.group(1) if m else None
 oldmap = {}
@@ -655,3 +761,21 @@ print(f"  saíram (estavam antes, não estão no PDF): {len(removed)} produtos, 
 for c in removed: print(f"    - {c:>4} {int(oldmap[c]['quantity']):>2} un  {oldmap[c].get('description','')}")
 print(f"  quantidade mudou: {len(changed)}")
 for c, a, b in changed: print(f"    ~ {c:>4} {a:>2} → {b:>2} un  {newmap[c]['desc']}")
+
+cents = lambda v: round(float(v or 0), 2)
+precos = [(c, oldmap[c], newmap[c]) for c in newmap if c in oldmap and
+          (cents(oldmap[c].get("priceCash")), cents(oldmap[c].get("priceInstallment"))) !=
+          (cents(newmap[c]["cash"]), cents(newmap[c]["inst"]))]
+print(f"  preço mudou: {len(precos)}")
+for c, o, n in precos:
+    print(f"    $ {c:>4} à vista {cents(o.get('priceCash')):>9,.2f} → {cents(n['cash']):>9,.2f}"
+          f" · a prazo {cents(o.get('priceInstallment')):>9,.2f} → {cents(n['inst']):>9,.2f}  {n['desc']}")
+
+# A descrição reeditada no ERP muda a separação de marca/modelo deste arquivo,
+# mas a sincronização NÃO reescreve marca, modelo e medida de produto que já
+# existe — eles podem ter sido corrigidos à mão no sistema. Ficam listados
+# aqui (e na prévia do botão) para quem quiser ajustar.
+descr = [(c, oldmap[c].get("description", ""), newmap[c]["desc"]) for c in newmap
+         if c in oldmap and oldmap[c].get("description", "") != newmap[c]["desc"]]
+print(f"  descrição mudou no ERP: {len(descr)}")
+for c, a, b in descr: print(f"    ✎ {c:>4} {a!r} → {b!r}")
