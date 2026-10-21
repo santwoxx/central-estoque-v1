@@ -1,0 +1,50 @@
+<!doctype html>
+<!--
+  Página da CONSULTA PÚBLICA (/consulta). É o index.html com o cabeçalho do
+  catálogo: a Vercel serve este arquivo em /consulta (ver vercel.json) e o
+  main.tsx decide a tela pelo caminho, como em qualquer rota.
+
+  Ela tem HTML próprio para ser INSTALÁVEL como app (iPhone: Compartilhar →
+  Adicionar à Tela de Início; Android: menu → Instalar app) com o nome, o ícone
+  e a página inicial do catálogo — e não os do sistema de gestão. No iPhone
+  essas marcações precisam estar no HTML, não injetadas depois por script.
+  De quebra, o link mandado pelo WhatsApp mostra "Catálogo de Pneus" na prévia.
+
+  Fontes e preconnect iguais aos do index.html: mudou lá, mude aqui.
+-->
+<html lang="pt-BR" translate="no">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover: no app instalado o cabeçalho escuro passa por baixo
+         da barra de status; o PublicStock afasta o conteúdo do notch com
+         env(safe-area-inset-*). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <meta name="google" content="notranslate" />
+    <title>Catálogo de Pneus</title>
+    <meta name="description" content="Consulte a disponibilidade de pneus em tempo real, loja por loja." />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Catálogo de Pneus" />
+    <meta property="og:description" content="Consulte a disponibilidade de pneus em tempo real, loja por loja." />
+
+    <!-- App instalável -->
+    <link rel="manifest" href="/consulta.webmanifest" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Catálogo" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

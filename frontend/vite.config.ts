@@ -16,6 +16,13 @@ export default defineConfig(() => {
       target: 'es2020',
       chunkSizeWarningLimit: 1000,
       rollupOptions: {
+        // Duas páginas, o mesmo app: consulta.html é o index.html com o
+        // cabeçalho do catálogo instalável (manifesto, ícone, nome) — ver o
+        // comentário no próprio arquivo. Os pedaços de JS são compartilhados.
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          consulta: path.resolve(__dirname, 'consulta.html'),
+        },
         output: {
           // ── Bibliotecas em pedaços próprios ─────────────────────────────
           // Firebase e React são ~75% do download e quase nunca mudam; o

@@ -1,6 +1,7 @@
 import {StrictMode, lazy, Suspense} from 'react';
 import {createRoot} from 'react-dom/client';
 import ErrorBoundary from './components/ErrorBoundary.tsx';
+import {captureInstallPrompt} from './installPrompt.ts';
 import './index.css';
 
 // ── Rotas, decididas ANTES de baixar qualquer tela ───────────────────
@@ -19,7 +20,15 @@ const App = lazy(() => import('./App.tsx'));
 const PublicStock = lazy(() => import('./components/PublicStock.tsx'));
 const PublicSignature = lazy(() => import('./components/PublicSignature.tsx'));
 
-const Page = route === '/consulta' ? PublicStock : route === '/assinar' ? PublicSignature : App;
+// '/consulta.html' é o mesmo catálogo acessado pelo nome do arquivo (a Vercel o
+// serve em /consulta; ver consulta.html).
+const isCatalog = route === '/consulta' || route === '/consulta.html';
+
+// O catálogo é instalável como app: o pedido de instalação do Android chega
+// cedo e precisa ser guardado antes de a tela carregar (ver installPrompt.ts).
+if (isCatalog) captureInstallPrompt();
+
+const Page = isCatalog ? PublicStock : route === '/assinar' ? PublicSignature : App;
 
 // Enquanto a tela chega. Um chunk que sumiu num deploy cai no ErrorBoundary,
 // que recarrega a página sozinho.

@@ -5,6 +5,7 @@ import { StockItem, Company, Suggestion, CLIENTE_COMPANY_ID } from "../types";
 import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X, Lock, Lightbulb, Check, Archive, Tag } from "lucide-react";
 import { availableQuantity, effectivePrices, formatDate, mapStockDoc, mapSuggestionDoc, matchesTireSize, promoUntilLabel, reservedQuantityOf, suggestionTime, tireSizeSortKey } from "../utils";
 import { useToday } from "../hooks/useToday";
+import InstallCatalog from "./InstallCatalog";
 
 interface ConsolidatedItem {
   sku: string;
@@ -564,15 +565,33 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans pb-16">
-      
+      {/* ── Catálogo instalado como app (iPhone) ─────────────────────────
+          consulta.html usa viewport-fit=cover e a barra de status
+          translúcida: o cabeçalho escuro passa por baixo do relógio e do
+          notch, e o env(safe-area-inset-*) afasta o conteúdo deles. Esta faixa
+          mantém o fundo escuro atrás da barra de status quando a lista rola —
+          sem ela, o relógio branco ficaria sobre o fundo claro. Fora do app
+          instalado o inset vale 0 e ela não aparece. */}
+      {!user && (
+        <div className="fixed inset-x-0 top-0 z-30 h-[env(safe-area-inset-top)] bg-slate-900" aria-hidden />
+      )}
+
       {/* HEADER DE LOJA VIRTUAL */}
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-8 md:py-10 shadow-xl relative overflow-hidden">
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 pb-8 md:pb-10 pt-[calc(env(safe-area-inset-top)_+_2rem)] md:pt-[calc(env(safe-area-inset-top)_+_2.5rem)] shadow-xl relative overflow-hidden">
         {/* Detalhe de fundo */}
         <div className="absolute top-0 right-0 -mt-16 -mr-16 opacity-10">
           <CircleDashed size={256} className="text-white animate-spin-slow" />
         </div>
         
         <div className="max-w-6xl mx-auto relative z-10 flex flex-col items-center text-center">
+          {/* Instalar como app: só na página pública (o vendedor usa o
+              sistema), e só quando o aparelho permite — fora disso o
+              componente não desenha nada e a caixa some (empty:hidden). */}
+          {!user && (
+            <div className="mb-4 empty:hidden">
+              <InstallCatalog />
+            </div>
+          )}
           <h1 className="text-2xl md:text-4xl font-black text-white uppercase tracking-tight mb-2">
             Catálogo de Pneus
           </h1>
@@ -654,7 +673,7 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
       </div>
 
       {/* RESULTADOS / GRID DE PRODUTOS */}
-      <div className="max-w-7xl mx-auto px-4 md:px-6 mt-6">
+      <div className="max-w-7xl mx-auto mt-6 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:pl-[max(1.5rem,env(safe-area-inset-left))] md:pr-[max(1.5rem,env(safe-area-inset-right))]">
         
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold text-slate-600">
