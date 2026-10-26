@@ -790,6 +790,27 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         throw new Error("Informe o preço de custo (quanto a loja pagou neste produto).");
       }
 
+      // ── Mais de uma loja de uma vez ──────────────────────────────────
+      // Em 20/10 o PNEU-8669 entrou com 16 un na Central Autocar E 16 na
+      // Central Autocenter — os dois campos lado a lado, nomes quase iguais —
+      // para 16 pneus que chegaram numa loja só. O sistema ficou com 32, e as
+      // vendas seguintes caíram na loja errada. Cadastrar em duas lojas é
+      // legítimo (compra dividida), então não é proibido: é CONFIRMADO, com a
+      // conta à vista.
+      const seeded = companies
+        .filter(comp => canEditCompany(comp.id) && (newProductQuantities[comp.id] || 0) > 0)
+        .map(comp => ({ name: comp.name, quantity: newProductQuantities[comp.id] || 0 }));
+      if (seeded.length > 1) {
+        const total = seeded.reduce((acc, e) => acc + e.quantity, 0);
+        const ok = window.confirm(
+          `Cadastrar este pneu em ${seeded.length} lojas?\n\n` +
+          seeded.map(e => `• ${e.name}: ${e.quantity} un`).join("\n") +
+          `\n\nTotal: ${total} un no sistema.\n\n` +
+          `Se os pneus chegaram numa loja só, cancele e deixe a quantidade só nela.`
+        );
+        if (!ok) return; // o `finally` abaixo desliga o carregamento
+      }
+
       let addedAtLeastOne = false;
       for (const comp of companies) {
         if (!canEditCompany(comp.id)) continue; // defense in depth — the form only renders inputs for these anyway
@@ -2511,15 +2532,20 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
               </div>
 
               <div className="border-t border-slate-100 pt-3">
-                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">
+                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
                   Quantidades Iniciais por Empresa / Filial
                 </label>
+                <p className="text-[10px] font-semibold text-slate-400 mb-2">
+                  Preencha só a loja onde os pneus chegaram. Cada loja preenchida ganha um cadastro com a sua quantidade.
+                </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[160px] overflow-y-auto pr-1">
                   {/* Only companies this user is allowed to write to — a dono/alimentador
                       can only stock their own filial, admin can seed any of them. */}
                   {companies.filter(comp => canEditCompany(comp.id)).map(comp => (
                     <div key={comp.id} className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50/50">
-                      <span className="text-xs font-bold text-slate-700 truncate max-w-[140px]" title={comp.name}>
+                      {/* Sem truncar: "CENTRAL AUTOCAR" e "CENTRAL AUTOCENTER"
+                          cortados viravam o mesmo "CENTRAL AUTOC…". */}
+                      <span className="min-w-0 break-words text-xs font-bold text-slate-700 pr-2" title={comp.name}>
                         {comp.name}
                       </span>
                       <input

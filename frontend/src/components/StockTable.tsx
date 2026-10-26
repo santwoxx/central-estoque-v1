@@ -4,6 +4,7 @@ import { activePromo, availableQuantity, formatBRL, matchesTireSize, parsePriceI
 import { useToday } from "../hooks/useToday";
 import { isErpSyncWrite } from "../utils/erpSync";
 import type { ErpFiles } from "../erpFiles";
+import StoreChip from "./StoreChip";
 import { 
   Search, 
   Trash2, 
@@ -1101,6 +1102,15 @@ export default function StockTable({
       setErrorMsg("Item não encontrado.");
       return;
     }
+    // Uma saída é de UMA loja: o pedido de baixa leva a loja do pneu.
+    const otherStore = checkoutItems.find(ci => (ci.itemRef.companyId || "") !== (item.companyId || ""));
+    if (otherStore) {
+      setErrorMsg(
+        `Este pneu é da ${storeNameOf(item)}, e a lista já tem pneus da ${storeNameOf(otherStore.itemRef)}. ` +
+        `Uma saída é de uma loja só — confirme esta e faça outra para a ${storeNameOf(item)}.`
+      );
+      return;
+    }
     const free = availableQuantity(item);
     const reserved = reservedQuantityOf(item);
     if (qty > free) {
@@ -1246,6 +1256,27 @@ export default function StockTable({
     }
   };
 
+  // ── Saída com pneus de mais de uma loja na lista ─────────────────
+  // Para quem enxerga várias lojas, a lista desta saída mistura todas — e não
+  // dizia de qual loja era cada pneu. Com o mesmo código em duas lojas (o
+  // PNEU-8669, cadastrado na Central Autocar E na Central Autocenter em
+  // 20/10), as linhas eram idênticas. Ver components/StoreChip.tsx.
+  const checkoutMultiStore = useMemo(() => new Set(items.map(i => i.companyId || "")).size > 1, [items]);
+  const storeNameOf = (item: StockItem) =>
+    item.companyName || companies.find(c => c.id === item.companyId)?.name || "Sem loja";
+  const isOwnStoreItem = (item: StockItem) => !!user.companyId && item.companyId === user.companyId;
+  const storesBySku = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    items.forEach(item => {
+      const key = (item.sku || "").trim().toUpperCase();
+      if (!key) return;
+      if (!map.has(key)) map.set(key, new Set());
+      map.get(key)!.add(item.companyId || "");
+    });
+    return map;
+  }, [items]);
+  const storeCountOf = (item: StockItem) => storesBySku.get((item.sku || "").trim().toUpperCase())?.size || 1;
+
   const checkoutStockOptions = useMemo(() => {
     const lower = checkoutSearch.toLowerCase();
     return items
@@ -1259,9 +1290,14 @@ export default function StockTable({
         item.size.toLowerCase().includes(lower) ||
         matchesTireSize(item.size, lower)
       )
-      .sort((a, b) => a.sku.localeCompare(b.sku))
+      // Mesmo código em duas lojas: a do usuário primeiro, depois pelo nome.
+      .sort((a, b) =>
+        a.sku.localeCompare(b.sku) ||
+        (isOwnStoreItem(a) ? 0 : 1) - (isOwnStoreItem(b) ? 0 : 1) ||
+        storeNameOf(a).localeCompare(storeNameOf(b))
+      )
       .slice(0, 60);
-  }, [items, checkoutSearch]);
+  }, [items, checkoutSearch, companies, user.companyId]);
 
   const checkoutSelectedItemRef = items.find(i => i.id === checkoutSelectedItemId) || null;
 
@@ -2618,6 +2654,18 @@ export default function StockTable({
                           <span className="font-mono font-extrabold text-gold-700">{checkoutSelectedItemRef.sku}</span>{" "}
                           <span className="font-bold text-slate-800">{checkoutSelectedItemRef.brand} {checkoutSelectedItemRef.model}</span>{" "}
                           <span className="text-slate-400 font-mono">({checkoutSelectedItemRef.size})</span>
+                          {checkoutMultiStore && (
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                              <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Sai de</span>
+                              <StoreChip name={storeNameOf(checkoutSelectedItemRef)} own={isOwnStoreItem(checkoutSelectedItemRef)} />
+                            </div>
+                          )}
+                          {checkoutMultiStore && storeCountOf(checkoutSelectedItemRef) > 1 && (
+                            <div className="mt-1 flex items-center gap-1 text-[10px] font-black text-amber-800">
+                              <AlertTriangle size={11} className="shrink-0" />
+                              Este código está cadastrado em {storeCountOf(checkoutSelectedItemRef)} lojas — confira se é esta.
+                            </div>
+                          )}
                           <div className="text-[10px] text-slate-500 font-semibold mt-0.5">Saldo disponível: {checkoutSelectedItemRef.quantity} un</div>
                         </div>
                         <button
@@ -2681,10 +2729,20 @@ export default function StockTable({
                               }}
                               className="w-full text-left p-2.5 hover:bg-gold-50/40 transition-colors cursor-pointer flex items-center justify-between gap-2"
                             >
-                              <span className="text-xs min-w-0 truncate">
-                                <span className="font-mono font-extrabold text-gold-700">{item.sku}</span>{" "}
-                                <span className="font-bold text-slate-800">{item.brand} {item.model}</span>{" "}
-                                <span className="text-slate-400 font-mono">({item.size})</span>
+                              <span className="text-xs min-w-0">
+                                <span className="flex items-center gap-1.5 min-w-0">
+                                  <span className="font-mono font-extrabold text-gold-700 shrink-0">{item.sku}</span>
+                                  {checkoutMultiStore && <StoreChip name={storeNameOf(item)} own={isOwnStoreItem(item)} />}
+                                </span>
+                                <span className="block truncate">
+                                  <span className="font-bold text-slate-800">{item.brand} {item.model}</span>{" "}
+                                  <span className="text-slate-400 font-mono">({item.size})</span>
+                                </span>
+                                {checkoutMultiStore && storeCountOf(item) > 1 && (
+                                  <span className="block text-[9px] font-black text-amber-800">
+                                    Código em {storeCountOf(item)} lojas — confira a loja
+                                  </span>
+                                )}
                               </span>
                               <span className="text-[10px] font-mono font-bold text-slate-500 shrink-0 text-right">
                                 {availableQuantity(item)} un
@@ -2715,7 +2773,10 @@ export default function StockTable({
                       {checkoutItems.map(cItem => (
                         <div key={cItem.id} className="flex justify-between items-center p-2.5 bg-white border border-slate-200 rounded-lg shadow-sm">
                           <div className="flex flex-col min-w-0 pr-2">
-                            <span className="font-mono text-xs font-extrabold text-gold-700 truncate">{cItem.itemRef.sku}</span>
+                            <span className="flex items-center gap-1.5 min-w-0">
+                              <span className="font-mono text-xs font-extrabold text-gold-700 truncate">{cItem.itemRef.sku}</span>
+                              {checkoutMultiStore && <StoreChip name={storeNameOf(cItem.itemRef)} own={isOwnStoreItem(cItem.itemRef)} />}
+                            </span>
                             <span className="text-xs font-bold text-slate-800 truncate">{cItem.itemRef.brand} {cItem.itemRef.model} <span className="font-mono text-slate-400">({cItem.itemRef.size})</span></span>
                           </div>
                           <div className="flex items-center gap-3 shrink-0">

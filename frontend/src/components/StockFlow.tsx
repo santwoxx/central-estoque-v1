@@ -11,6 +11,7 @@ import {
   TransferSyncResult
 } from "../types";
 import { availableQuantity, exportToCSV, formatBRL, formatDate, matchesTireSize, QUICK_QTY, reservedQuantityOf, saleCashPrice, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import StoreChip from "./StoreChip";
 import {
   PackagePlus,
   PackageMinus,
@@ -139,7 +140,9 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
   // ── Estado da operação em andamento (gaveta aberta) ──────────────
   const [mode, setMode] = useState<StockFlowType | null>(null);
   const [search, setSearch] = useState("");
-  const [companyFilter, setCompanyFilter] = useState("");
+  // O administrador com loja vinculada abre na PRÓPRIA loja: é onde ele dá
+  // entrada e baixa no dia a dia. "Todas" continua a um clique, no seletor.
+  const [companyFilter, setCompanyFilter] = useState(() => (isAdmin && user.companyId ? user.companyId : ""));
   const [cart, setCart] = useState<CartLine[]>([]);
   const [reasonChoice, setReasonChoice] = useState("");
   const [customReason, setCustomReason] = useState("");
@@ -178,6 +181,35 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
     return companyFilter ? base.filter(item => item.companyId === companyFilter) : base;
   }, [stock, isAdmin, user.companyId, companyFilter]);
 
+  // ── O mesmo pneu em mais de uma loja ──────────────────────────────
+  // Em 20/10 o PNEU-8669 (Altimax One 175/70 R14) foi cadastrado de uma vez
+  // na Central Autocar E na Central Autocenter, 16 un em cada. Nas vendas de
+  // 24 e 26/10, quem enxerga as duas lojas viu duas linhas idênticas aqui — a
+  // loja era um texto cinza no fim de uma linha que o navegador cortava — e
+  // a baixa caiu na Autocar. A Autocenter, onde estavam os pneus, seguiu com
+  // 16, e a sensação no balcão foi de "a baixa não funciona".
+  //
+  // Agora, para quem enxerga mais de uma loja: cada linha mostra a loja num
+  // selo que não encolhe, o código que existe em mais de uma loja é apontado,
+  // e uma operação não mistura lojas (ver `addToCart` e `handleSubmit`).
+  const multiStore = isAdmin;
+  const storeOf = (item: StockItem) =>
+    item.companyName || companies.find(c => c.id === item.companyId)?.name || "Sem loja";
+  const isOwnStore = (item: StockItem) => !!user.companyId && item.companyId === user.companyId;
+
+  const storesBySku = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    if (!multiStore) return map;
+    stock.forEach(item => {
+      const key = (item.sku || "").trim().toUpperCase();
+      if (!key) return;
+      if (!map.has(key)) map.set(key, new Set());
+      map.get(key)!.add(item.companyId || "");
+    });
+    return map;
+  }, [stock, multiStore]);
+  const storeCountOf = (item: StockItem) => storesBySku.get((item.sku || "").trim().toUpperCase())?.size || 1;
+
   // Lista do seletor: filtra pela busca e, na saída, esconde o que está zerado.
   const pickerItems = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -194,13 +226,18 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
         (item.description || "").toLowerCase().includes(term) ||
         matchesTireSize(item.size, term)
       )
-      .sort((a, b) => {
-        const brandCmp = (a.brand || "").localeCompare(b.brand || "");
-        if (brandCmp !== 0) return brandCmp;
-        return (a.size || "").localeCompare(b.size || "");
-      })
+      // Marca, medida e — no empate — a PRÓPRIA loja primeiro, depois o nome da
+      // loja. Antes o empate ficava na ordem de "última atualização": a loja que
+      // levou a baixa errada subia para o topo e recebia a seguinte também.
+      .sort((a, b) =>
+        (a.brand || "").localeCompare(b.brand || "") ||
+        (a.size || "").localeCompare(b.size || "") ||
+        (isOwnStore(a) ? 0 : 1) - (isOwnStore(b) ? 0 : 1) ||
+        storeOf(a).localeCompare(storeOf(b)) ||
+        (a.sku || "").localeCompare(b.sku || "")
+      )
       .slice(0, 80);
-  }, [operableStock, search, mode]);
+  }, [operableStock, search, mode, companies, user.companyId]);
 
   const stockById = useMemo(() => {
     const map = new Map<string, StockItem>();
@@ -236,6 +273,11 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
   const cartUnits = cartLines.reduce((acc, l) => acc + l.quantity, 0);
   const cartTotal = cartLines.reduce((acc, l) => acc + l.quantity * (l.unitPrice || 0), 0);
   const hasBlockingLine = cartLines.some(l => l.exceeds);
+
+  // Uma operação é de UMA loja: o pedido de baixa leva a loja do pneu, e com
+  // duas lojas no carrinho ele sairia rotulado com uma só.
+  const cartStoreNames: string[] = Array.from(new Set<string>(cartLines.map(l => storeOf(l.item))));
+  const mixedStores = cartStoreNames.length > 1;
 
   const effectiveReason = reasonChoice === "Outro" ? customReason.trim() : reasonChoice;
 
@@ -299,6 +341,14 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
 
   const addToCart = (item: StockItem, amount: number = 1) => {
     if (!mode) return;
+    const otherStoreLine = cartLines.find(l => (l.item.companyId || "") !== (item.companyId || ""));
+    if (otherStoreLine) {
+      setError(
+        `Este pneu é da ${storeOf(item)}, e a operação já tem pneus da ${storeOf(otherStoreLine.item)}. ` +
+        `Uma operação é de uma loja só — confirme esta e abra outra para a ${storeOf(item)}.`
+      );
+      return;
+    }
     const free = availableQuantity(item);
     if (mode === "SAIDA" && item.quantity <= 0) {
       setError("Este pneu está com saldo zerado — não é possível dar baixa.");
@@ -380,6 +430,13 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
     }
     if (hasBlockingLine) {
       setError("Há itens com quantidade acima do saldo disponível. Ajuste antes de confirmar.");
+      return;
+    }
+    if (mixedStores) {
+      setError(
+        `Os pneus da operação são de lojas diferentes (${cartStoreNames.join(" e ")}). ` +
+        `Uma operação é de uma loja só: faça uma para cada loja.`
+      );
       return;
     }
     if (!effectiveReason) {
@@ -1643,16 +1700,23 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
                             }`}
                           >
                             <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
+                              {/* flex-wrap: no celular a marca desce de linha em vez de sumir atrás do selo */}
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
                                 <span className="text-[9px] font-mono font-extrabold text-gold-700 bg-gold-400/10 border border-gold-300/20 px-1.5 py-0.5 rounded uppercase shrink-0">
                                   {item.sku}
                                 </span>
+                                {multiStore && <StoreChip name={storeOf(item)} own={isOwnStore(item)} />}
                                 <span className="text-[11px] font-black text-slate-900 uppercase truncate">{item.brand}</span>
                               </div>
                               <div className="text-[10px] text-slate-500 font-bold mt-0.5 truncate">
                                 {item.model} • <span className="font-mono">{item.size}</span>
-                                {isAdmin && item.companyName && <span className="text-slate-400"> • {item.companyName}</span>}
                               </div>
+                              {multiStore && storeCountOf(item) > 1 && (
+                                <div className="mt-0.5 flex items-center gap-1 text-[9px] font-black text-amber-800">
+                                  <AlertTriangle size={10} className="shrink-0" />
+                                  Este código está cadastrado em {storeCountOf(item)} lojas — confira a loja.
+                                </div>
+                              )}
                             </div>
 
                             <div className="text-right shrink-0">
@@ -1739,10 +1803,11 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-[9px] font-mono font-extrabold text-gold-700 bg-gold-400/10 border border-gold-300/20 px-1.5 py-0.5 rounded uppercase">
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
+                                <span className="text-[9px] font-mono font-extrabold text-gold-700 bg-gold-400/10 border border-gold-300/20 px-1.5 py-0.5 rounded uppercase shrink-0">
                                   {line.item.sku}
                                 </span>
+                                {multiStore && <StoreChip name={storeOf(line.item)} own={isOwnStore(line.item)} />}
                                 <span className="text-[11px] font-black text-slate-900 uppercase truncate">{line.item.brand}</span>
                               </div>
                               <div className="text-[10px] text-slate-500 font-bold mt-0.5 truncate">
@@ -1924,6 +1989,19 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
                       {cartTotal > 0 && (
                         <span className="text-[10px] font-bold text-slate-500 font-mono">{formatBRL(cartTotal)}</span>
                       )}
+                      {/* Onde a operação vai cair, dito antes do clique. */}
+                      {multiStore && cartLines.length > 0 && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider">
+                            {isEntrada ? "Entra em" : "Sai de"}
+                          </span>
+                          {cartStoreNames.map(name => (
+                            <React.Fragment key={name}>
+                              <StoreChip name={name} own={!!user.companyName && name === user.companyName} />
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -1937,7 +2015,7 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
                       </button>
                       <button
                         type="submit"
-                        disabled={submitting || cartLines.length === 0 || hasBlockingLine}
+                        disabled={submitting || cartLines.length === 0 || hasBlockingLine || mixedStores}
                         className={`px-5 py-2.5 rounded-xl text-white text-xs font-black uppercase tracking-wider shadow-md transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:hover:scale-100 flex items-center gap-2 ${isEntrada ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20" : "bg-red-600 hover:bg-red-700 shadow-red-600/20"}`}
                       >
                         {submitting
