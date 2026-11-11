@@ -55,3 +55,14 @@ Regras da sincronização (detalhes em `frontend/src/utils/erpSync.ts`):
 - Em produto que já existe, mudam só saldo e preço. Marca, modelo, medida, custo, foto e observações ficam como estão.
 - Produto que sumiu do relatório é zerado (nunca apagado), e só quando o relatório cobre a loja inteira. Reserva nunca é solta.
 - Cada alteração vai para a Auditoria como "Ajuste", com o saldo de antes e o de depois. Rodar de novo com o mesmo arquivo não muda nada.
+
+## Fotos dos pneus
+
+O dono de cada loja coloca até 4 fotos em cada pneu da própria loja (o administrador, em qualquer loja). A câmera ou a galeria abre ao tocar na foto do produto em **Cadastros e Ajustes** ou no **Estoque Unificado**, ou no botão **Fotos do pneu** da ficha do produto. A primeira foto é a capa que aparece na lista. O vendedor e o catálogo público (`/consulta`) só veem as fotos.
+
+Como funciona (detalhes em `frontend/src/utils/productPhotos.ts`):
+- A foto é reduzida e comprimida no próprio aparelho (lado maior de 1024 px, cerca de 150 KB) e gravada no Firestore, na coleção `stock_photos`, com um documento por pneu. O Storage do Firebase não é usado porque exige o plano pago.
+- O documento de estoque guarda só a contagem (`photoCount`) e a capa em miniatura (`photoThumb`, cerca de 4 KB). A coleção `stock` é baixada inteira por todo mundo, inclusive pelo catálogo público, e por isso as fotos em tamanho de tela só são lidas quando alguém abre o pneu.
+- A sincronização com o ERP, a restauração de backup e as transferências não mexem nas fotos. Excluir o pneu apaga as fotos dele.
+
+**As regras do Firestore precisam estar publicadas** com o bloco `match /stock_photos/{itemId}` de `firestore.rules`. Sem ele, o banco recusa a foto e a tela avisa que faltam as regras. Para publicar, abra o Console do Firebase, vá em Firestore Database > Regras, cole o arquivo inteiro e clique em Publicar. Outra opção é rodar `firebase deploy --only firestore:rules` na raiz do projeto.

@@ -284,6 +284,59 @@ service cloud.firestore {
       );
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // Fotos dos pneus: stock_photos/{id do documento de estoque}
+    //
+    // A foto mora FORA do documento de estoque de proposito: a colecao `stock`
+    // inteira e baixada por toda sessao do sistema e por todo visitante da
+    // consulta publica. Com as fotos dentro dela, cada abertura do catalogo
+    // baixaria as fotos de todos os pneus. No estoque fica so a capa em
+    // miniatura (`photoThumb`) e a contagem (`photoCount`) — e essas duas a
+    // regra de `stock` acima ja libera para o dono, como qualquer campo que nao
+    // e quantidade. Ver frontend/src/utils/productPhotos.ts.
+    //
+    // QUEM GRAVA: o administrador, ou o DONO da loja dona do pneu. A loja e
+    // conferida no documento de ESTOQUE, nunca no que o cliente manda. getAfter
+    // porque o app grava a foto e o estoque na mesma transacao — e, fora dela,
+    // getAfter devolve o documento como ele esta. O vendedor so ve.
+    // ─────────────────────────────────────────────────────────────
+    match /stock_photos/{itemId} {
+      // Foto de pneu nao e segredo e o catalogo publico mostra: qualquer um le
+      // pelo id (o mesmo id do pneu, que ja e publico). Varrer a colecao
+      // inteira nenhuma tela faz — so o admin.
+      allow get: if true;
+      allow list: if isAdmin();
+
+      allow create, update: if
+        request.resource.data.stockItemId == itemId &&
+        request.resource.data.photos is list &&
+        request.resource.data.photos.size() > 0 &&
+        request.resource.data.photos.size() <= 4 &&
+        (
+          isAdmin() || (
+            isAlimentador() &&
+            myCompanyId() != '' &&
+            request.resource.data.get('companyId', '') == myCompanyId() &&
+            existsAfter(/databases/$(database)/documents/stock/$(itemId)) &&
+            getAfter(/databases/$(database)/documents/stock/$(itemId)).data.get('companyId', '') == myCompanyId()
+          )
+        );
+
+      // Tirar a ultima foto apaga o documento; excluir o pneu tambem. Vale a
+      // loja gravada na foto ou a do pneu (se o admin trocou o pneu de loja, o
+      // dono novo ainda consegue limpar).
+      allow delete: if isAdmin() || (
+        isAlimentador() &&
+        myCompanyId() != '' &&
+        (
+          resource.data.get('companyId', '') == myCompanyId() || (
+            existsAfter(/databases/$(database)/documents/stock/$(itemId)) &&
+            getAfter(/databases/$(database)/documents/stock/$(itemId)).data.get('companyId', '') == myCompanyId()
+          )
+        )
+      );
+    }
+
     // Movements Collection rules (Audit Logs)
     match /movements/{movementId} {
       // Admins and Vendedores can read all movements.

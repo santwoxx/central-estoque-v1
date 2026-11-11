@@ -6,6 +6,7 @@ import { Search, Loader2, CircleDashed, Package, Store, ShoppingBag, Send, X, Lo
 import { availableQuantity, effectivePrices, formatDate, mapStockDoc, mapSuggestionDoc, matchesTireSize, promoUntilLabel, reservedQuantityOf, suggestionTime, tireSizeSortKey } from "../utils";
 import { useToday } from "../hooks/useToday";
 import InstallCatalog from "./InstallCatalog";
+import ProductPhotosModal, { ProductPhotoThumb } from "./ProductPhotos";
 
 interface ConsolidatedItem {
   sku: string;
@@ -66,6 +67,10 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
   const [stock, setStock] = useState<StockItem[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
+  // Fotos do pneu: no catálogo, só para ver. Quem coloca e tira é o dono da
+  // loja, em Cadastros e Ajustes ou no Estoque Unificado.
+  const [photoItemId, setPhotoItemId] = useState<string | null>(null);
+  const photoItem = photoItemId ? stock.find(i => i.id === photoItemId) || null : null;
   const [searchTerm, setSearchTerm] = useState("");
   const deferredSearchTerm = useDeferredValue(searchTerm);
 
@@ -868,11 +873,15 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                 : 0;
               // Preço do rodapé (a loja mais barata), já com a promoção dela.
               const footer = effectivePrices(item.cheapestDoc, today);
+              // Foto: a da loja mais barata, ou a de qualquer loja que tenha.
+              const photoDoc =
+                [item.cheapestDoc, ...Object.values(item.docs)].find(d => !!d && (d.photoCount || 0) > 0) || null;
 
               return (
-              // Cartão compacto: sem foto (o estoque não tem imagem de pneu, e o
-              // placeholder só ocupava 128px de altura em cada cartão). A hierarquia
-              // é a que o vendedor usa para achar o pneu: medida > marca > modelo.
+              // Cartão compacto: sem a faixa de imagem no topo (o placeholder só
+              // ocupava 128px de altura em cada cartão). Pneu com foto ganha a capa
+              // pequena ao lado da medida. A hierarquia é a que o vendedor usa para
+              // achar o pneu: medida > marca > modelo.
               <div
                 key={item.sku}
                 className={`rounded-2xl border shadow-xs hover:shadow-md transition-all flex flex-col ${
@@ -919,20 +928,35 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                     )}
                   </div>
 
-                  <h3 className="text-xl font-black text-slate-900 tracking-tight leading-none">
-                    {item.size}
-                  </h3>
+                  {/* Com foto, a capa entra à direita da medida e abre as fotos.
+                      Sem foto, o cartão fica como sempre foi — nada de espaço
+                      reservado para uma imagem que não existe. */}
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-xl font-black text-slate-900 tracking-tight leading-none">
+                        {item.size}
+                      </h3>
 
-                  {/* Marca + modelo numa linha só. Quebra em duas linhas em vez de
-                      truncar: num cartão de ~200px, "SMART CHASER SC1" cortado em
-                      "SMART CHAS…" esconde justamente o que identifica o pneu. */}
-                  <div
-                    className="mt-1 text-[11px] leading-snug break-words"
-                    title={`${item.brand} ${item.model}`.trim()}
-                  >
-                    <span className="font-black uppercase tracking-wide text-slate-600">{item.brand}</span>
-                    {item.model && item.model.trim().toLowerCase() !== item.brand.trim().toLowerCase() && (
-                      <span className="font-semibold text-slate-500"> {item.model}</span>
+                      {/* Marca + modelo numa linha só. Quebra em duas linhas em vez de
+                          truncar: num cartão de ~200px, "SMART CHASER SC1" cortado em
+                          "SMART CHAS…" esconde justamente o que identifica o pneu. */}
+                      <div
+                        className="mt-1 text-[11px] leading-snug break-words"
+                        title={`${item.brand} ${item.model}`.trim()}
+                      >
+                        <span className="font-black uppercase tracking-wide text-slate-600">{item.brand}</span>
+                        {item.model && item.model.trim().toLowerCase() !== item.brand.trim().toLowerCase() && (
+                          <span className="font-semibold text-slate-500"> {item.model}</span>
+                        )}
+                      </div>
+                    </div>
+                    {photoDoc && (
+                      <ProductPhotoThumb
+                        item={photoDoc}
+                        canEdit={false}
+                        onOpen={() => setPhotoItemId(photoDoc.id)}
+                        className="h-14 w-14"
+                      />
                     )}
                   </div>
                 </div>
@@ -1596,6 +1620,8 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
           </div>
         </div>
       )}
+
+      {photoItem && <ProductPhotosModal item={photoItem} onClose={() => setPhotoItemId(null)} />}
 
     </div>
   );

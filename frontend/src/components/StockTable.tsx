@@ -5,6 +5,8 @@ import { useToday } from "../hooks/useToday";
 import { isErpSyncWrite } from "../utils/erpSync";
 import type { ErpFiles } from "../erpFiles";
 import StoreChip from "./StoreChip";
+import ProductPhotosModal, { ProductPhotoThumb } from "./ProductPhotos";
+import { canEditProductPhotos } from "../utils/productPhotos";
 import { 
   Search, 
   Trash2, 
@@ -44,7 +46,9 @@ interface StockTableProps {
     exitOrigin?: StockExitOrigin
   ) => Promise<void>;
   onDeleteItem: (itemId: string) => Promise<void>;
-  onAddItem: (itemData: Omit<StockItem, "id" | "userId" | "userEmail" | "createdAt" | "updatedAt">) => Promise<void>;
+  // Devolve o id do documento criado — é com ele que o aviso de "cadastrado"
+  // oferece colocar as fotos do pneu na sequência.
+  onAddItem: (itemData: Omit<StockItem, "id" | "userId" | "userEmail" | "createdAt" | "updatedAt">) => Promise<string | void>;
   // Omitting companyId wipes every company's stock — only used for the explicit
   // "todas as empresas" choice in the clear-stock modal below, never as a default.
   onClearStock?: (companyId?: string) => Promise<void>;
@@ -470,10 +474,19 @@ export default function StockTable({
   // sucesso). Sem ela, "salvou" e "não salvou" são visualmente idênticos: o
   // modal some nos dois casos e resta olhar a linha da tabela e confiar.
   const [savedMsg, setSavedMsg] = useState("");
+  // Pneu recém-cadastrado: o aviso de sucesso ganha o botão "Colocar fotos".
+  const [savedPhotoItemId, setSavedPhotoItemId] = useState<string | null>(null);
   const [formNotes, setFormNotes] = useState("");
   const [formDescription, setFormDescription] = useState("");
-  const [formImageUrl, setFormImageUrl] = useState("");
   const [movementReason, setMovementReason] = useState("");
+
+  // Janela de fotos aberta. Guarda o ID e não o objeto: o documento da lista
+  // é atualizado em tempo real, e a janela tem que enxergar a versão de agora.
+  const [photoItemId, setPhotoItemId] = useState<string | null>(null);
+  const photoItem = photoItemId ? items.find(i => i.id === photoItemId) || null : null;
+  // A ficha aberta na versão de agora: a contagem de fotos muda com a ficha
+  // aberta, porque a janela de fotos grava na hora.
+  const liveEditingItem = editingItem ? items.find(i => i.id === editingItem.id) || editingItem : null;
   
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -886,6 +899,7 @@ export default function StockTable({
   // Open Edit Modals
   const handleOpenEdit = (item: StockItem) => {
     setSavedMsg("");
+    setSavedPhotoItemId(null);
     setEditingItem(item);
     setFormSku(item.sku);
     setFormBrand(item.brand);
@@ -899,7 +913,6 @@ export default function StockTable({
     setFormPriceCost(Number(item.costPrice) > 0 ? String(item.costPrice).replace(".", ",") : "");
     setFormNotes(item.notes);
     setFormDescription(item.description || "");
-    setFormImageUrl(item.imageUrl || "");
     setFormCompanyId(item.companyId || "");
     setMovementReason("Geral / Ajuste de cadastro");
     setShowEditModal(true);
@@ -919,7 +932,6 @@ export default function StockTable({
     setFormPriceCost("");
     setFormNotes("");
     setFormDescription("");
-    setFormImageUrl("");
     setFormCompanyId(user.companyId || "");
     setShowAddModal(true);
     setErrorMsg("");
@@ -960,7 +972,7 @@ export default function StockTable({
     setErrorMsg("");
 
     try {
-      await onAddItem({
+      const newId = await onAddItem({
         sku: formSku,
         brand: formBrand,
         model: formModel,
@@ -972,11 +984,19 @@ export default function StockTable({
         costPrice,
         notes: formNotes,
         description: formDescription,
-        imageUrl: formImageUrl,
+        imageUrl: "",
         companyId: matchedCompId,
         companyName: matchedCompName
       });
       setShowAddModal(false);
+      // A foto entra logo depois do cadastro: o pneu precisa existir no banco
+      // para a foto ter a quem pertencer. O aviso oferece o atalho.
+      const canPhotograph = !!newId && canEditProductPhotos(user, { companyId: matchedCompId });
+      setSavedPhotoItemId(canPhotograph ? newId || null : null);
+      setSavedMsg(
+        `${formBrand} ${formModel} (${formSize}) cadastrado — ${Number(formQuantity)} un.` +
+          (canPhotograph ? " Quer colocar as fotos do pneu agora?" : "")
+      );
     } catch (err: any) {
       setErrorMsg(err.message || "Erro ao adicionar produto.");
     } finally {
@@ -1033,7 +1053,9 @@ export default function StockTable({
         costPrice,
         notes: formNotes,
         description: formDescription,
-        imageUrl: formImageUrl,
+        // Sem imageUrl: a imagem do pneu agora é a FOTO, que tem janela própria
+        // e grava na hora. Regravar aqui o link que estava na tela quando a
+        // ficha abriu desfaria o que a janela de fotos fez nesse meio-tempo.
         companyId: matchedCompId,
         companyName: matchedCompName
       };
@@ -1052,6 +1074,7 @@ export default function StockTable({
         editingItem.quantity
       );
       setShowEditModal(false);
+      setSavedPhotoItemId(null);
       // Se a quantidade DIMINUIU, ela não foi gravada: virou um pedido. Dizer
       // "gravado, 5 un" seria mentira — o cadastro mudou, o saldo não.
       setSavedMsg(
@@ -1628,9 +1651,25 @@ export default function StockTable({
         <div className="mb-3 flex items-start gap-2 bg-emerald-50 border-l-4 border-emerald-500 text-emerald-800 px-3.5 py-2.5 rounded-xl text-xs font-semibold leading-relaxed animate-fadeIn">
           <Check size={14} className="shrink-0 mt-0.5 stroke-[3px]" />
           <span className="flex-1">{savedMsg}</span>
+          {savedPhotoItemId && items.some(i => i.id === savedPhotoItemId) && (
+            <button
+              type="button"
+              onClick={() => {
+                setPhotoItemId(savedPhotoItemId);
+                setSavedMsg("");
+                setSavedPhotoItemId(null);
+              }}
+              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black cursor-pointer"
+            >
+              <Camera size={12} className="stroke-[2.5px]" /> Colocar fotos
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setSavedMsg("")}
+            onClick={() => {
+              setSavedMsg("");
+              setSavedPhotoItemId(null);
+            }}
             className="shrink-0 text-emerald-600 hover:text-emerald-900 cursor-pointer"
             title="Fechar"
           >
@@ -1675,8 +1714,6 @@ export default function StockTable({
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
                     {paginatedItems.map(item => {
-                      const fallbackImg = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZDQ5MzIxIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIyIi8+PHBhdGggZD0iTTEyIDJ2NCBNMTIgMTh2NCBNNC45MyA0LjkzbDIuODMgMi44MyBNMTYuMjQgMTYuMjRsMi44MyAyLjgzIE0yIDEyaDQgTTE4IDEyaDQgTTQuOTMgMTkuMDdsMi44My0yLjgzIE0xNi4yNCA3Ljc2bDIuODMtMi44MyIvPjwvc3ZnPg==";
-                      const activeImg = item.imageUrl || fallbackImg;
                       // Pneu com reserva ativa ganha a linha inteira em ambar e uma
                       // barra na lateral. O selo pequeno na coluna de quantidade
                       // continua dizendo QUANTO esta preso; a cor da linha e o que
@@ -1696,16 +1733,15 @@ export default function StockTable({
                           }`}
                         >
                           
-                          {/* Image Thumbnail Column */}
+                          {/* Foto: a capa do pneu. Clicar abre as fotos — e, para
+                              o dono da loja, é por aqui que ele coloca as fotos. */}
                           <td className="py-2 px-2 text-center align-middle">
-                            <div className="h-10 w-10 mx-auto rounded-lg overflow-hidden border border-slate-200 bg-slate-50 hover:border-gold-400 group hover:scale-[1.08] transition-all shadow-sm">
-                              <img 
-                                src={activeImg} 
-                                className="h-full w-full object-cover group-hover:brightness-105" 
-                                alt={item.model}
-                                referrerPolicy="no-referrer"
-                              />
-                            </div>
+                            <ProductPhotoThumb
+                              item={item}
+                              canEdit={canEditProductPhotos(user, item)}
+                              onOpen={() => setPhotoItemId(item.id)}
+                              className="h-10 w-10 mx-auto shadow-sm hover:scale-[1.08]"
+                            />
                           </td>
 
                           {/* ID column with high density styling */}
@@ -1841,9 +1877,6 @@ export default function StockTable({
             {/* ====== MOBILE CARD VIEW: Visible only on cellphones ====== */}
             <div className="block md:hidden space-y-3">
               {paginatedItems.map(item => {
-                const fallbackImg = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZDQ5MzIxIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIyIi8+PHBhdGggZD0iTTEyIDJ2NCBNMTIgMTh2NCBNNC45MyA0LjkzbDIuODMgMi44MyBNMTYuMjQgMTYuMjRsMi44MyAyLjgzIE0yIDEyaDQgTTE4IDEyaDQgTTQuOTMgMTkuMDdsMi44My0yLjgzIE0xNi4yNCA3Ljc2bDIuODMtMi44MyIvPjwvc3ZnPg==";
-                const activeImg = item.imageUrl || fallbackImg;
-                
                 return (
                   <div 
                     key={item.id} 
@@ -1871,15 +1904,13 @@ export default function StockTable({
                     {/* Main item details row */}
                     <div className="flex gap-3">
                       
-                      {/* Product Thumbnail image */}
-                      <div className="h-16 w-16 rounded border border-slate-200 overflow-hidden bg-slate-50 flex-shrink-0 self-center">
-                        <img 
-                          src={activeImg} 
-                          className="h-full w-full object-cover" 
-                          alt={item.model} 
-                          referrerPolicy="no-referrer"
-                        />
-                      </div>
+                      {/* Foto do pneu: toque para ver ou, se a loja for sua, fotografar */}
+                      <ProductPhotoThumb
+                        item={item}
+                        canEdit={canEditProductPhotos(user, item)}
+                        onOpen={() => setPhotoItemId(item.id)}
+                        className="h-16 w-16 self-center"
+                      />
 
                       {/* Info details */}
                       <div className="flex-1 min-w-0">
@@ -2257,59 +2288,14 @@ export default function StockTable({
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Imagem do Produto (URL ou Seleção Rápida)</label>
-                <input
-                  type="url"
-                  placeholder="Cole uma URL da internet ou escolha uma das opções abaixo:"
-                  value={formImageUrl}
-                  onChange={(e) => setFormImageUrl(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-200 rounded text-[11px] font-mono outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-800"
-                />
-                <div className="mt-2 flex items-center gap-1.5 bg-slate-100/55 p-1 rounded border border-slate-200">
-                  <span className="text-[9px] uppercase font-bold text-slate-500 pl-1">Rápida:</span>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setFormImageUrl("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZDQ5MzIxIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIyIi8+PHBhdGggZD0iTTEyIDJ2NCBNMTIgMTh2NCBNNC45MyA0LjkzbDIuODMgMi44My BNMTYuMjQgMTYuMjRsMi44MyAyLjgzIE0yIDEyaDQgTTE4IDEyaDQgTTQuOTMgMTkuMDdsMi44My0yLjgzIE0xNi2yNCA3Ljc2bDIuODMtMi44MyIvPjwvc3ZnPg==")}
-                      className={`h-6 w-6 rounded-full overflow-hidden border p-1 bg-slate-50 transition-all ${formImageUrl.startsWith("data:image") ? "ring-2 ring-blue-600 scale-105" : "border-slate-300"}`}
-                      title="Anexar Pneu/Roda (Leve)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#d49321" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-full w-full"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormImageUrl("https://images.unsplash.com/photo-1486006920555-c77dce18193b?auto=format&fit=crop&w=300&q=80")}
-                      className={`h-6 w-6 rounded-full overflow-hidden border transition-all ${formImageUrl.includes("photo-1486006920555-c77dce18193b") ? "ring-2 ring-blue-600 scale-105" : "border-slate-300"}`}
-                      title="Anexar Auto Peças"
-                    >
-                      <img src="https://images.unsplash.com/photo-1486006920555-c77dce18193b?auto=format&fit=crop&w=50&q=50" className="h-full w-full object-cover" alt="" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormImageUrl("https://images.unsplash.com/photo-1507136566006-cfc505b114fc?auto=format&fit=crop&w=300&q=80")}
-                      className={`h-6 w-6 rounded-full overflow-hidden border transition-all ${formImageUrl.includes("photo-1507136566006-cfc505b114fc") ? "ring-2 ring-blue-600 scale-105" : "border-slate-300"}`}
-                      title="Anexar Ferramentas"
-                    >
-                      <img src="https://images.unsplash.com/photo-1507136566006-cfc505b114fc?auto=format&fit=crop&w=50&q=50" className="h-full w-full object-cover" alt="" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormImageUrl("https://images.unsplash.com/photo-1511919884226-fd3cad34687c?auto=format&fit=crop&w=300&q=80")}
-                      className={`h-6 w-6 rounded-full overflow-hidden border transition-all ${formImageUrl.includes("photo-1511919884226-fd3cad34687c") ? "ring-2 ring-blue-600 scale-105" : "border-slate-300"}`}
-                      title="Anexar Motor/Peça"
-                    >
-                      <img src="https://images.unsplash.com/photo-1511919884226-fd3cad34687c?auto=format&fit=crop&w=50&q=50" className="h-full w-full object-cover" alt="" />
-                    </button>
-                  </div>
-                </div>
-
-                {formImageUrl && (
-                  <div className="mt-2 flex items-center gap-2 p-1.5 bg-blue-50/60 rounded border border-blue-100">
-                    <img src={formImageUrl} className="h-8 w-8 object-cover rounded border border-blue-200" alt="Preview" referrerPolicy="no-referrer" />
-                    <span className="text-[10px] text-blue-700 font-bold truncate">Visualização ativa para exibição</span>
-                  </div>
-                )}
+              {/* Fotos: entram depois do cadastro — a foto pertence a um pneu que
+                  ainda não existe no banco. Ao gravar, o aviso oferece o atalho. */}
+              <div className="flex items-start gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-600 leading-snug">
+                <Camera size={14} className="shrink-0 mt-0.5 text-gold-600" />
+                <span>
+                  <strong className="text-slate-800">Fotos do pneu:</strong> depois de cadastrar, aparece o botão{" "}
+                  <strong>Colocar fotos</strong>. Também dá para fotografar a qualquer hora tocando na foto do produto na lista.
+                </span>
               </div>
 
               <div>
@@ -2526,60 +2512,38 @@ export default function StockTable({
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Imagem do Produto (URL ou Seleção Rápida)</label>
-                <input
-                  type="url"
-                  placeholder="Cole uma URL da internet ou escolha uma das opções abaixo:"
-                  value={formImageUrl}
-                  onChange={(e) => setFormImageUrl(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-200 rounded text-[11px] font-mono outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-800"
-                />
-                <div className="mt-2 flex items-center gap-1.5 bg-slate-100/55 p-1 rounded border border-slate-200">
-                  <span className="text-[9px] uppercase font-bold text-slate-500 pl-1">Rápida:</span>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setFormImageUrl("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZDQ5MzIxIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIyIi8+PHBhdGggZD0iTTEyIDJ2NCBNMTIgMTh2NCBNNC45MyA0LjkzbDIuODMgMi44My BNMTYuMjQgMTYuMjRsMi44MyAyLjgzIE0yIDEyaDQgTTE4IDEyaDQgTTQuOTMgMTkuMDdsMi44My0yLjgzIE0xNi2yNCA3Ljc2bDIuODMtMi44MyIvPjwvc3ZnPg==")}
-                      className={`h-6 w-6 rounded-full overflow-hidden border p-1 bg-slate-50 transition-all ${formImageUrl.startsWith("data:image") ? "ring-2 ring-blue-600 scale-105" : "border-slate-300"}`}
-                      title="Anexar Pneu/Roda (Leve)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#d49321" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-full w-full"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormImageUrl("https://images.unsplash.com/photo-1486006920555-c77dce18193b?auto=format&fit=crop&w=300&q=80")}
-                      className={`h-6 w-6 rounded-full overflow-hidden border transition-all ${formImageUrl.includes("photo-1486006920555-c77dce18193b") ? "ring-2 ring-blue-600 scale-105" : "border-slate-300"}`}
-                      title="Anexar Auto Peças"
-                    >
-                      <img src="https://images.unsplash.com/photo-1486006920555-c77dce18193b?auto=format&fit=crop&w=50&q=50" className="h-full w-full object-cover" alt="" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormImageUrl("https://images.unsplash.com/photo-1507136566006-cfc505b114fc?auto=format&fit=crop&w=300&q=80")}
-                      className={`h-6 w-6 rounded-full overflow-hidden border transition-all ${formImageUrl.includes("photo-1507136566006-cfc505b114fc") ? "ring-2 ring-blue-600 scale-105" : "border-slate-300"}`}
-                      title="Anexar Ferramentas"
-                    >
-                      <img src="https://images.unsplash.com/photo-1507136566006-cfc505b114fc?auto=format&fit=crop&w=50&q=50" className="h-full w-full object-cover" alt="" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormImageUrl("https://images.unsplash.com/photo-1511919884226-fd3cad34687c?auto=format&fit=crop&w=300&q=80")}
-                      className={`h-6 w-6 rounded-full overflow-hidden border transition-all ${formImageUrl.includes("photo-1511919884226-fd3cad34687c") ? "ring-2 ring-blue-600 scale-105" : "border-slate-300"}`}
-                      title="Anexar Motor/Peça"
-                    >
-                      <img src="https://images.unsplash.com/photo-1511919884226-fd3cad34687c?auto=format&fit=crop&w=50&q=50" className="h-full w-full object-cover" alt="" />
-                    </button>
+              {/* Fotos do pneu. Têm janela própria e gravam na hora — não esperam o
+                  "Salvar Alterações", que cuida só dos dados da ficha. */}
+              {liveEditingItem && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Fotos do pneu</label>
+                  <div className="flex items-center gap-3 p-2 bg-slate-50 border border-slate-200 rounded">
+                    <ProductPhotoThumb
+                      item={liveEditingItem}
+                      canEdit={canEditProductPhotos(user, liveEditingItem)}
+                      onOpen={() => setPhotoItemId(liveEditingItem.id)}
+                      className="h-12 w-12"
+                    />
+                    <span className="flex-1 min-w-0 text-[11px] text-slate-600 leading-snug">
+                      {(liveEditingItem.photoCount || 0) > 0
+                        ? `${liveEditingItem.photoCount} foto${(liveEditingItem.photoCount || 0) > 1 ? "s" : ""}. A primeira é a capa da lista.`
+                        : "Nenhuma foto ainda."}
+                    </span>
+                    {((liveEditingItem.photoCount || 0) > 0 || canEditProductPhotos(user, liveEditingItem)) && (
+                      <button
+                        type="button"
+                        onClick={() => setPhotoItemId(liveEditingItem.id)}
+                        className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-700 cursor-pointer"
+                      >
+                        <Camera size={13} />
+                        {canEditProductPhotos(user, liveEditingItem)
+                          ? (liveEditingItem.photoCount || 0) > 0 ? "Ver e editar" : "Colocar fotos"
+                          : "Ver fotos"}
+                      </button>
+                    )}
                   </div>
                 </div>
-
-                {formImageUrl && (
-                  <div className="mt-2 flex items-center gap-2 p-1.5 bg-blue-50/60 rounded border border-blue-100">
-                    <img src={formImageUrl} className="h-8 w-8 object-cover rounded border border-blue-200" alt="Preview" referrerPolicy="no-referrer" />
-                    <span className="text-[10px] text-blue-700 font-bold truncate">Visualização ativa para exibição</span>
-                  </div>
-                )}
-              </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Anotações Internas / Prateleira</label>
@@ -3376,6 +3340,11 @@ export default function StockTable({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Fotos do pneu — por cima de tudo, inclusive da ficha do produto. */}
+      {photoItem && (
+        <ProductPhotosModal item={photoItem} user={user} onClose={() => setPhotoItemId(null)} />
       )}
 
     </div>

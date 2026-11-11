@@ -217,6 +217,8 @@ export function mapStockDoc(id: string, data: any): StockItem {
     notes: data.notes || "",
     description: data.description || "",
     imageUrl: data.imageUrl || "",
+    photoCount: Number(data.photoCount) || 0,
+    photoThumb: typeof data.photoThumb === "string" ? data.photoThumb : "",
     userId: data.userId || "",
     userEmail: data.userEmail || "",
     companyId: data.companyId || "",

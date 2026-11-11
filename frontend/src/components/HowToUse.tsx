@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp, Lightbulb } from "lucide-react";
+import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp, Lightbulb, ImagePlus } from "lucide-react";
 
 export default function HowToUse() {
   const [activeSection, setActiveSection] = useState<string>("intro");
@@ -10,6 +10,7 @@ export default function HowToUse() {
     { id: "stock-flow", title: "Entradas e Saídas", icon: ArrowDownUp },
     { id: "dashboard", title: "Painel & Indicadores", icon: BarChart2 },
     { id: "unified", title: "Estoque Unificado", icon: Layers },
+    { id: "photos", title: "Fotos dos Pneus", icon: ImagePlus },
     { id: "barcode", title: "Leitor de Código", icon: Camera },
     { id: "import", title: "Importação Inteligente", icon: FileUp },
     { id: "offline", title: "Funcionamento Offline", icon: Smartphone }
@@ -196,6 +197,35 @@ export default function HowToUse() {
                   <strong className="text-slate-900">Valor Promocional:</strong> Na aba <strong>Valor promocional</strong>, clique em "Nova promoção", escolha o pneu e a loja e informe o preço promocional e a validade — até uma data ou sem prazo. Enquanto ela vale, o pneu aparece em destaque no catálogo dos vendedores e as vendas já abrem com o preço promocional. No fim do prazo o preço volta ao normal sozinho; para parar antes, use "Encerrar".
                 </li>
               </ul>
+            </div>
+          )}
+
+          {activeSection === "photos" && (
+            <div className="space-y-4 animate-scaleUp text-xs text-slate-650 leading-relaxed">
+              <h4 className="text-base font-black text-slate-900">🖼️ Fotos dos Pneus</h4>
+              <p>
+                O dono de cada loja coloca até <strong className="text-slate-900">4 fotos</strong> em cada pneu da própria loja.
+                A primeira foto é a capa que aparece na lista.
+              </p>
+              <ol className="list-decimal pl-5 space-y-2">
+                <li>
+                  Em <strong className="text-slate-900">Cadastros e Ajustes</strong> ou no <strong className="text-slate-900">Estoque Unificado</strong>,
+                  toque na foto do pneu. Pneu sem foto mostra um desenho com uma câmera azul no canto. Também dá para abrir pelo botão
+                  <strong className="text-slate-900"> Fotos do pneu</strong> na ficha do produto.
+                </li>
+                <li>
+                  Escolha <strong className="text-slate-900">Tirar foto</strong> para abrir a câmera do celular ou
+                  <strong className="text-slate-900"> Da galeria</strong> para mandar fotos já tiradas (dá para escolher várias de uma vez).
+                </li>
+                <li>
+                  A foto é reduzida no próprio aparelho e fica salva na hora, sem precisar de outro botão. Para trocar a capa, abra a foto
+                  e toque em <strong className="text-slate-900">Usar como capa</strong>. Para tirar, use <strong className="text-slate-900">Excluir esta foto</strong>.
+                </li>
+              </ol>
+              <p>
+                Os vendedores e o catálogo de consulta só veem as fotos. Pneu de outra loja não pode ser fotografado por você: só o dono
+                daquela loja ou o administrador.
+              </p>
             </div>
           )}
 

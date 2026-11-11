@@ -65,13 +65,45 @@ export interface StockItem {
   promoSetBy?: string;             // quem criou ou alterou
   notes: string;
   description?: string; // Product description
-  imageUrl?: string; // Product image url
+  // Imagem ANTIGA, por link (o formulário colava uma URL ou escolhia uma
+  // ilustração genérica). Continua sendo lida para não sumir de quem já tinha;
+  // a foto de verdade do pneu é a de baixo.
+  imageUrl?: string;
+  // ── Fotos do pneu (tiradas pelo dono da loja) ──
+  // As fotos moram em `stock_photos/{id deste documento}` — ver
+  // utils/productPhotos.ts. Aqui fica só o que a LISTA precisa: quantas são e a
+  // capa em miniatura (JPEG de poucos KB). Ausentes nos documentos antigos.
+  photoCount?: number;
+  photoThumb?: string;
   userId: string;
   userEmail: string;
   companyId?: string;
   companyName?: string;
   createdAt: any;
   updatedAt: any;
+}
+
+// Uma foto de pneu, já reduzida e comprimida no aparelho de quem tirou.
+export interface ProductPhoto {
+  id: string;
+  dataUrl: string;      // JPEG em base64 ("data:image/jpeg;base64,...")
+  width: number;
+  height: number;
+  addedAt: string;      // ISO
+  addedByUid: string;
+  addedByName: string;
+}
+
+// Documento `stock_photos/{stockItemId}`: todas as fotos de UM documento de
+// estoque. A primeira é a capa.
+export interface ProductPhotosDoc {
+  stockItemId: string;
+  companyId: string;
+  sku: string;
+  photos: ProductPhoto[];
+  updatedAt?: any;
+  updatedByUid?: string;
+  updatedByName?: string;
 }
 
 export interface MovementLog {

@@ -8,6 +8,8 @@ import { activePromo, availableQuantity, compareTireSize, compareTireSizeDesc, f
 import { useToday } from "../hooks/useToday";
 import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
 import PromotionsManager from "./PromotionsManager";
+import ProductPhotosModal, { ProductPhotoThumb } from "./ProductPhotos";
+import { canEditProductPhotos } from "../utils/productPhotos";
 
 interface UnifiedStockProps {
   items: StockItem[];
@@ -235,19 +237,23 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       .sort((a, b) => a.sku.localeCompare(b.sku));
   }, [items, companies, priceSourceCompanyId]);
 
-  // ── Ordem da CENTRAL AUTOCENTER ───────────────────────────────────
-  // Pedido da loja, e so dela: a lista chega ordenada por SKU (a ordem em
+  // ── Ordem da CENTRAL AUTOCENTER e da CENTRAL AUTOCAR ──────────────
+  // Pedido das lojas, e so delas: a lista chega ordenada por SKU (a ordem em
   // que os pneus foram cadastrados), que nao ajuda ninguem no balcao. Aqui a
-  // vitrine vira a do galpao — quem tem pneu primeiro, medida crescente — e
-  // as outras filiais continuam exatamente como estavam.
+  // vitrine vira a do galpao — quem tem pneu primeiro, medida do menor para o
+  // maior — e as outras filiais continuam exatamente como estavam. A Autocar
+  // pediu a mesma ordem em 11/11/2026.
   //
   // A empresa e reconhecida pelo NOME e nao por um id fixo: o id muda a cada
   // ambiente (e a cada "inicializar empresas padrao"), o nome nao. Mesmo
-  // criterio ja usado na injecao de estoque em StockTable.
-  const isAutocenterView = useMemo(() => {
+  // criterio ja usado na injecao de estoque em StockTable. "AUTOCAR" nao casa
+  // com "AUTOCENTER" (nem o contrario), entao cada loja entra pelo proprio nome.
+  const usesShelfOrder = useMemo(() => {
     if (companyFilter === "ALL") return false;
     const comp = companies.find(c => c.id === companyFilter);
-    return !!comp && comp.name.toUpperCase().includes("AUTOCENTER");
+    if (!comp) return false;
+    const name = comp.name.toUpperCase();
+    return name.includes("AUTOCENTER") || name.includes("AUTOCAR");
   }, [companies, companyFilter]);
 
   const filteredItems = useMemo(() => {
@@ -267,7 +273,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       matchesTireSize(item.size, lower)
     );
 
-    if (!isAutocenterView) return searched;
+    if (!usesShelfOrder) return searched;
 
     // Zerado vai para o fim. O criterio e o saldo FISICO (o mesmo numero que a
     // celula mostra): pneu reservado continua na prateleira e continua no meio
@@ -284,7 +290,24 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         a.sku.localeCompare(b.sku)
       );
     });
-  }, [consolidatedItems, deferredSearchTerm, companyFilter, isAutocenterView]);
+  }, [consolidatedItems, deferredSearchTerm, companyFilter, usesShelfOrder]);
+
+  // ── Fotos do pneu ─────────────────────────────────────────────────
+  // A linha junta o mesmo código de várias lojas, mas a foto é de UM documento:
+  // o da loja cujo preço a linha mostra (a sua, ou a do filtro) — e, se esse
+  // não tiver foto, o de outra loja visível que tenha. A janela guarda o ID e
+  // procura o documento a cada render, para enxergar a versão de agora.
+  const [photoItemId, setPhotoItemId] = useState<string | null>(null);
+  const photoItem = photoItemId ? items.find(i => i.id === photoItemId) || null : null;
+  const rowPhotoOf = (item: ConsolidatedItem) => {
+    const primary: StockItem | undefined = item.docs[item.priceCompanyId];
+    const doc =
+      primary && (primary.photoCount || 0) > 0
+        ? primary
+        : visibleCompanies.map(c => item.docs[c.id]).find(d => d && (d.photoCount || 0) > 0) || primary;
+    const canEdit = !!doc && canEditProductPhotos(user, doc);
+    return { doc, canEdit, show: !!doc && ((doc.photoCount || 0) > 0 || canEdit) };
+  };
 
   // Export Unified Stock to CSV
   const exportUnifiedToCSV = () => {
@@ -1375,6 +1398,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
               // Promoção da loja cujo preço a linha mostra (a coluna de preço é
               // de UMA loja — ver priceSourceCompanyId).
               const rowPromo = activePromo(item.docs[item.priceCompanyId], today);
+              const { doc: rowPhotoDoc, canEdit: rowCanPhoto, show: showRowPhoto } = rowPhotoOf(item);
               return (
                 <tr key={item.sku} className={`hover:bg-gold-50/5 text-slate-800 transition-colors ${isProcessing ? "opacity-50" : ""}`}>
                   <td 
@@ -1418,45 +1442,59 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                     )}
                   </td>
                   <td className="border-r border-slate-200 px-2 py-3 font-semibold text-slate-700 min-w-[150px] text-xs">
-                    <span 
-                      className="cursor-pointer hover:bg-gold-400/10 px-1.5 py-0.5 rounded"
-                      onClick={() => !isVendedor && startEdit(item, "brand", item.brand)}
-                    >
-                      {editingCell?.sku === item.sku && editingCell?.field === "brand" ? (
-                        <input 
-                          autoFocus
-                          type="text"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onBlur={() => handleSaveEdit(item)}
-                          onKeyDown={(e) => handleKeyDown(e, item)}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-20 px-1 outline-none bg-white border border-gold-400 rounded font-bold"
+                    <div className="flex items-center gap-2">
+                      {/* Foto do pneu: só aparece se houver foto ou se a loja for
+                          sua — aí é o convite para fotografar. */}
+                      {showRowPhoto && rowPhotoDoc && (
+                        <ProductPhotoThumb
+                          item={rowPhotoDoc}
+                          canEdit={rowCanPhoto}
+                          onOpen={() => setPhotoItemId(rowPhotoDoc.id)}
+                          className="h-8 w-8"
                         />
-                      ) : (
-                        item.brand
                       )}
-                    </span>
-                    {" "}
-                    <span 
-                      className="font-normal text-slate-600 cursor-pointer hover:bg-gold-400/10 px-1.5 py-0.5 rounded"
-                      onClick={() => !isVendedor && startEdit(item, "model", item.model)}
-                    >
-                      {editingCell?.sku === item.sku && editingCell?.field === "model" ? (
-                        <input 
-                          autoFocus
-                          type="text"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onBlur={() => handleSaveEdit(item)}
-                          onKeyDown={(e) => handleKeyDown(e, item)}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-32 px-1 outline-none bg-white border border-gold-400 rounded font-normal"
-                        />
-                      ) : (
-                        item.model
-                      )}
-                    </span>
+                      <div className="min-w-0">
+                        <span 
+                          className="cursor-pointer hover:bg-gold-400/10 px-1.5 py-0.5 rounded"
+                          onClick={() => !isVendedor && startEdit(item, "brand", item.brand)}
+                        >
+                          {editingCell?.sku === item.sku && editingCell?.field === "brand" ? (
+                            <input 
+                              autoFocus
+                              type="text"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onBlur={() => handleSaveEdit(item)}
+                              onKeyDown={(e) => handleKeyDown(e, item)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-20 px-1 outline-none bg-white border border-gold-400 rounded font-bold"
+                            />
+                          ) : (
+                            item.brand
+                          )}
+                        </span>
+                        {" "}
+                        <span 
+                          className="font-normal text-slate-600 cursor-pointer hover:bg-gold-400/10 px-1.5 py-0.5 rounded"
+                          onClick={() => !isVendedor && startEdit(item, "model", item.model)}
+                        >
+                          {editingCell?.sku === item.sku && editingCell?.field === "model" ? (
+                            <input 
+                              autoFocus
+                              type="text"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onBlur={() => handleSaveEdit(item)}
+                              onKeyDown={(e) => handleKeyDown(e, item)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-32 px-1 outline-none bg-white border border-gold-400 rounded font-normal"
+                            />
+                          ) : (
+                            item.model
+                          )}
+                        </span>
+                      </div>
+                    </div>
                   </td>
                   
                   {/* Quantity Cells */}
@@ -1662,6 +1700,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         {filteredItems.map((item) => {
           const isProcessing = loadingSku === item.sku;
           const rowPromo = activePromo(item.docs[item.priceCompanyId], today);
+          const { doc: rowPhotoDoc, canEdit: rowCanPhoto, show: showRowPhoto } = rowPhotoOf(item);
           // Mesma leitura do desktop, adaptada ao cartão: no celular não existe
           // grade de células para pintar, então quem carrega a cor é o cartão.
           const cardReserved = Object.values(item.docs).reduce<number>(
@@ -1684,93 +1723,103 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
               )}
               {/* Product Info */}
               <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  {/* SKU / Code */}
-                  <span 
-                    onClick={() => !isVendedor && startEdit(item, "sku", item.sku)}
-                    className="inline-block px-2.5 py-0.5 text-gold-700 bg-gold-400/10 rounded-lg border border-gold-500/20 font-mono tracking-wider font-extrabold uppercase text-[10px] shadow-xs cursor-pointer hover:bg-gold-400/20"
-                  >
-                    {editingCell?.sku === item.sku && editingCell?.field === "sku" ? (
-                      <input 
-                        autoFocus
-                        type="text"
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        onBlur={() => handleSaveEdit(item)}
-                        onKeyDown={(e) => handleKeyDown(e, item)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="w-20 px-1 outline-none bg-white border border-gold-400 rounded font-bold text-[10px]"
-                      />
-                    ) : (
-                      item.sku
-                    )}
-                  </span>
+                <div className="flex items-start gap-3 min-w-0">
+                  {showRowPhoto && rowPhotoDoc && (
+                    <ProductPhotoThumb
+                      item={rowPhotoDoc}
+                      canEdit={rowCanPhoto}
+                      onOpen={() => setPhotoItemId(rowPhotoDoc.id)}
+                      className="h-14 w-14"
+                    />
+                  )}
+                  <div className="space-y-1 min-w-0">
+                    {/* SKU / Code */}
+                    <span 
+                      onClick={() => !isVendedor && startEdit(item, "sku", item.sku)}
+                      className="inline-block px-2.5 py-0.5 text-gold-700 bg-gold-400/10 rounded-lg border border-gold-500/20 font-mono tracking-wider font-extrabold uppercase text-[10px] shadow-xs cursor-pointer hover:bg-gold-400/20"
+                    >
+                      {editingCell?.sku === item.sku && editingCell?.field === "sku" ? (
+                        <input 
+                          autoFocus
+                          type="text"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onBlur={() => handleSaveEdit(item)}
+                          onKeyDown={(e) => handleKeyDown(e, item)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-20 px-1 outline-none bg-white border border-gold-400 rounded font-bold text-[10px]"
+                        />
+                      ) : (
+                        item.sku
+                      )}
+                    </span>
                   
-                  {/* Size, Brand, Model */}
-                  <h4 className="font-bold text-slate-900 uppercase text-xs mt-1">
-                    {/* Size (Medida) */}
-                    <span 
-                      onClick={() => !isVendedor && startEdit(item, "size", item.size)}
-                      className="text-gold-600 font-extrabold mr-1.5 cursor-pointer hover:bg-gold-400/10 px-0.5 rounded"
-                    >
-                      {editingCell?.sku === item.sku && editingCell?.field === "size" ? (
-                        <input 
-                          autoFocus
-                          type="text"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onBlur={() => handleSaveEdit(item)}
-                          onKeyDown={(e) => handleKeyDown(e, item)}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-20 px-1 outline-none bg-white border border-gold-400 rounded font-bold text-xs"
-                        />
-                      ) : (
-                        item.size
-                      )}
-                    </span>
+                    {/* Size, Brand, Model */}
+                    <h4 className="font-bold text-slate-900 uppercase text-xs mt-1">
+                      {/* Size (Medida) */}
+                      <span 
+                        onClick={() => !isVendedor && startEdit(item, "size", item.size)}
+                        className="text-gold-600 font-extrabold mr-1.5 cursor-pointer hover:bg-gold-400/10 px-0.5 rounded"
+                      >
+                        {editingCell?.sku === item.sku && editingCell?.field === "size" ? (
+                          <input 
+                            autoFocus
+                            type="text"
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onBlur={() => handleSaveEdit(item)}
+                            onKeyDown={(e) => handleKeyDown(e, item)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-20 px-1 outline-none bg-white border border-gold-400 rounded font-bold text-xs"
+                          />
+                        ) : (
+                          item.size
+                        )}
+                      </span>
                     
-                    {/* Brand */}
-                    <span 
-                      onClick={() => !isVendedor && startEdit(item, "brand", item.brand)}
-                      className="cursor-pointer hover:bg-gold-400/10 px-0.5 rounded mr-1"
-                    >
-                      {editingCell?.sku === item.sku && editingCell?.field === "brand" ? (
-                        <input 
-                          autoFocus
-                          type="text"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onBlur={() => handleSaveEdit(item)}
-                          onKeyDown={(e) => handleKeyDown(e, item)}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-20 px-1 outline-none bg-white border border-gold-400 rounded font-bold text-xs"
-                        />
-                      ) : (
-                        item.brand
-                      )}
-                    </span>
+                      {/* Brand */}
+                      <span 
+                        onClick={() => !isVendedor && startEdit(item, "brand", item.brand)}
+                        className="cursor-pointer hover:bg-gold-400/10 px-0.5 rounded mr-1"
+                      >
+                        {editingCell?.sku === item.sku && editingCell?.field === "brand" ? (
+                          <input 
+                            autoFocus
+                            type="text"
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onBlur={() => handleSaveEdit(item)}
+                            onKeyDown={(e) => handleKeyDown(e, item)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-20 px-1 outline-none bg-white border border-gold-400 rounded font-bold text-xs"
+                          />
+                        ) : (
+                          item.brand
+                        )}
+                      </span>
 
-                    {/* Model */}
-                    <span 
-                      onClick={() => !isVendedor && startEdit(item, "model", item.model)}
-                      className="font-normal text-slate-650 cursor-pointer hover:bg-gold-400/10 px-0.5 rounded"
-                    >
-                      {editingCell?.sku === item.sku && editingCell?.field === "model" ? (
-                        <input 
-                          autoFocus
-                          type="text"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onBlur={() => handleSaveEdit(item)}
-                          onKeyDown={(e) => handleKeyDown(e, item)}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-24 px-1 outline-none bg-white border border-gold-400 rounded font-normal text-xs"
-                        />
-                      ) : (
-                        item.model
-                      )}
-                    </span>
-                  </h4>
+                      {/* Model */}
+                      <span 
+                        onClick={() => !isVendedor && startEdit(item, "model", item.model)}
+                        className="font-normal text-slate-650 cursor-pointer hover:bg-gold-400/10 px-0.5 rounded"
+                      >
+                        {editingCell?.sku === item.sku && editingCell?.field === "model" ? (
+                          <input 
+                            autoFocus
+                            type="text"
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onBlur={() => handleSaveEdit(item)}
+                            onKeyDown={(e) => handleKeyDown(e, item)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-24 px-1 outline-none bg-white border border-gold-400 rounded font-normal text-xs"
+                          />
+                        ) : (
+                          item.model
+                        )}
+                      </span>
+                    </h4>
+                  </div>
                 </div>
               </div>
 
@@ -2812,6 +2861,10 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         companies={reportCompanies}
         meta={reportMeta as PrintableReportMeta}
       />
+
+      {photoItem && (
+        <ProductPhotosModal item={photoItem} user={user} onClose={() => setPhotoItemId(null)} />
+      )}
     </div>
   );
 }

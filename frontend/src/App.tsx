@@ -89,6 +89,7 @@ import {
   toErpLiveDoc
 } from "./utils/erpSync";
 import { useAppNotifications } from "./hooks/useAppNotifications";
+import { deleteProductPhotosDoc } from "./utils/productPhotos";
 
 // Components
 // AuthScreen is needed immediately on first paint (logged-out users see nothing else),
@@ -1362,6 +1363,8 @@ export default function App() {
       });
 
       await batch.commit();
+      // O id do pneu novo: é com ele que a tela oferece colocar as fotos na hora.
+      return stockRef.id;
     } catch (error) {
       console.error("Erro ao cadastrar pneu:", error);
       throw new Error("Erro ao salvar produto no banco de dados.");
@@ -1673,6 +1676,12 @@ export default function App() {
       });
 
       await batch.commit();
+
+      // As fotos saem DEPOIS, fora do lote: se a limpeza falhar, o pneu já foi
+      // excluído do mesmo jeito (uma foto que sobra não aparece em lugar nenhum).
+      if ((Number(itemToDrop.photoCount) || 0) > 0) {
+        await deleteProductPhotosDoc(itemId);
+      }
     } catch (err: any) {
       console.error("Erro ao excluir item:", err);
       throw new Error(err?.message || "Erro ao excluir produto.");
@@ -1775,6 +1784,13 @@ export default function App() {
         });
       });
       await batch.commit();
+
+      // Fotos dos pneus apagados: limpeza à parte, sem travar a exclusão.
+      await Promise.all(
+        chunk
+          .filter(item => (Number(item.photoCount) || 0) > 0)
+          .map(item => deleteProductPhotosDoc(item.id))
+      );
     }
 
     if (reservedItems.length > 0) {
