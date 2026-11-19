@@ -146,7 +146,9 @@ import {
   Smartphone,
   DollarSign,
   Search,
-  Lightbulb
+  Lightbulb,
+  PanelLeftClose,
+  PanelLeftOpen
 } from "lucide-react";
 
 // Quantos registros de movimentacao ficam em memoria. 400 (e nao 150) porque o
@@ -436,6 +438,41 @@ export default function App() {
 
   // Active Tab/View state
   const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions" | "price-comparison" | "size-history" | "exit-approvals">("analytics");
+
+  // ── Menu lateral recolhido ──────────────────────────────────────────
+  // Recolhido, o menu vira uma coluna só de ícones (72px) e devolve a largura
+  // para as planilhas, que são as telas que mais precisam dela. Entre 768 e
+  // 1023px (tablet) ele já é sempre só de ícones; a partir de 1024px a pessoa
+  // escolhe, e a escolha fica guardada no aparelho.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("cs.sidebarCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSidebar = () =>
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem("cs.sidebarCollapsed", next ? "1" : "0");
+      } catch {
+        // Navegador sem armazenamento: vale só para esta sessão.
+      }
+      return next;
+    });
+
+  // Barra de baixo do celular: são mais abas do que cabem na tela, e a aba
+  // aberta podia ficar escondida fora da área visível. Ao trocar de aba, a
+  // barra rola sozinha até deixá-la no meio.
+  const mobileNavRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const bar = mobileNavRef.current;
+    const active = bar?.querySelector<HTMLElement>('[data-active="true"]');
+    if (!bar || !active) return;
+    const left = active.offsetLeft - (bar.clientWidth - active.offsetWidth) / 2;
+    bar.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+  }, [activeTab]);
 
   // Authentication Status listener. O papel NAO sai mais do localStorage —
   // ver resolveSessionProfile acima.
@@ -4859,22 +4896,82 @@ export default function App() {
   // está no fim antes de ele prometer a entrega.
   const isSellerKpi = user.role === "vendedor";
 
+  // ── Abas do menu ────────────────────────────────────────────────────
+  // UMA lista para o menu lateral e para a barra de baixo do celular. Antes
+  // eram duas cópias escritas à mão, e cada aba nova tinha que lembrar das
+  // duas. `show` é quem enxerga a aba — a mesma regra que valia nas cópias.
+  type NavTab = typeof activeTab;
+  type NavItem = {
+    tab: NavTab;
+    icon: React.ComponentType<{ size?: number; className?: string }>;
+    label: string;   // menu lateral
+    short: string;   // barra do celular
+    show: boolean;
+    badge?: number;
+    badgeTone?: "gold" | "red";
+  };
+  const isOwnerOrAdmin = user.role === "alimentador" || user.role === "admin";
+  const notSeller = user.role !== "vendedor";
+  const navItems = ([
+    { tab: "catalogo", icon: Search, label: "Catálogo e Reservas", short: "Catálogo", show: user.role === "admin" || user.role === "vendedor" },
+    { tab: "unified", icon: Warehouse, label: "Estoque Unificado", short: "Geral", show: notSeller },
+    { tab: "analytics", icon: TrendingUp, label: "Painel de Indicadores", short: "Painel", show: notSeller },
+    { tab: "inventory", icon: Layers, label: "Cadastros e Ajustes", short: "Cadastros", show: isOwnerOrAdmin },
+    // Custo vs preços de venda: mesmo público de Cadastros e Ajustes — quem
+    // responde pela loja. Custo e margem não são assunto de balcão.
+    { tab: "price-comparison", icon: Scale, label: "Custo vs À Vista vs A Prazo", short: "Custo", show: isOwnerOrAdmin },
+    { tab: "stock-flow", icon: ArrowDownUp, label: "Entradas e Saídas", short: "Ent/Saí", show: notSeller },
+    { tab: "pdf-import", icon: FileUp, label: "Importar Estoque", short: "Importar", show: notSeller },
+    { tab: "reports", icon: Activity, label: "Auditoria & Histórico", short: "Relatórios", show: notSeller },
+    // Colada em Auditoria de propósito: as duas leem a mesma coleção; aqui o
+    // eixo é a MEDIDA, que é a unidade em que pneu é comprado.
+    { tab: "size-history", icon: Ruler, label: "Histórico por Medida", short: "Medidas", show: notSeller },
+    // Reservas ANTES de Transferências: é a fila que tem cliente esperando do
+    // outro lado, e a que trava saldo enquanto ninguém decide.
+    {
+      tab: "reservations", icon: ShoppingBag, label: user.role === "vendedor" ? "Minhas Reservas" : "Reservas", short: "Reservas",
+      show: true, badge: pendingReservationsCount, badgeTone: "gold"
+    },
+    // Fila de baixa: só para quem decide. O vendedor não abre pedido de baixa
+    // (o equivalente dele é a reserva de cliente, que o dono confirma).
+    { tab: "exit-approvals", icon: ShieldCheck, label: "Aprovar Baixas", short: "Baixas", show: notSeller, badge: pendingExitCount, badgeTone: "red" },
+    // Sugestões: a demanda que o estoque não atendeu — colada em Reservas.
+    { tab: "suggestions", icon: Lightbulb, label: "Sugestões", short: "Sugestões", show: canSeeSuggestions, badge: pendingSuggestionsCount, badgeTone: "gold" },
+    { tab: "transfers", icon: ArrowLeftRight, label: "Transferências", short: "Transf.", show: notSeller },
+    {
+      tab: "users-admin", icon: Users,
+      label: user.role === "admin" ? "Operadores e Senhas" : "Meus Vendedores",
+      short: user.role === "admin" ? "Operadores" : "Vendedores",
+      show: canManageUsers
+    },
+    { tab: "how-to-use", icon: BookOpen, label: "Como Usar o Sistema", short: "Ajuda", show: true },
+    { tab: "apk-installer", icon: Smartphone, label: "Instalar App", short: "App", show: user.role === "admin" }
+  ] as NavItem[]).filter(item => item.show);
+
+  // Menu largo (com os nomes) só a partir de 1024px e se a pessoa não recolheu.
+  const wideNav = !sidebarCollapsed;
+  const badgeClass = (tone?: "gold" | "red") =>
+    tone === "red" ? "bg-red-500 text-white" : "bg-gold-500 text-slate-900";
+
   return (
     <div className="min-h-screen bg-slate-50/70 flex flex-col md:flex-row font-sans transition-colors text-slate-800">
       
-      {/* ====== DESKTOP SIDEBAR: Visible only on medium screens and up ====== */}
-      <aside className="hidden md:flex md:w-64 bg-[#0b0f19] text-white flex-col justify-between border-r border-gold-500/10 sticky top-0 h-screen z-40 shrink-0">
-        
-        {/* Top Section: Brand Logo & Vertical Nav */}
-        <div className="flex flex-col p-5 space-y-7">
-          
-          {/* Logo Area */}
-          <div className="flex items-center justify-between gap-2">
+      {/* ====== MENU LATERAL (a partir de 768px) ======
+          Coluna só de ícones no tablet e quando recolhido; com os nomes a partir
+          de 1024px. A lista de abas ROLA quando não cabe na altura (notebook de
+          tela baixa): antes ela passava do fim da tela e as últimas abas ficavam
+          inalcançáveis, embaixo do cartão do usuário. */}
+      <aside
+        className={`hidden md:flex ${wideNav ? "md:w-[72px] lg:w-64" : "md:w-[72px]"} bg-[#0b0f19] text-white flex-col border-r border-gold-500/10 sticky top-0 h-screen z-40 shrink-0 transition-[width] duration-200`}
+      >
+        {/* Topo: logo, sino e as abas */}
+        <div className={`flex flex-col flex-1 min-h-0 gap-5 ${wideNav ? "p-3 lg:p-5" : "p-3"}`}>
+          <div className={`flex items-center gap-2 ${wideNav ? "flex-col lg:flex-row lg:justify-between" : "flex-col"}`}>
             <div className="flex items-center gap-3 min-w-0">
               <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-gold-600 via-gold-500 to-amber-200 text-[#0f172a] flex items-center justify-center shadow-lg shadow-gold-500/20 font-black hover:scale-105 active:scale-95 transition-all duration-300 border border-gold-300/30 shrink-0">
                 <Warehouse className="h-5 w-5 stroke-[2.2]" />
               </div>
-              <div className="min-w-0">
+              <div className={wideNav ? "hidden lg:block min-w-0" : "hidden"}>
                 <h1 className="text-sm font-black text-white tracking-tight leading-none uppercase flex items-center gap-1">
                   Central Stoque <span className="text-[9px] text-gold-400 font-black tracking-normal lowercase italic bg-gold-500/10 px-1.5 py-0.5 rounded-md border border-gold-500/20">v2.0</span>
                 </h1>
@@ -4890,273 +4987,70 @@ export default function App() {
             />
           </div>
 
-          {/* Navigation Links Column */}
-          <nav className="flex flex-col gap-1.5">
-            {(user.role === "admin" || user.role === "vendedor") && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("catalogo")}
-                className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                  activeTab === "catalogo"
-                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                    : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                }`}
-              >
-                <Search size={14} className="stroke-[2px]" /> Catálogo e Reservas
-              </button>
-            )}
-
-            {user.role !== "vendedor" && (
-              <>
+          <nav aria-label="Menu principal" className="nav-scroll flex flex-col gap-1 flex-1 min-h-0 overflow-y-auto overscroll-contain -mx-1 px-1">
+            {navItems.map(item => {
+              const Icon = item.icon;
+              const active = activeTab === item.tab;
+              const badge = item.badge || 0;
+              return (
                 <button
+                  key={item.tab}
                   type="button"
-                  onClick={() => setActiveTab("unified")}
-                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                    activeTab === "unified"
+                  onClick={() => setActiveTab(item.tab)}
+                  title={item.label}
+                  aria-label={item.label}
+                  aria-current={active ? "page" : undefined}
+                  className={`relative w-full shrink-0 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border text-left ${
+                    wideNav ? "justify-center px-0 lg:justify-start lg:px-3.5" : "justify-center px-0"
+                  } ${
+                    active
                       ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
                       : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
                   }`}
                 >
-                  <Warehouse size={14} className="stroke-[2px]" /> Estoque Unificado
+                  <Icon size={16} className="stroke-[2px] shrink-0" />
+                  <span className={wideNav ? "hidden lg:block flex-1 min-w-0 leading-tight" : "hidden"}>{item.label}</span>
+                  {badge > 0 && (
+                    <span
+                      className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[9px] font-black ${badgeClass(item.badgeTone)} ${
+                        wideNav ? "absolute top-0.5 right-1 lg:static" : "absolute top-0.5 right-1"
+                      }`}
+                    >
+                      {badge}
+                    </span>
+                  )}
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("analytics")}
-                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                    activeTab === "analytics" 
-                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                  }`}
-                >
-                  <TrendingUp size={14} className="stroke-[2px]" /> Painel de Indicadores
-                </button>
-
-                {(user.role === "alimentador" || user.role === "admin") && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("inventory")}
-                    className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                      activeTab === "inventory" 
-                        ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                        : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                    }`}
-                  >
-                    <Layers size={14} className="stroke-[2px]" /> Cadastros e Ajustes
-                  </button>
-                )}
-
-                {/* Custo vs preços de venda. Mesmo público de Cadastros e
-                    Ajustes — quem responde pela loja. O vendedor não abre: custo
-                    e margem não são assunto de balcão. */}
-                {(user.role === "alimentador" || user.role === "admin") && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("price-comparison")}
-                    className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border text-left ${
-                      activeTab === "price-comparison"
-                        ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                        : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                    }`}
-                  >
-                    <Scale size={14} className="stroke-[2px] shrink-0" />
-                    <span className="leading-tight">Custo vs À Vista vs A Prazo</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("stock-flow")}
-                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                    activeTab === "stock-flow"
-                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                  }`}
-                >
-                  <ArrowDownUp size={14} className="stroke-[2px]" /> Entradas e Saídas
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("pdf-import")}
-                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                    activeTab === "pdf-import" 
-                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                  }`}
-                >
-                  <FileUp size={14} className="stroke-[2px]" /> Importar Estoque
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("reports")}
-                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                    activeTab === "reports" 
-                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                  }`}
-                >
-                  <Activity size={14} className="stroke-[2px]" /> Auditoria & Histórico
-                </button>
-
-                {/* Fica colada em Auditoria de propósito: as duas leem a mesma
-                    coleção. A diferença é o eixo — lá é movimento a movimento,
-                    aqui é por MEDIDA, que é a unidade em que pneu é comprado. */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("size-history")}
-                  className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border text-left ${
-                    activeTab === "size-history"
-                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                  }`}
-                >
-                  <Ruler size={14} className="stroke-[2px] shrink-0" />
-                  <span className="leading-tight">Histórico por Medida</span>
-                </button>
-              </>
-            )}
-
-            {/* Reservas fica ANTES de Transferências de propósito: é a fila que
-                tem cliente esperando do outro lado, e a que trava saldo no
-                estoque enquanto ninguém decide. */}
-            <button
-              type="button"
-              onClick={() => setActiveTab("reservations")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2.5 border ${
-                activeTab === "reservations"
-                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-              }`}
-            >
-              <span className="flex items-center gap-2.5">
-                <ShoppingBag size={14} className="stroke-[2px]" /> {user.role === "vendedor" ? "Minhas Reservas" : "Reservas"}
-              </span>
-              {pendingReservationsCount > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-500 text-slate-900 text-[9px] font-black">
-                  {pendingReservationsCount}
-                </span>
-              )}
-            </button>
-
-            {/* Sugestões: a fila que vem DEPOIS da venda que não aconteceu.
-                Fica colada em Reservas de propósito — as duas são demanda de
-                cliente trazida pelo vendedor; a diferença é que aqui o pneu
-                nem existe no estoque ainda. */}
-            {/* Fila de baixa: só para quem decide. O vendedor NÃO entra aqui —
-                ele não tem como abrir um pedido de baixa (as duas telas dele são
-                o catálogo e Minhas Reservas), então a aba estaria sempre vazia,
-                com um rótulo dizendo que ele aprova algo que não aprova. Pior:
-                o guarda de rota logo acima devolvia ele ao catálogo no clique.
-                O equivalente dele já existe e é a RESERVA de cliente, que o dono
-                da loja confirma — mesma ideia de duas pessoas, outro caminho. */}
-            {user.role !== "vendedor" && (
-            <button
-              type="button"
-              onClick={() => setActiveTab("exit-approvals")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2.5 border ${
-                activeTab === "exit-approvals"
-                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-              }`}
-            >
-              <span className="flex items-center gap-2.5">
-                <ShieldCheck size={14} className="stroke-[2px]" /> Aprovar Baixas
-              </span>
-              {pendingExitCount > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black">
-                  {pendingExitCount}
-                </span>
-              )}
-            </button>
-            )}
-
-            {canSeeSuggestions && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("suggestions")}
-                className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2.5 border ${
-                  activeTab === "suggestions"
-                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                    : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                }`}
-              >
-                <span className="flex items-center gap-2.5">
-                  <Lightbulb size={14} className="stroke-[2px]" /> Sugestões
-                </span>
-                {pendingSuggestionsCount > 0 && (
-                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-500 text-slate-900 text-[9px] font-black">
-                    {pendingSuggestionsCount}
-                  </span>
-                )}
-              </button>
-            )}
-
-            {user.role !== "vendedor" && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("transfers")}
-                className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                  activeTab === "transfers"
-                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                    : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                }`}
-              >
-                <ArrowLeftRight size={14} className="stroke-[2px]" /> Transferências
-              </button>
-            )}
-
-            {canManageUsers && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("users-admin")}
-                className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                  activeTab === "users-admin" 
-                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                    : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                }`}
-              >
-                <Users size={14} className="stroke-[2px]" /> {user.role === "admin" ? "Operadores e Senhas" : "Meus Vendedores"}
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setActiveTab("how-to-use")}
-              className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                activeTab === "how-to-use" 
-                  ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                  : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-              }`}
-            >
-              <BookOpen size={14} className="stroke-[2px]" /> Como Usar o Sistema
-            </button>
-
-            {user.role === "admin" && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("apk-installer")}
-                className={`w-full px-3.5 py-3 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border ${
-                  activeTab === "apk-installer" 
-                    ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black" 
-                    : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                }`}
-              >
-                <Smartphone size={14} className="stroke-[2px]" /> Instalar App
-              </button>
-            )}
+              );
+            })}
           </nav>
         </div>
 
-        {/* Bottom Section: Profile Card & Logout */}
-        <div className="p-4 border-t border-slate-900 bg-slate-950/40">
-          <div className="flex items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2.5 min-w-0">
+        {/* Base: recolher o menu, usuário, senha e sair — sempre à vista */}
+        <div className={`border-t border-slate-900 bg-slate-950/40 shrink-0 ${wideNav ? "p-3 lg:p-4" : "p-3"}`}>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className={`hidden lg:flex w-full items-center gap-2 mb-3 px-2 py-1.5 rounded-lg text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-900 transition-all cursor-pointer ${
+              wideNav ? "justify-start" : "justify-center"
+            }`}
+            title={wideNav ? "Recolher o menu (só ícones)" : "Mostrar o menu com os nomes"}
+            aria-label={wideNav ? "Recolher o menu" : "Expandir o menu"}
+          >
+            {wideNav ? (
+              <>
+                <PanelLeftClose size={15} className="shrink-0" /> Recolher menu
+              </>
+            ) : (
+              <PanelLeftOpen size={15} />
+            )}
+          </button>
+
+          <div className={`flex items-center gap-2.5 ${wideNav ? "flex-col lg:flex-row lg:justify-between" : "flex-col"}`}>
+            <div className="flex items-center gap-2.5 min-w-0" title={user.displayName}>
               <div className="h-9 w-9 rounded-lg bg-slate-900 border border-gold-500/30 flex items-center justify-center text-gold-400 font-extrabold text-xs uppercase shadow-inner shrink-0">
                 {user.displayName.substring(0, 2)}
               </div>
-              <div className="text-left leading-none space-y-1 min-w-0">
+              <div className={wideNav ? "hidden lg:block text-left leading-none space-y-1 min-w-0" : "hidden"}>
                 <span className="text-xs font-extrabold text-white block truncate max-w-[110px]" title={user.displayName}>
                   {user.displayName}
                 </span>
@@ -5175,8 +5069,8 @@ export default function App() {
                 )}
               </div>
             </div>
-            
-            <div className="flex items-center gap-0.5">
+
+            <div className={`flex items-center gap-0.5 ${wideNav ? "flex-col lg:flex-row" : "flex-col"}`}>
               {user.credentialId && (
                 <button
                   type="button"
@@ -5195,14 +5089,13 @@ export default function App() {
                 type="button"
                 onClick={handleLogout}
                 className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-900 transition-all cursor-pointer shrink-0"
-                title="Sair do sistema piloto"
+                title="Sair do sistema"
               >
                 <LogOut size={15} />
               </button>
             </div>
           </div>
         </div>
-
       </aside>
 
       {/* ====== MOBILE HEADER: Visible only on cellphones ====== */}
@@ -5227,6 +5120,22 @@ export default function App() {
             theme="dark"
             align="right"
           />
+          {/* Trocar a senha também pelo celular — antes só havia no menu do computador. */}
+          {user.credentialId && (
+            <button
+              type="button"
+              onClick={() => {
+                setChangePasswordError("");
+                setNewPassword("");
+                setShowChangePasswordModal(true);
+              }}
+              className="p-1.5 text-slate-400 hover:text-gold-400 rounded-lg hover:bg-slate-900 transition-all"
+              title="Alterar minha senha de acesso"
+              aria-label="Alterar minha senha de acesso"
+            >
+              <Key size={16} />
+            </button>
+          )}
           <button
             type="button"
             onClick={handleLogout}
@@ -5238,211 +5147,46 @@ export default function App() {
         </div>
       </header>
 
-      {/* Mobile navigation bottom bar */}
-      <div className="md:hidden bg-[#0b0f19] border-t border-gold-500/20 fixed bottom-0 inset-x-0 h-16 z-40 flex items-stretch divide-x divide-slate-800 shadow-[0_-4px_25px_rgba(0,0,0,0.2)] overflow-x-auto">
-        {(user.role === "admin" || user.role === "vendedor") && (
-          <button
-            type="button"
-            onClick={() => setActiveTab("catalogo")}
-            className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-              activeTab === "catalogo" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-            }`}
-          >
-            <Search size={18} />
-            <span className="text-[9px] font-extrabold uppercase tracking-wide">Catálogo</span>
-          </button>
-        )}
-
-        {user.role !== "vendedor" && (
-          <>
+      {/* Barra de baixo do celular. Rola de lado (são mais abas do que cabem) e
+          se reposiciona sozinha na aba aberta — ver mobileNavRef. O espaço de
+          baixo respeita a barra de gestos do iPhone quando o app está instalado. */}
+      <nav
+        ref={mobileNavRef}
+        aria-label="Menu principal"
+        className="no-scrollbar md:hidden bg-[#0b0f19] border-t border-gold-500/20 fixed bottom-0 inset-x-0 z-40 flex items-stretch divide-x divide-slate-800 shadow-[0_-4px_25px_rgba(0,0,0,0.2)] overflow-x-auto overscroll-x-contain"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        {navItems.map(item => {
+          const Icon = item.icon;
+          const active = activeTab === item.tab;
+          const badge = item.badge || 0;
+          return (
             <button
+              key={item.tab}
               type="button"
-              onClick={() => setActiveTab("unified")}
-              className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-                activeTab === "unified" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
+              data-active={active ? "true" : undefined}
+              onClick={() => setActiveTab(item.tab)}
+              aria-label={item.label}
+              aria-current={active ? "page" : undefined}
+              className={`relative h-16 min-w-[68px] flex-1 shrink-0 flex flex-col items-center justify-center gap-1 px-1 transition-all ${
+                active ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
               }`}
             >
-              <Warehouse size={18} />
-              <span className="text-[9px] font-extrabold uppercase tracking-wide">Geral</span>
+              <Icon size={18} />
+              {badge > 0 && (
+                <span className={`absolute top-2 right-1/2 translate-x-4 inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full text-[8px] font-black ${badgeClass(item.badgeTone)}`}>
+                  {badge}
+                </span>
+              )}
+              <span className="text-[9px] font-extrabold uppercase tracking-wide whitespace-nowrap">{item.short}</span>
             </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab("analytics")}
-              className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-                activeTab === "analytics" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-              }`}
-            >
-              <TrendingUp size={18} />
-              <span className="text-[9px] font-extrabold uppercase tracking-wide">Painel</span>
-            </button>
-
-            {(user.role === "alimentador" || user.role === "admin") && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("inventory")}
-                className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-                  activeTab === "inventory" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-                }`}
-              >
-                <Layers size={18} />
-                <span className="text-[9px] font-extrabold uppercase tracking-wide">Cadastros</span>
-              </button>
-            )}
-
-            {(user.role === "alimentador" || user.role === "admin") && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("price-comparison")}
-                className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-                  activeTab === "price-comparison" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-                }`}
-              >
-                <Scale size={18} />
-                <span className="text-[9px] font-extrabold uppercase tracking-wide">Custo</span>
-              </button>
-            )}
-
-            {user.role !== "vendedor" && (
-              <button
-                type="button"
-                onClick={() => setActiveTab("size-history")}
-                className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-                  activeTab === "size-history" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-                }`}
-              >
-                <Ruler size={18} />
-                <span className="text-[9px] font-extrabold uppercase tracking-wide">Medidas</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setActiveTab("stock-flow")}
-              className={`min-w-[70px] flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 ${
-                activeTab === "stock-flow" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-              }`}
-            >
-              <ArrowDownUp size={18} />
-              <span className="text-[9px] font-extrabold uppercase tracking-wide">Ent/Saí</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("pdf-import")}
-              className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all ${
-                activeTab === "pdf-import" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-              }`}
-            >
-              <FileUp size={18} />
-              <span className="text-[9px] font-extrabold uppercase tracking-wide">Importar</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("reports")}
-              className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all ${
-                activeTab === "reports" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-              }`}
-            >
-              <Activity size={18} />
-              <span className="text-[9px] font-extrabold uppercase tracking-wide">Relatórios</span>
-            </button>
-          </>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setActiveTab("reservations")}
-          className={`relative flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
-            activeTab === "reservations" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-          }`}
-        >
-          <ShoppingBag size={18} />
-          {pendingReservationsCount > 0 && (
-            <span className="absolute top-2 right-1/2 translate-x-4 inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full bg-gold-500 text-slate-900 text-[8px] font-black">
-              {pendingReservationsCount}
-            </span>
-          )}
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Reservas</span>
-        </button>
-
-        {user.role !== "vendedor" && (
-        <button
-          type="button"
-          onClick={() => setActiveTab("exit-approvals")}
-          className={`relative flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
-            activeTab === "exit-approvals" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-          }`}
-        >
-          <ShieldCheck size={18} />
-          {pendingExitCount > 0 && (
-            <span className="absolute top-2 right-1/2 translate-x-4 inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[8px] font-black">
-              {pendingExitCount}
-            </span>
-          )}
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Baixas</span>
-        </button>
-        )}
-
-        {canSeeSuggestions && (
-          <button
-            type="button"
-            onClick={() => setActiveTab("suggestions")}
-            className={`relative flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
-              activeTab === "suggestions" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-            }`}
-          >
-            <Lightbulb size={18} />
-            {pendingSuggestionsCount > 0 && (
-              <span className="absolute top-2 right-1/2 translate-x-4 inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full bg-gold-500 text-slate-900 text-[8px] font-black">
-                {pendingSuggestionsCount}
-              </span>
-            )}
-            <span className="text-[9px] font-extrabold uppercase tracking-wide">Sugestões</span>
-          </button>
-        )}
-
-        {user.role !== "vendedor" && (
-          <button
-            type="button"
-            onClick={() => setActiveTab("transfers")}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[60px] ${
-              activeTab === "transfers" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-            }`}
-          >
-            <ArrowLeftRight size={18} />
-            <span className="text-[9px] font-extrabold uppercase tracking-wide">Transf.</span>
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setActiveTab("how-to-use")}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all px-1 min-w-[50px] ${
-            activeTab === "how-to-use" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-slate-900/10"
-          }`}
-        >
-          <BookOpen size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wide">Ajuda</span>
-        </button>
-        {canManageUsers && (
-          <button
-            type="button"
-            onClick={() => setActiveTab("users-admin")}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all ${
-              activeTab === "users-admin" ? "text-gold-400 bg-slate-950 font-black shadow-inner" : "text-slate-400 hover:bg-[#0b0f19]"
-            }`}
-          >
-            <Users size={18} />
-            <span className="text-[9px] font-extrabold uppercase tracking-wide">
-              {user.role === "admin" ? "Operadores" : "Vendedores"}
-            </span>
-          </button>
-        )}
-      </div>
+          );
+        })}
+      </nav>
 
       {/* Right Side Content Panel */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 mb-20 md:mb-6 flex-1 space-y-6">
+        <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 mb-[calc(5rem+env(safe-area-inset-bottom))] md:mb-6 flex-1 space-y-6">
         
         {/* Sub-Header KPI Dashlet Cards */}
         <div className="flex flex-col gap-4">
