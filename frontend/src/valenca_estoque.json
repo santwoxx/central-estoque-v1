@@ -1,15 +1,15 @@
 {
   "report": {
     "system": "Time Sistemas",
-    "issuedAt": "05/11/2026 08:39",
-    "issuedAtISO": "2026-11-05T08:39:53-03:00",
+    "issuedAt": "24/11/2026 09:40",
+    "issuedAtISO": "2026-11-24T09:40:56-03:00",
     "store": "Valença",
     "prefix": "VALENCA",
-    "sourceFile": "rltEstoque val 05 11.pdf",
-    "products": 129,
-    "units": 328,
-    "totalRetail": 212128.6,
-    "totalWholesale": 210234.0,
+    "sourceFile": "rltEstoque 24 11 val.pdf",
+    "products": 116,
+    "units": 297,
+    "totalRetail": 186952.2,
+    "totalWholesale": 185145.0,
     "filters": {
       "Grupo": "Todos",
       "Saldo": "Positivos",
@@ -17,22 +17,9 @@
     },
     "complete": true,
     "footerVerified": true,
-    "generatedAt": "2026-11-05T09:02:45-03:00"
+    "generatedAt": "2026-11-24T11:19:28-03:00"
   },
   "items": [
-    {
-      "sku": "VALENCA-676",
-      "brand": "MRL",
-      "model": "AGRICOLA",
-      "size": "14-17.5",
-      "quantity": 1,
-      "priceCash": 2250,
-      "priceInstallment": 2250,
-      "price": 2250,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 676",
-      "description": "14-17.5 AGRICOLA MRL"
-    },
     {
       "sku": "VALENCA-629",
       "brand": "TERRENA",
@@ -43,7 +30,7 @@
       "priceInstallment": 325,
       "price": 325,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 629",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 629",
       "description": "165/70 R14 81T TERRENA ROAD"
     },
     {
@@ -51,12 +38,12 @@
       "brand": "SPEEDMAX",
       "model": "MH01",
       "size": "175/65 R14",
-      "quantity": 2,
+      "quantity": 5,
       "priceCash": 320,
       "priceInstallment": 320,
       "price": 320,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 579",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 579",
       "description": "175/65 R14 86T MH01 SPEEDMAX"
     },
     {
@@ -69,7 +56,7 @@
       "priceInstallment": 375,
       "price": 375,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 560",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 560",
       "description": "175/65 R14 ALTIMAX ONE CONT"
     },
     {
@@ -82,7 +69,7 @@
       "priceInstallment": 355,
       "price": 355,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 595",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 595",
       "description": "175/70 R13 82T ATLANDER XSPORT66"
     },
     {
@@ -95,7 +82,7 @@
       "priceInstallment": 320,
       "price": 320,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 652",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 652",
       "description": "175/70 R13 82T MH01 SPEEDMAX"
     },
     {
@@ -103,12 +90,12 @@
       "brand": "TERRENA",
       "model": "AS ROADTRACK",
       "size": "175/70 R13",
-      "quantity": 5,
+      "quantity": 1,
       "priceCash": 307,
       "priceInstallment": 307,
       "price": 307,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 603",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 603",
       "description": "175/70 R13 82T TERRENA AS ROADTRACK"
     },
     {
@@ -121,7 +108,7 @@
       "priceInstallment": 330,
       "price": 330,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 306",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 306",
       "description": "175/70 R13 DYNAMO"
     },
     {
@@ -134,21 +121,8 @@
       "priceInstallment": 450,
       "price": 450,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 368",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 368",
       "description": "175/70 R14 88T ALTIMAX ONE GENERAL CO"
-    },
-    {
-      "sku": "VALENCA-665",
-      "brand": "SPEEDMAX",
-      "model": "",
-      "size": "175/70 R14",
-      "quantity": 4,
-      "priceCash": 355,
-      "priceInstallment": 355,
-      "price": 355,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 665",
-      "description": "175/70 R14 SPEEDMAX"
     },
     {
       "sku": "VALENCA-677",
@@ -160,7 +134,7 @@
       "priceInstallment": 515,
       "price": 515,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 677",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 677",
       "description": "175/70 R14 ULTRA CONTACT"
     },
     {
@@ -173,7 +147,7 @@
       "priceInstallment": 295,
       "price": 295,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 650",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 650",
       "description": "175/75 R13 84T BLAZER HP COMPAS"
     },
     {
@@ -186,7 +160,7 @@
       "priceInstallment": 286,
       "price": 275,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 608",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 608",
       "description": "175/75 R14 86T FORWARD BARBRIAN"
     },
     {
@@ -199,8 +173,21 @@
       "priceInstallment": 360,
       "price": 360,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 433",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 433",
       "description": "175/80 R14 BLACK AT02 ARROW"
+    },
+    {
+      "sku": "VALENCA-689",
+      "brand": "COMPASAL",
+      "model": "VANMAX",
+      "size": "185 R14C",
+      "quantity": 2,
+      "priceCash": 435,
+      "priceInstallment": 435,
+      "price": 435,
+      "costPrice": 0,
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 689",
+      "description": "185 R14C 8PR 102/100R VANMAX COMPASAL"
     },
     {
       "sku": "VALENCA-485",
@@ -212,7 +199,7 @@
       "priceInstallment": 350,
       "price": 350,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 485",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 485",
       "description": "185/55 R15 82V Maximus M1 Maxtrek"
     },
     {
@@ -225,7 +212,7 @@
       "priceInstallment": 330,
       "price": 330,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 656",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 656",
       "description": "185/55 R15 82V ZYPHIRA DOVROAD"
     },
     {
@@ -238,7 +225,7 @@
       "priceInstallment": 325,
       "price": 325,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 9",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 9",
       "description": "185/60 R14 82H MAXIMUS M1 MAXTREK"
     },
     {
@@ -251,7 +238,7 @@
       "priceInstallment": 320,
       "price": 320,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 668",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 668",
       "description": "185/60 R15 84H HH301 SPM"
     },
     {
@@ -264,7 +251,7 @@
       "priceInstallment": 296,
       "price": 296,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 82",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 82",
       "description": "185/60 R15 84H MAXIMUS M1 MAXTREK"
     },
     {
@@ -277,7 +264,7 @@
       "priceInstallment": 488.8,
       "price": 470,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 457",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 457",
       "description": "185/60 R15 88H ALTIMAX ONE GENERAL CO"
     },
     {
@@ -290,7 +277,7 @@
       "priceInstallment": 345,
       "price": 345,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 456",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 456",
       "description": "185/60 R15 ONYX"
     },
     {
@@ -303,7 +290,7 @@
       "priceInstallment": 355,
       "price": 355,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 589",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 589",
       "description": "185/65 R14 86H LANDSPIDER CITYTRAAXX"
     },
     {
@@ -311,12 +298,12 @@
       "brand": "TERRENA",
       "model": "AS ROADTRACK",
       "size": "185/65 R14",
-      "quantity": 4,
+      "quantity": 3,
       "priceCash": 350,
       "priceInstallment": 350,
       "price": 350,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 486",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 486",
       "description": "185/65 R14 86H Terrena AS Roadtrack"
     },
     {
@@ -324,12 +311,12 @@
       "brand": "EVOXX",
       "model": "",
       "size": "185/65 R15",
-      "quantity": 4,
+      "quantity": 2,
       "priceCash": 325,
       "priceInstallment": 325,
       "price": 325,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 669",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 669",
       "description": "185/65 R15 88H EVOXX"
     },
     {
@@ -342,7 +329,7 @@
       "priceInstallment": 360,
       "price": 360,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 227",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 227",
       "description": "185/65 R15 88H RP203 APTANY"
     },
     {
@@ -355,21 +342,21 @@
       "priceInstallment": 380,
       "price": 380,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 670",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 670",
       "description": "185/70 R14 88H MH01 SPM"
     },
     {
-      "sku": "VALENCA-686",
-      "brand": "WANLI",
-      "model": "",
+      "sku": "VALENCA-688",
+      "brand": "COMPASAL",
+      "model": "VANMAX",
       "size": "195 R14C",
-      "quantity": 2,
-      "priceCash": 499,
-      "priceInstallment": 499,
-      "price": 499,
+      "quantity": 1,
+      "priceCash": 490,
+      "priceInstallment": 490,
+      "price": 490,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 686",
-      "description": "195 R14C 106/104R WANLI"
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 688",
+      "description": "195 R14C 8PR 106/104R VANMAX COMPASAL"
     },
     {
       "sku": "VALENCA-174",
@@ -381,7 +368,7 @@
       "priceInstallment": 325,
       "price": 325,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 174",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 174",
       "description": "195/50 R15 82V MAXIMUS M1 MAXTREK"
     },
     {
@@ -394,7 +381,7 @@
       "priceInstallment": 315,
       "price": 315,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 634",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 634",
       "description": "195/55 R15 85V SMART CHASER AUTOGREE"
     },
     {
@@ -407,7 +394,7 @@
       "priceInstallment": 320,
       "price": 320,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 681",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 681",
       "description": "195/55 R15 85VEVOXX NX TL"
     },
     {
@@ -420,21 +407,8 @@
       "priceInstallment": 360,
       "price": 360,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 671",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 671",
       "description": "195/55 R16 91H EVOXX NX XL"
-    },
-    {
-      "sku": "VALENCA-679",
-      "brand": "EVOXX",
-      "model": "NX ESMX",
-      "size": "195/60 R15",
-      "quantity": 4,
-      "priceCash": 305,
-      "priceInstallment": 305,
-      "price": 305,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 679",
-      "description": "195/60 R15 88H EVOXX NX TL ESMX"
     },
     {
       "sku": "VALENCA-190",
@@ -446,7 +420,7 @@
       "priceInstallment": 457.6,
       "price": 440,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 190",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 190",
       "description": "195/60 R16 MAXTREK"
     },
     {
@@ -459,7 +433,7 @@
       "priceInstallment": 478.4,
       "price": 460,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 382",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 382",
       "description": "195/65 R15 91H BRAV5 CONT"
     },
     {
@@ -472,7 +446,7 @@
       "priceInstallment": 335,
       "price": 335,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 682",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 682",
       "description": "195/65 R15 91V CONFORTO HP BARBRIAN"
     },
     {
@@ -485,7 +459,7 @@
       "priceInstallment": 350,
       "price": 350,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 673",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 673",
       "description": "195/65 R15 91V SPEEDMAX"
     },
     {
@@ -498,7 +472,7 @@
       "priceInstallment": 353.6,
       "price": 340,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 626",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 626",
       "description": "195/65 R15 95T XL Landgema Zmax"
     },
     {
@@ -511,34 +485,8 @@
       "priceInstallment": 350,
       "price": 350,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 658",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 658",
       "description": "195/65 R15 95T XL ZYPHIRA DOVROAD"
-    },
-    {
-      "sku": "VALENCA-151",
-      "brand": "COMFORSER",
-      "model": "CF300",
-      "size": "205 R14C",
-      "quantity": 1,
-      "priceCash": 490,
-      "priceInstallment": 509.6,
-      "price": 490,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 151",
-      "description": "205 R14C 8PR 107/105R CF300 COMFORSER (9"
-    },
-    {
-      "sku": "VALENCA-674",
-      "brand": "EVOXX",
-      "model": "NX ESM",
-      "size": "205/50 R17",
-      "quantity": 2,
-      "priceCash": 410,
-      "priceInstallment": 410,
-      "price": 410,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 674",
-      "description": "205/50 R17 93V EVOXX NX ESM"
     },
     {
       "sku": "VALENCA-583",
@@ -550,7 +498,7 @@
       "priceInstallment": 395.2,
       "price": 380,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 583",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 583",
       "description": "205/55 R16 91V BLAZER HP COMPAS"
     },
     {
@@ -558,12 +506,12 @@
       "brand": "DOVROAD",
       "model": "ZYPHIRA",
       "size": "205/55 R16",
-      "quantity": 2,
+      "quantity": 1,
       "priceCash": 325,
       "priceInstallment": 338,
       "price": 325,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 631",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 631",
       "description": "205/55 R16 91V Zyphira Dovroad"
     },
     {
@@ -576,7 +524,7 @@
       "priceInstallment": 509.6,
       "price": 490,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 489",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 489",
       "description": "205/60 R15 91H AT02 Blackarrow"
     },
     {
@@ -589,7 +537,7 @@
       "priceInstallment": 447.2,
       "price": 430,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 24",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 24",
       "description": "205/60 R16 92V MAXIMUS M2 MAXTREK"
     },
     {
@@ -602,7 +550,7 @@
       "priceInstallment": 536,
       "price": 536,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 17",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 17",
       "description": "205/65 R15 94H CROSSWIND A/T LINGLONG"
     },
     {
@@ -615,7 +563,7 @@
       "priceInstallment": 395.2,
       "price": 380,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 228",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 228",
       "description": "205/65 R15 94H MAXIMUS M2 MAXTREK"
     },
     {
@@ -628,7 +576,7 @@
       "priceInstallment": 535.6,
       "price": 515,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 392",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 392",
       "description": "205/65 R15 94T FR BRAV4X4 CONT"
     },
     {
@@ -641,8 +589,21 @@
       "priceInstallment": 431.6,
       "price": 415,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 233",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 233",
       "description": "205/65 R16 95H MAXIMUS M2 MAXTREK"
+    },
+    {
+      "sku": "VALENCA-241",
+      "brand": "LINGLONG",
+      "model": "CROSSWIND A/T",
+      "size": "205/70 R15",
+      "quantity": 2,
+      "priceCash": 550,
+      "priceInstallment": 572,
+      "price": 550,
+      "costPrice": 0,
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 241",
+      "description": "205/70 R15 96T CROSSWIND A/T LINGLONG"
     },
     {
       "sku": "VALENCA-623",
@@ -654,7 +615,7 @@
       "priceInstallment": 546,
       "price": 525,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 623",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 623",
       "description": "205/70 R15 BRAVURIS 4X4"
     },
     {
@@ -667,34 +628,8 @@
       "priceInstallment": 1050.4,
       "price": 1010,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 394",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 394",
       "description": "205/70 R15C 106/104R VC U CONT"
-    },
-    {
-      "sku": "VALENCA-635",
-      "brand": "ZMAX",
-      "model": "VANMEJOR C30",
-      "size": "205/70 R15C",
-      "quantity": 1,
-      "priceCash": 485,
-      "priceInstallment": 485,
-      "price": 485,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 635",
-      "description": "205/70 R15C 8PR 106/104R Vanmejor C30 Zmax"
-    },
-    {
-      "sku": "VALENCA-684",
-      "brand": "SPEEDMAX",
-      "model": "V10",
-      "size": "205/75 R16C",
-      "quantity": 2,
-      "priceCash": 630,
-      "priceInstallment": 630,
-      "price": 630,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 684",
-      "description": "205/75 R16C V10 SPEEDMAX"
     },
     {
       "sku": "VALENCA-27",
@@ -706,7 +641,7 @@
       "priceInstallment": 494,
       "price": 475,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 27",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 27",
       "description": "215/60 R16 95H MAXIMUS M2 MAXTREK"
     },
     {
@@ -719,7 +654,7 @@
       "priceInstallment": 457.6,
       "price": 440,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 636",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 636",
       "description": "215/65 R16 98H Zyphira Dovroad"
     },
     {
@@ -732,7 +667,7 @@
       "priceInstallment": 572,
       "price": 550,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 625",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 625",
       "description": "215/75 R16C 8PR 113/111R Vanmejor C30 Zmax"
     },
     {
@@ -745,7 +680,7 @@
       "priceInstallment": 910,
       "price": 910,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 3",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 3",
       "description": "215/75 R17.5 16PR 135/133J ROBUSTO A2 XBR"
     },
     {
@@ -753,12 +688,12 @@
       "brand": "XBRI",
       "model": "ECOPLUS P1",
       "size": "215/75 R17.5",
-      "quantity": 6,
+      "quantity": 4,
       "priceCash": 810,
       "priceInstallment": 810,
       "price": 810,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 646",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 646",
       "description": "215/75 R17.5 ECOPLUS P1"
     },
     {
@@ -771,7 +706,7 @@
       "priceInstallment": 1587,
       "price": 1587,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 294",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 294",
       "description": "215/75 R17.5 TRACAO CONTINENTAL LDR1"
     },
     {
@@ -784,7 +719,7 @@
       "priceInstallment": 845,
       "price": 845,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 332",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 332",
       "description": "215/75 R17.5 WESTLAKE TRACAO"
     },
     {
@@ -792,26 +727,13 @@
       "brand": "XBRI",
       "model": "ECOPLUS C2",
       "size": "215/75 R17.5",
-      "quantity": 2,
-      "priceCash": 845,
-      "priceInstallment": 845,
-      "price": 845,
+      "quantity": 4,
+      "priceCash": 890,
+      "priceInstallment": 890,
+      "price": 890,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 57",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 57",
       "description": "215/75 R17.5 XBRI ECOPLUS C2 135/133J 18PR"
-    },
-    {
-      "sku": "VALENCA-647",
-      "brand": "XBRI",
-      "model": "ROBUSTO D2",
-      "size": "215/75 R17.5",
-      "quantity": 2,
-      "priceCash": 840,
-      "priceInstallment": 840,
-      "price": 840,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 647",
-      "description": "215/75 R17.5 XBRI ROBUSTO D2"
     },
     {
       "sku": "VALENCA-34",
@@ -823,7 +745,7 @@
       "priceInstallment": 483.6,
       "price": 465,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 34",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 34",
       "description": "225/45 ZR17 94W XL HD927 HAIDA"
     },
     {
@@ -836,7 +758,7 @@
       "priceInstallment": 535.6,
       "price": 515,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 238",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 238",
       "description": "225/50 ZR17 98W XL MAXIMUS M2 MAXTRE"
     },
     {
@@ -849,7 +771,7 @@
       "priceInstallment": 520,
       "price": 520,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 667",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 667",
       "description": "225/55 R18 98V EVOXX"
     },
     {
@@ -862,7 +784,7 @@
       "priceInstallment": 641,
       "price": 641,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 645",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 645",
       "description": "225/55 R18 98V FR Bravuris 4x4"
     },
     {
@@ -875,7 +797,7 @@
       "priceInstallment": 560,
       "price": 560,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 282",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 282",
       "description": "225/60 R17 99V SIERRA S6 MAXTREK"
     },
     {
@@ -888,7 +810,7 @@
       "priceInstallment": 635,
       "price": 635,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 360",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 360",
       "description": "225/60 R17 FARROAD FRD26 SAJPN"
     },
     {
@@ -901,7 +823,7 @@
       "priceInstallment": 635,
       "price": 635,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 438",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 438",
       "description": "225/60 R17 SPEEDMAX SAJPN"
     },
     {
@@ -914,7 +836,7 @@
       "priceInstallment": 696.8,
       "price": 670,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 137",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 137",
       "description": "225/65 R16C 8PR 112/110T FORZA VAN E1 XB"
     },
     {
@@ -927,7 +849,7 @@
       "priceInstallment": 930,
       "price": 930,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 683",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 683",
       "description": "225/65 R17 102H FR BRAVURIS A/T"
     },
     {
@@ -940,7 +862,7 @@
       "priceInstallment": 988,
       "price": 950,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 398",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 398",
       "description": "225/70 R15C 112/110R EURV2 CONT"
     },
     {
@@ -953,7 +875,7 @@
       "priceInstallment": 575,
       "price": 575,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 648",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 648",
       "description": "225/70 R15C 112/110S FRD96 SPP"
     },
     {
@@ -966,7 +888,7 @@
       "priceInstallment": 696.8,
       "price": 670,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 35",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 35",
       "description": "225/70 R16 107S OWL SU800 A/T MAXTREK"
     },
     {
@@ -976,10 +898,10 @@
       "size": "225/75 R16C",
       "quantity": 2,
       "priceCash": 1235,
-      "priceInstallment": 1284.4,
+      "priceInstallment": 1235,
       "price": 1235,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 400",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 400",
       "description": "225/75 R16C 118/116R VANCAP CONT"
     },
     {
@@ -992,7 +914,7 @@
       "priceInstallment": 685,
       "price": 685,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 555",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 555",
       "description": "225/75 R16C OVER CARGO SUNSET"
     },
     {
@@ -1005,7 +927,7 @@
       "priceInstallment": 530.4,
       "price": 510,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 96",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 96",
       "description": "235/60 R16 100H ECOLOGY XBRI"
     },
     {
@@ -1018,7 +940,7 @@
       "priceInstallment": 494,
       "price": 494,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 660",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 660",
       "description": "235/60 R16 100H Zyphira Dovroad"
     },
     {
@@ -1031,7 +953,7 @@
       "priceInstallment": 618.8,
       "price": 595,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 352",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 352",
       "description": "235/75 R15 105S SIERRA S6 MAXTREK"
     },
     {
@@ -1044,7 +966,7 @@
       "priceInstallment": 670.8,
       "price": 645,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 637",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 637",
       "description": "235/75 R15 6PR 104/101S RWL Ranch Spectra A"
     },
     {
@@ -1057,7 +979,7 @@
       "priceInstallment": 900,
       "price": 900,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 119",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 119",
       "description": "235/75 R17.5 ECOWAY XBRI"
     },
     {
@@ -1070,7 +992,7 @@
       "priceInstallment": 1050,
       "price": 1050,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 73",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 73",
       "description": "235/75 R17.5 XBRI FORZA"
     },
     {
@@ -1083,7 +1005,7 @@
       "priceInstallment": 717.6,
       "price": 690,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 129",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 129",
       "description": "24X10 - 11 QUADRICULO ARISUN TRASEIRO"
     },
     {
@@ -1096,7 +1018,7 @@
       "priceInstallment": 717.6,
       "price": 690,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 586",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 586",
       "description": "24X8 - 12 QUADRICICLO BONNA"
     },
     {
@@ -1109,7 +1031,7 @@
       "priceInstallment": 613.6,
       "price": 590,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 250",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 250",
       "description": "24X8.00 - 12 QUADRICICLO ARISUN"
     },
     {
@@ -1122,7 +1044,7 @@
       "priceInstallment": 795.6,
       "price": 765,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 43",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 43",
       "description": "265/60 R18 110H SIERRA S6 MAXTREK"
     },
     {
@@ -1135,7 +1057,7 @@
       "priceInstallment": 936,
       "price": 900,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 223",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 223",
       "description": "265/65 R17 110T CF1000 A/T COMFORSER"
     },
     {
@@ -1148,8 +1070,21 @@
       "priceInstallment": 847.6,
       "price": 815,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 45",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 45",
       "description": "265/65 R17 112S SIERRA S6 MAXTREK"
+    },
+    {
+      "sku": "VALENCA-186",
+      "brand": "COMFORSER",
+      "model": "CF1000 A/T",
+      "size": "265/70 R16",
+      "quantity": 4,
+      "priceCash": 910,
+      "priceInstallment": 910,
+      "price": 910,
+      "costPrice": 0,
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 186",
+      "description": "265/70 R16 10PR 121/118S CF1000 A/T COMFO"
     },
     {
       "sku": "VALENCA-47",
@@ -1161,7 +1096,7 @@
       "priceInstallment": 790.4,
       "price": 760,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 47",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 47",
       "description": "265/70 R16 112S SIERRA S6 MAXTREK"
     },
     {
@@ -1174,7 +1109,7 @@
       "priceInstallment": 2749,
       "price": 2749,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 208",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 208",
       "description": "275/80 R22.5 CONT DIR HSR2"
     },
     {
@@ -1187,7 +1122,7 @@
       "priceInstallment": 2999,
       "price": 2999,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 207",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 207",
       "description": "275/80 R22.5 CONT MISTO HAC3"
     },
     {
@@ -1200,7 +1135,7 @@
       "priceInstallment": 3099,
       "price": 3099,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 265",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 265",
       "description": "275/80 R22.5 CONT TRACAO HD3"
     },
     {
@@ -1213,7 +1148,7 @@
       "priceInstallment": 1745,
       "price": 1745,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 641",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 641",
       "description": "275/80 R22.5 DIR TRAZANO CR976"
     },
     {
@@ -1221,26 +1156,13 @@
       "brand": "DURABLE",
       "model": "DIR DR766",
       "size": "275/80 R22.5",
-      "quantity": 4,
+      "quantity": 3,
       "priceCash": 1768,
       "priceInstallment": 1768,
       "price": 1768,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 222",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 222",
       "description": "275/80 R22.5 DURABLE DIR DR766"
-    },
-    {
-      "sku": "VALENCA-572",
-      "brand": "LANDSPIDER",
-      "model": "DIRECIONAL",
-      "size": "275/80 R22.5",
-      "quantity": 2,
-      "priceCash": 1790,
-      "priceInstallment": 1790,
-      "price": 1790,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 572",
-      "description": "275/80 R22.5 LANDSPIDER DIRECIONAL"
     },
     {
       "sku": "VALENCA-642",
@@ -1252,7 +1174,7 @@
       "priceInstallment": 1800,
       "price": 1800,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 642",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 642",
       "description": "275/80 R22.5 TRACAO GRIPMASTER"
     },
     {
@@ -1265,7 +1187,7 @@
       "priceInstallment": 1885,
       "price": 1885,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 539",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 539",
       "description": "275/80 R22.5 XBRI ROBUSTO B6"
     },
     {
@@ -1278,21 +1200,8 @@
       "priceInstallment": 3380,
       "price": 3380,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 201",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 201",
       "description": "295/80 R22.5 CONT TRACAO HD3"
-    },
-    {
-      "sku": "VALENCA-189",
-      "brand": "DURABLE",
-      "model": "DIR DR266",
-      "size": "295/80 R22.5",
-      "quantity": 2,
-      "priceCash": 1980,
-      "priceInstallment": 1980,
-      "price": 1980,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 189",
-      "description": "295/80 R22.5 DURABLE DIR DR266"
     },
     {
       "sku": "VALENCA-477",
@@ -1304,7 +1213,7 @@
       "priceInstallment": 2450,
       "price": 2450,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 477",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 477",
       "description": "295/80 R22.5 FORZA PLUS F1"
     },
     {
@@ -1317,34 +1226,8 @@
       "priceInstallment": 2135,
       "price": 2135,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 55",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 55",
       "description": "295/80 R22.5 TRA DURABLE DR968"
-    },
-    {
-      "sku": "VALENCA-640",
-      "brand": "LONGMARCH",
-      "model": "TRA",
-      "size": "295/80 R22.5",
-      "quantity": 1,
-      "priceCash": 1990,
-      "priceInstallment": 1990,
-      "price": 1990,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 640",
-      "description": "295/80 R22.5 TRA LONGMARCH"
-    },
-    {
-      "sku": "VALENCA-13",
-      "brand": "XBRI",
-      "model": "CURVE PLUS F1",
-      "size": "295/80 R22.5",
-      "quantity": 2,
-      "priceCash": 2280,
-      "priceInstallment": 2280,
-      "price": 2280,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 13",
-      "description": "295/80 R22.5 XBRI CURVE PLUS F1"
     },
     {
       "sku": "VALENCA-108",
@@ -1356,7 +1239,7 @@
       "priceInstallment": 2190,
       "price": 2190,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 108",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 108",
       "description": "295/80 R22.5 XBRI ECOMIX"
     },
     {
@@ -1369,7 +1252,7 @@
       "priceInstallment": 790,
       "price": 790,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 138",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 138",
       "description": "750/16 WESTLAKE CR852 LISO"
     },
     {
@@ -1382,21 +1265,8 @@
       "priceInstallment": 1769,
       "price": 1769,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 651",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 651",
       "description": "900/20 WESTLAKE TRACAO"
-    },
-    {
-      "sku": "VALENCA-125",
-      "brand": "CAMARA DE AR",
-      "model": "",
-      "size": "1000X20",
-      "quantity": 2,
-      "priceCash": 170,
-      "priceInstallment": 170,
-      "price": 170,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 125",
-      "description": "CAMARA DE AR 1000X20"
     },
     {
       "sku": "VALENCA-120",
@@ -1408,7 +1278,7 @@
       "priceInstallment": 175,
       "price": 175,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 120",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 120",
       "description": "CAMARA DE AR 1100X22"
     },
     {
@@ -1421,7 +1291,7 @@
       "priceInstallment": 220,
       "price": 220,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 661",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 661",
       "description": "CAMARA DE AR 12.5/80 - 18 FLEXEN TR15"
     },
     {
@@ -1434,7 +1304,7 @@
       "priceInstallment": 310,
       "price": 310,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 279",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 279",
       "description": "CAMARA DE AR 14.9/24"
     },
     {
@@ -1447,7 +1317,7 @@
       "priceInstallment": 370,
       "price": 370,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 450",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 450",
       "description": "CAMARA DE AR 1400/24 BICO LONGO"
     },
     {
@@ -1460,7 +1330,7 @@
       "priceInstallment": 530,
       "price": 530,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 145",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 145",
       "description": "CAMARA DE AR 17.5/25 BC"
     },
     {
@@ -1473,7 +1343,7 @@
       "priceInstallment": 430,
       "price": 430,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 244",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 244",
       "description": "CAMARA DE AR 17.5/25 TRJ1175 BICO LONG"
     },
     {
@@ -1486,7 +1356,7 @@
       "priceInstallment": 0,
       "price": 0,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 431",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 431",
       "description": "CAMARA DE AR 275/80 R22.5"
     },
     {
@@ -1499,7 +1369,7 @@
       "priceInstallment": 185,
       "price": 185,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 430",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 430",
       "description": "CAMARA DE AR 295/80 R 22.5"
     },
     {
@@ -1512,7 +1382,7 @@
       "priceInstallment": 120,
       "price": 120,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 173",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 173",
       "description": "CAMARA DE AR 700/12"
     },
     {
@@ -1525,7 +1395,7 @@
       "priceInstallment": 0,
       "price": 0,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 427",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 427",
       "description": "CAMARA DE AR 750 - 18"
     },
     {
@@ -1533,12 +1403,12 @@
       "brand": "CAMARA DE AR",
       "model": "BICO DE FERRO",
       "size": "750/16",
-      "quantity": 3,
+      "quantity": 2,
       "priceCash": 95,
       "priceInstallment": 95,
       "price": 95,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 331",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 331",
       "description": "CAMARA DE AR 750/16 BICO DE FERRO"
     },
     {
@@ -1551,21 +1421,8 @@
       "priceInstallment": 0,
       "price": 0,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 577",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 577",
       "description": "CAMARA DE AR 900/16"
-    },
-    {
-      "sku": "VALENCA-289",
-      "brand": "CAMARA DE AR",
-      "model": "",
-      "size": "900/20",
-      "quantity": 1,
-      "priceCash": 170,
-      "priceInstallment": 170,
-      "price": 170,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 289",
-      "description": "CAMARA DE AR 900/20"
     },
     {
       "sku": "VALENCA-576",
@@ -1577,7 +1434,7 @@
       "priceInstallment": 0,
       "price": 0,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 576",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 576",
       "description": "CAMARA DE AR FM 24 - 9.5-24"
     },
     {
@@ -1590,7 +1447,7 @@
       "priceInstallment": 0,
       "price": 0,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 578",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 578",
       "description": "CAMARA DE AR JF 16.9-24"
     },
     {
@@ -1603,7 +1460,7 @@
       "priceInstallment": 70,
       "price": 70,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 121",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 121",
       "description": "PROTETOR ARO 22"
     },
     {
@@ -1616,7 +1473,7 @@
       "priceInstallment": 298,
       "price": 298,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 547",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 547",
       "description": "PROTETOR ARO 25"
     },
     {
@@ -1629,7 +1486,7 @@
       "priceInstallment": 0,
       "price": 0,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 574",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 574",
       "description": "PROTETOR ARO 8"
     },
     {
@@ -1642,7 +1499,7 @@
       "priceInstallment": 0,
       "price": 0,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 575",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 575",
       "description": "PROTETOR ARO 9"
     },
     {
@@ -1655,7 +1512,7 @@
       "priceInstallment": 40,
       "price": 40,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 163",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 163",
       "description": "PROTETOR R16"
     },
     {
@@ -1668,34 +1525,8 @@
       "priceInstallment": 140,
       "price": 140,
       "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 149",
+      "notes": "Estoque Valença — relatório Time Sistemas de 24/11/2026 09:40. Código no ERP: 149",
       "description": "PROTETOR R24"
-    },
-    {
-      "sku": "VALENCA-124",
-      "brand": "RODA",
-      "model": "6 FUROS FERRO",
-      "size": "215/17.5",
-      "quantity": 2,
-      "priceCash": 630,
-      "priceInstallment": 630,
-      "price": 630,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 124",
-      "description": "RODA 215/17.5 6 FUROS FERRO"
-    },
-    {
-      "sku": "VALENCA-64",
-      "brand": "RODA",
-      "model": "FERRO SPEEDMAX 8F",
-      "size": "275/22.5",
-      "quantity": 2,
-      "priceCash": 750,
-      "priceInstallment": 750,
-      "price": 750,
-      "costPrice": 0,
-      "notes": "Estoque Valença — relatório Time Sistemas de 05/11/2026 08:39. Código no ERP: 64",
-      "description": "RODA FERRO SPEEDMAX 275/22.5 8F"
     }
   ]
 }

@@ -284,13 +284,15 @@ BRANDS = [
     ("SPEEDMAX", ["SPEEDMAX", "SPM"]),
     ("ATLANDER", ["ATLANDER"]),
     ("DYNAMO", ["DYNAMO"]),
-    ("COMFORSER", ["COMFORSER", "COMFORSE"]),
+    # "CF1000 A/T COMFO": a coluna corta a marca em qualquer letra.
+    ("COMFORSER", ["COMFORSER", "COMFORSE", "COMFORS", "COMFOR", "COMFO"]),
     ("CONTINENTAL", ["CONTINENTAL", "CONT", "CONTI", "CONTINELTNAL"]),
     ("GENERAL TIRE", ["GENERAL", "GENERALTIRE"]),
     ("LANDSPIDER", ["LANDSPIDER"]),
     ("COMPASAL", ["COMPASAL", "COMPAS"]),
     ("BLACKARROW", ["BLACKARROW"]),
-    ("DOVROAD", ["DOVROAD"]),
+    # "235/55 ZR18 104W XL PROZAX SPORT DOVR" (SAJ, 24/11/2026): cortada no fim.
+    ("DOVROAD", ["DOVROAD", "DOVROA", "DOVRO", "DOVR"]),
     ("ONYX", ["ONYX"]),
     ("APTANY", ["APTANY"]),
     ("WANLI", ["WANLI"]),
@@ -372,6 +374,10 @@ MODEL_IMPLIES = [
     # "275/80R22.5 CURVE PLUS F1" no outro — sem esta linha, "CURVE" virava marca.
     (r"\bCURVE ?PLUS\b", "XBRI"),
     (r"\bDESTINATION\b", "FIRESTONE"),
+    # Linhas que a loja às vezes escreve sem a marca: Maximus é da Maxtrek
+    # ("MAXIMUS M2 MAXTRE") e Robusto é da XBRI ("XBRI ROBUSTO D2").
+    (r"\bMAXIMUS\b", "MAXTREK"),
+    (r"\bROBUSTO\b", "XBRI"),
 ]
 
 # Marca dada por regra, mas sem certeza — sai com aviso para conferir.
@@ -431,8 +437,13 @@ SIZE_RX = [
     (re.compile(r"\b(\d{2})X(\d{1,2}\.\d{2})\s+R(\d{2})(LT)?\b", re.I), lambda m: f"{m[1]}X{m[2]} R{m[3]}{(m[4] or '').upper()}"),
     # 24X10-11 · 24X8.00 - 12 (quadriciclo)
     (re.compile(r"\b(\d{2})X(\d+(?:\.\d+)?)\s*-\s*(\d{2})\b", re.I), lambda m: f"{m[1]}X{m[2]}-{m[3]}"),
+    # 12.5/80 R18 · 12.5/80R18 (agrícola radial). Antes caía em nenhum padrão e
+    # o produto saía sem medida, com a medida inteira no modelo.
+    (re.compile(r"\b(\d{1,2}\.\d)/(\d{2})\s*R\s?(\d{2})\b", re.I), lambda m: f"{m[1]}/{m[2]} R{m[3]}"),
     # 12.5/80-18 (agrícola)
     (re.compile(r"\b(\d{1,2}\.\d)/(\d{2})-(\d{2})\b"), lambda m: f"{m[1]}/{m[2]}-{m[3]}"),
+    # 19.5L - 24 · 16.9L-30 (agrícola de base larga: o L faz parte da medida)
+    (re.compile(r"\b(\d{1,2}\.\d)L\s*-\s*(\d{2})\b", re.I), lambda m: f"{m[1]}L-{m[2]}"),
     # 12.4-24 · 18.4-30 · 7.00-12 · 8.25-15 · 9.5-24 · 17.5 - 25
     (re.compile(r"\b(\d{1,2}\.\d{1,2})\s*-\s*(\d{1,2}(?:\.\d)?)\b"), lambda m: f"{m[1]}-{m[2]}"),
     # 1000-20 · 1400 - 24 · 14-17.5 · 750-16LT
@@ -493,7 +504,13 @@ def split_tire(desc, flags):
         words[-1] = "SPEEDMAX"
         flags.append("descrição cortada pelo ERP")
         flags.append("marca pela palavra cortada SPEED (Speedmax) — conferir")
-    if any(w.upper() in ("MAXTRE", "XBR", "XB", "AUTOGREE", "COMFORSE", "GRIPMASTE") for w in words):
+    # "175/70 R14 LT 6PR 95/93S MAXIMUS M1 MAX": MAXTREK cortado no fim. Só com
+    # MAXIMUS na mesma descrição — "MAX" sozinho não é marca nenhuma.
+    if len(words) >= 2 and words[-1].upper() == "MAX" and "MAXIMUS" in [w.upper() for w in words]:
+        words[-1] = "MAXTREK"
+        flags.append("descrição cortada pelo ERP")
+    if any(w.upper() in ("MAXTRE", "XBR", "XB", "AUTOGREE", "COMFORSE", "COMFORS", "COMFOR", "COMFO",
+                         "GRIPMASTE", "DOVROA", "DOVRO", "DOVR") for w in words):
         flags.append("descrição cortada pelo ERP")
 
     upper = [w.upper() for w in words]
