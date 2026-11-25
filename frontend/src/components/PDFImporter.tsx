@@ -192,9 +192,8 @@ export default function PDFImporter({ onSaveImportedItems, companies, user }: PD
         }
       } else {
         // Images: the only case that reaches here (PDF/XML/CSV are all handled
-        // client-side above via extractTextFromPdf/parseStockText — same code
-        // path whether this is running in a browser tab or inside Electron's
-        // renderer). Reading text out of a photo needs real OCR, which neither
+        // client-side above via extractTextFromPdf/parseStockText). Reading
+        // text out of a photo needs real OCR, which neither
         // a browser nor a plain regex parser can do, so this still goes to the
         // backend.
         const apiUrl = import.meta.env.VITE_API_URL || "https://central-estoque-v1.onrender.com";

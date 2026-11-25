@@ -24,22 +24,6 @@ npm run dev
 ```
 A API vai escutar na porta `3000` por padrão.
 
-## Desktop (Windows/Mac/Linux via Electron)
-Empacota o mesmo frontend como um aplicativo local, com login idêntico ao site (Firebase Auth via um servidor HTTP local embutido, necessário para o popup do Google funcionar) e leitura de PDF/XML/CSV client-side, igual ao site.
-
-**Como rodar em desenvolvimento** (com `npm run dev` do frontend já ativo em outro terminal):
-```bash
-cd frontend
-npm run electron:dev
-```
-
-**Como gerar o instalador:**
-```bash
-cd frontend
-npm run electron:build
-```
-Gera o instalador em `frontend/dist-electron/`.
-
 ## Estoque das lojas a partir do relatório do ERP
 
 1. No Time Sistemas, tire o **Relatório de estoque** da loja inteira (*Grupo: Todos*, *Marca: Todas*, *Saldo: Positivos*) em PDF e salve na raiz do projeto. PDFs na raiz não vão para o GitHub (ver `.gitignore`).

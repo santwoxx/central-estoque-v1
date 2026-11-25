@@ -95,8 +95,7 @@ import { deleteProductPhotosDoc } from "./utils/productPhotos";
 // AuthScreen is needed immediately on first paint (logged-out users see nothing else),
 // so it stays a static import. Every tab below is only ever rendered one at a time behind
 // activeTab, so each is code-split into its own chunk and fetched on first visit to that
-// tab — keeps the initial bundle from dragging in things like the WebUSB ADB stack
-// (ApkInstaller) for users who never open that tab.
+// tab — keeps the initial bundle small for users who never open that tab.
 import AuthScreen from "./components/AuthScreen";
 // Catálogo dos vendedores (aba "catalogo"). A mesma tela, sem login, é a
 // consulta pública — essa rota é resolvida em main.tsx.
@@ -115,9 +114,6 @@ const PriceComparison = lazy(() => import("./components/PriceComparison"));
 const SizeHistory = lazy(() => import("./components/SizeHistory"));
 const StockFlow = lazy(() => import("./components/StockFlow"));
 const ExitApprovals = lazy(() => import("./components/ExitApprovals"));
-const ApkInstaller = lazy(() =>
-  import("./components/ApkInstaller").then(m => ({ default: m.ApkInstaller }))
-);
 import NotificationBell, { NotificationToast } from "./components/NotificationBell";
 import ErrorBoundary from "./components/ErrorBoundary";
 
@@ -143,7 +139,6 @@ import {
   ArrowLeftRight,
   ArrowDownUp,
   ShoppingBag,
-  Smartphone,
   DollarSign,
   Search,
   Lightbulb,
@@ -439,7 +434,7 @@ export default function App() {
   const [changePasswordError, setChangePasswordError] = useState("");
 
   // Active Tab/View state
-  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "apk-installer" | "catalogo" | "suggestions" | "price-comparison" | "size-history" | "exit-approvals">("analytics");
+  const [activeTab, setActiveTab] = useState<"inventory" | "unified" | "analytics" | "stock-flow" | "pdf-import" | "reports" | "transfers" | "reservations" | "users-admin" | "how-to-use" | "catalogo" | "suggestions" | "price-comparison" | "size-history" | "exit-approvals">("analytics");
 
   // ── Menu lateral recolhido ──────────────────────────────────────────
   // Recolhido, o menu vira uma coluna só de ícones (72px) e devolve a largura
@@ -4960,8 +4955,7 @@ export default function App() {
       short: user.role === "admin" ? "Operadores" : "Vendedores",
       show: canManageUsers
     },
-    { tab: "how-to-use", icon: BookOpen, label: "Como Usar o Sistema", short: "Ajuda", show: true },
-    { tab: "apk-installer", icon: Smartphone, label: "Instalar App", short: "App", show: user.role === "admin" }
+    { tab: "how-to-use", icon: BookOpen, label: "Como Usar o Sistema", short: "Ajuda", show: true }
   ] as NavItem[]).filter(item => item.show);
 
   // Menu largo (com os nomes) só a partir de 1024px e se a pessoa não recolheu.
@@ -5494,10 +5488,6 @@ export default function App() {
 
           {activeTab === "how-to-use" && (
             <HowToUse />
-          )}
-
-          {activeTab === "apk-installer" && (
-            <ApkInstaller />
           )}
         </Suspense>
         </ErrorBoundary>

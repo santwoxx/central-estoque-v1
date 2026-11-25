@@ -44,8 +44,7 @@ export const NAV_TAB_GROUP: Record<string, NavGroupId> = {
   "size-history": "relatorios",
   "price-comparison": "relatorios",
   "users-admin": "sistema",
-  "how-to-use": "sistema",
-  "apk-installer": "sistema"
+  "how-to-use": "sistema"
 };
 
 export type SidebarNavItem<T extends string> = {

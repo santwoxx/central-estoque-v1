@@ -8,7 +8,6 @@ coverage/
 .env.*.local
 !.env.example
 !.env.production
-dist-electron/
 
 # Relatorios de estoque exportados do ERP (tem preco de tudo): nao vao para o
 # GitHub. O que o sistema precisa deles vira JSON por tools/estoque-time-sistemas.py.
