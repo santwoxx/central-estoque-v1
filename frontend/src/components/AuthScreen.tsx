@@ -445,14 +445,17 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 <div className="bg-slate-50 p-2.5 rounded border border-slate-200 text-[10px] font-mono leading-relaxed select-all">
                   <strong>Domínios a incluir:</strong>
                   <div className="mt-1 space-y-0.5 text-slate-700">
+                    {/* O domínio que está sendo usado AGORA é o que falta autorizar.
+                        Antes esta lista trazia domínios do AI Studio, que o
+                        sistema não usa mais. */}
+                    <div>• <span className="font-bold">{typeof window !== "undefined" ? window.location.hostname : "localhost"}</span> (este endereço)</div>
+                    <div>• <span className="font-bold">central-estoque-v1.vercel.app</span></div>
                     <div>• <span className="font-bold">localhost</span></div>
-                    <div>• <span className="font-bold">ais-dev-iumeczytxjtbldbkhhqdac-834678695463.us-east1.run.app</span></div>
-                    <div>• <span className="font-bold">ais-pre-iumeczytxjtbldbkhhqdac-834678695463.us-east1.run.app</span></div>
                   </div>
                 </div>
                 <div className="pt-1.5">
                   <a 
-                    href="https://console.firebase.google.com/project/centralsync-c5b50/authentication/settings" 
+                    href="https://console.firebase.google.com/project/central-autocar/authentication/settings" 
                     target="_blank" 
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 text-[11px] font-black text-gold-600 hover:text-gold-700 underline transition-colors cursor-pointer"
