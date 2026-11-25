@@ -150,6 +150,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen
 } from "lucide-react";
+import SidebarNav, { NAV_TAB_GROUP, type NavGroupId } from "./components/SidebarNav";
+
 
 // Quantos registros de movimentacao ficam em memoria. 400 (e nao 150) porque o
 // modulo de Entrada e Saida reagrupa esses mesmos documentos por operationId:
@@ -461,6 +463,14 @@ export default function App() {
       }
       return next;
     });
+
+  // Grupo aberto no menu lateral: um por vez (acordeão), e sempre o da tela
+  // aberta — quem chega numa tela por uma notificação vê onde ela fica.
+  const [openNavGroup, setOpenNavGroup] = useState<NavGroupId | null>(() => NAV_TAB_GROUP[activeTab] ?? null);
+  useEffect(() => {
+    const group = NAV_TAB_GROUP[activeTab];
+    if (group) setOpenNavGroup(group);
+  }, [activeTab]);
 
   // Barra de baixo do celular: são mais abas do que cabem na tela, e a aba
   // aberta podia ficar escondida fora da área visível. Ao trocar de aba, a
@@ -4912,22 +4922,20 @@ export default function App() {
   };
   const isOwnerOrAdmin = user.role === "alimentador" || user.role === "admin";
   const notSeller = user.role !== "vendedor";
+  // Na ordem dos grupos do menu (NAV_GROUPS): Painel, Estoque, Vendas,
+  // Relatórios, Sistema. A barra do celular segue a mesma ordem.
   const navItems = ([
-    { tab: "catalogo", icon: Search, label: "Catálogo e Reservas", short: "Catálogo", show: user.role === "admin" || user.role === "vendedor" },
-    { tab: "unified", icon: Warehouse, label: "Estoque Unificado", short: "Geral", show: notSeller },
     { tab: "analytics", icon: TrendingUp, label: "Painel de Indicadores", short: "Painel", show: notSeller },
+    // ── Estoque ──
+    { tab: "unified", icon: Warehouse, label: "Estoque Unificado", short: "Geral", show: notSeller },
     { tab: "inventory", icon: Layers, label: "Cadastros e Ajustes", short: "Cadastros", show: isOwnerOrAdmin },
-    // Custo vs preços de venda: mesmo público de Cadastros e Ajustes — quem
-    // responde pela loja. Custo e margem não são assunto de balcão.
-    { tab: "price-comparison", icon: Scale, label: "Custo vs À Vista vs A Prazo", short: "Custo", show: isOwnerOrAdmin },
     { tab: "stock-flow", icon: ArrowDownUp, label: "Entradas e Saídas", short: "Ent/Saí", show: notSeller },
+    { tab: "transfers", icon: ArrowLeftRight, label: "Transferências", short: "Transf.", show: notSeller },
     { tab: "pdf-import", icon: FileUp, label: "Importar Estoque", short: "Importar", show: notSeller },
-    { tab: "reports", icon: Activity, label: "Auditoria & Histórico", short: "Relatórios", show: notSeller },
-    // Colada em Auditoria de propósito: as duas leem a mesma coleção; aqui o
-    // eixo é a MEDIDA, que é a unidade em que pneu é comprado.
-    { tab: "size-history", icon: Ruler, label: "Histórico por Medida", short: "Medidas", show: notSeller },
-    // Reservas ANTES de Transferências: é a fila que tem cliente esperando do
-    // outro lado, e a que trava saldo enquanto ninguém decide.
+    // ── Vendas ──
+    { tab: "catalogo", icon: Search, label: "Catálogo e Reservas", short: "Catálogo", show: user.role === "admin" || user.role === "vendedor" },
+    // Reservas é a fila que tem cliente esperando do outro lado, e a que trava
+    // saldo enquanto ninguém decide.
     {
       tab: "reservations", icon: ShoppingBag, label: user.role === "vendedor" ? "Minhas Reservas" : "Reservas", short: "Reservas",
       show: true, badge: pendingReservationsCount, badgeTone: "gold"
@@ -4935,9 +4943,17 @@ export default function App() {
     // Fila de baixa: só para quem decide. O vendedor não abre pedido de baixa
     // (o equivalente dele é a reserva de cliente, que o dono confirma).
     { tab: "exit-approvals", icon: ShieldCheck, label: "Aprovar Baixas", short: "Baixas", show: notSeller, badge: pendingExitCount, badgeTone: "red" },
-    // Sugestões: a demanda que o estoque não atendeu — colada em Reservas.
+    // Sugestões: a demanda que o estoque não atendeu.
     { tab: "suggestions", icon: Lightbulb, label: "Sugestões", short: "Sugestões", show: canSeeSuggestions, badge: pendingSuggestionsCount, badgeTone: "gold" },
-    { tab: "transfers", icon: ArrowLeftRight, label: "Transferências", short: "Transf.", show: notSeller },
+    // ── Relatórios ──
+    { tab: "reports", icon: Activity, label: "Auditoria & Histórico", short: "Relatórios", show: notSeller },
+    // Colada em Auditoria de propósito: as duas leem a mesma coleção; aqui o
+    // eixo é a MEDIDA, que é a unidade em que pneu é comprado.
+    { tab: "size-history", icon: Ruler, label: "Histórico por Medida", short: "Medidas", show: notSeller },
+    // Custo vs preços de venda: mesmo público de Cadastros e Ajustes — quem
+    // responde pela loja. Custo e margem não são assunto de balcão.
+    { tab: "price-comparison", icon: Scale, label: "Custo vs À Vista vs A Prazo", short: "Custo", show: isOwnerOrAdmin },
+    // ── Sistema ──
     {
       tab: "users-admin", icon: Users,
       label: user.role === "admin" ? "Operadores e Senhas" : "Meus Vendedores",
@@ -4987,42 +5003,16 @@ export default function App() {
             />
           </div>
 
-          <nav aria-label="Menu principal" className="nav-scroll flex flex-col gap-1 flex-1 min-h-0 overflow-y-auto overscroll-contain -mx-1 px-1">
-            {navItems.map(item => {
-              const Icon = item.icon;
-              const active = activeTab === item.tab;
-              const badge = item.badge || 0;
-              return (
-                <button
-                  key={item.tab}
-                  type="button"
-                  onClick={() => setActiveTab(item.tab)}
-                  title={item.label}
-                  aria-label={item.label}
-                  aria-current={active ? "page" : undefined}
-                  className={`relative w-full shrink-0 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-2.5 border text-left ${
-                    wideNav ? "justify-center px-0 lg:justify-start lg:px-3.5" : "justify-center px-0"
-                  } ${
-                    active
-                      ? "bg-slate-900 text-gold-400 shadow-[0_2px_10px_rgba(212,147,33,0.15)] border-gold-500/30 font-black"
-                      : "text-slate-350 border-transparent hover:bg-slate-900/60 hover:text-white"
-                  }`}
-                >
-                  <Icon size={16} className="stroke-[2px] shrink-0" />
-                  <span className={wideNav ? "hidden lg:block flex-1 min-w-0 leading-tight" : "hidden"}>{item.label}</span>
-                  {badge > 0 && (
-                    <span
-                      className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[9px] font-black ${badgeClass(item.badgeTone)} ${
-                        wideNav ? "absolute top-0.5 right-1 lg:static" : "absolute top-0.5 right-1"
-                      }`}
-                    >
-                      {badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </nav>
+          {/* Telas em grupos (Estoque, Vendas, Relatórios, Sistema) — ver
+              components/SidebarNav.tsx. */}
+          <SidebarNav
+            items={navItems}
+            activeTab={activeTab}
+            onSelect={setActiveTab}
+            openGroup={openNavGroup}
+            onOpenGroupChange={setOpenNavGroup}
+            wide={wideNav}
+          />
         </div>
 
         {/* Base: recolher o menu, usuário, senha e sair — sempre à vista */}
