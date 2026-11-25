@@ -79,7 +79,7 @@ import {
   ErpSyncResult
 } from "./types";
 import { CLIENTE_COMPANY_ID, canReviewStockExit, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "./types";
-import { availableQuantity, formatBRL, formatDate, mapMovementDoc, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, saleCashPrice, suggestionTime, toMillis } from "./utils";
+import { availableQuantity, formatBRL, formatDate, isLowStock, mapMovementDoc, mapStockDoc, mapSuggestionDoc, reservedQuantityOf, saleCashPrice, suggestionTime, toMillis } from "./utils";
 import {
   collectActivityAfterReport,
   erpReportMillis,
@@ -4871,7 +4871,7 @@ export default function App() {
   // Reposição se mede pelo que dá para VENDER, não pelo que está na prateleira:
   // um pneu com 6 un, 5 delas reservadas, tem 1 un vendável e é caso de compra.
   // Enquanto esta conta usava `quantity`, o alerta ficava mudo justo nesse caso.
-  const lowStockItems = filteredKpiStock.filter(item => availableQuantity(item) <= 4).length;
+  const lowStockItems = filteredKpiStock.filter(item => isLowStock(item, availableQuantity(item))).length;
   // Capital imobilizado se mede pelo que a loja PAGOU, nao pelo que espera
   // receber — enquanto esta conta usava o preco de venda, o numero na tela era
   // o faturamento potencial do estoque com o nome de capital parado. O preco de

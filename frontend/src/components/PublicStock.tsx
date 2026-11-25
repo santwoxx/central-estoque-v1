@@ -7,6 +7,10 @@ import { availableQuantity, effectivePrices, formatDate, mapStockDoc, mapSuggest
 import { useToday } from "../hooks/useToday";
 import InstallCatalog from "./InstallCatalog";
 import ProductPhotosModal, { ProductPhotoThumb } from "./ProductPhotos";
+import ProductLineTabs, { usePersistentLineFilter } from "./ProductLineTabs";
+import { TireSpecBadges, TruckPositionFilter, countByPosition, positionOf, type PositionFilter } from "./TireSpec";
+import { positionLabel } from "../utils/tireSpec";
+import { countByLine, lineLabel, productLineOf, type LineFilter, type ProductLine } from "../utils/productLine";
 
 interface ConsolidatedItem {
   sku: string;
@@ -71,6 +75,10 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
   // loja, em Cadastros e Ajustes ou no Estoque Unificado.
   const [photoItemId, setPhotoItemId] = useState<string | null>(null);
   const photoItem = photoItemId ? stock.find(i => i.id === photoItemId) || null : null;
+
+  // Aba de linha (Passeio, Carga...). O cliente de frota abre o link e vai
+  // direto para Carga; a escolha fica guardada no aparelho dele.
+  const [lineFilter, setLineFilter] = usePersistentLineFilter(user ? "catalogo" : "consulta");
   const [searchTerm, setSearchTerm] = useState("");
   const deferredSearchTerm = useDeferredValue(searchTerm);
 
@@ -435,13 +443,43 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
 
   const promoCount = useMemo(() => consolidatedItems.filter(i => i.hasPromo).length, [consolidatedItems]);
 
+  // A linha é do produto; a ficha do catálogo junta o mesmo código das lojas.
+  const itemLineOf = (item: ConsolidatedItem): ProductLine =>
+    productLineOf(item.cheapestDoc || Object.values(item.docs)[0] || item);
+
+  // O que a aba aberta mostra. Marcas e aros saem DAQUI: na aba Carga, o
+  // filtro de aro oferece 17.5, 20 e 22.5 — não os aros de carro.
+  // (Tipo na variável: sem @types/react no projeto, o useMemo devolve `any`.)
+  const lineScopedItems: ConsolidatedItem[] = useMemo(
+    () => (lineFilter === "ALL" ? consolidatedItems : consolidatedItems.filter(i => itemLineOf(i) === lineFilter)),
+    [consolidatedItems, lineFilter]
+  );
+
+  // Trocar de aba limpa marca e aro: o aro 22.5 escolhido na aba Carga não
+  // existe na aba Passeio, e a lista vazia pareceria falta de estoque.
+  const changeLine = (value: LineFilter) => {
+    setLineFilter(value);
+    setBrandFilter("");
+    setRimFilter("");
+    setPositionFilter("ALL");
+  };
+
+  // Posição do pneu (só na aba Carga). O documento da ficha é o da loja mais
+  // barata — o mesmo que dá o preço do rodapé.
+  const [positionFilter, setPositionFilter] = useState<PositionFilter>("ALL");
+  const itemDocOf = (item: ConsolidatedItem): StockItem | undefined => item.cheapestDoc || Object.values(item.docs)[0];
+  const itemPositionOf = (item: ConsolidatedItem) => {
+    const doc = itemDocOf(item);
+    return doc ? positionOf(doc) : "NONE";
+  };
+
   // Marcas e aros que EXISTEM no catálogo agora. Montar a lista a partir do
   // próprio estoque evita o pior tipo de filtro: aquele que oferece uma opção
   // e devolve lista vazia.
   const availableBrands = useMemo(
-    () => Array.from(new Set<string>(consolidatedItems.map(i => i.brand).filter(Boolean)))
+    () => Array.from(new Set<string>(lineScopedItems.map(i => i.brand).filter(Boolean)))
       .sort((a, b) => a.localeCompare(b)),
-    [consolidatedItems]
+    [lineScopedItems]
   );
 
   // Aro do produto. Vem da medida do pneu ("195/65 R15" → 15) e, quando não
@@ -456,12 +494,12 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
 
   const availableRims = useMemo(() => {
     const set = new Set<number>();
-    consolidatedItems.forEach(i => {
+    lineScopedItems.forEach(i => {
       const rim = rimOf(i.size);
       if (Number.isFinite(rim)) set.add(rim);
     });
     return Array.from(set).sort((a, b) => a - b);
-  }, [consolidatedItems]);
+  }, [lineScopedItems]);
 
   const hasFilters = !!(searchTerm || brandFilter || rimFilter || focusCompanyId || promoOnly);
 
@@ -484,9 +522,10 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
     if (!user) setOnlyFocusStore(!same);
   };
 
-  const filteredItems = useMemo(() => {
+  // A busca, antes da aba: é daqui que cada aba conta os seus produtos.
+  const searchedItems: ConsolidatedItem[] = useMemo(() => {
     const lower = deferredSearchTerm.toLowerCase();
-    const bySearch = !deferredSearchTerm
+    return !deferredSearchTerm
       ? consolidatedItems
       : consolidatedItems.filter(item =>
           item.sku.toLowerCase().includes(lower) ||
@@ -495,6 +534,25 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
           item.size.toLowerCase().includes(lower) ||
           matchesTireSize(item.size, lower)
         );
+  }, [consolidatedItems, deferredSearchTerm]);
+
+  const lineCounts: Record<LineFilter, number> = useMemo(() => countByLine(searchedItems, itemLineOf), [searchedItems]);
+
+  const lineItems: ConsolidatedItem[] = useMemo(
+    () => (lineFilter === "ALL" ? searchedItems : searchedItems.filter(item => itemLineOf(item) === lineFilter)),
+    [searchedItems, lineFilter]
+  );
+
+  const positionCounts: Record<PositionFilter, number> = useMemo(
+    () => countByPosition(lineItems, itemPositionOf),
+    [lineItems]
+  );
+
+  const filteredItems = useMemo(() => {
+    const bySearch =
+      lineFilter === "CARGA" && positionFilter !== "ALL"
+        ? lineItems.filter(item => itemPositionOf(item) === positionFilter)
+        : lineItems;
 
     const matched = bySearch.filter(item =>
       (!brandFilter || item.brand === brandFilter) &&
@@ -528,12 +586,12 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
       return 2;
     };
     return [...matched].sort((a, b) => hasFree(a) - hasFree(b) || a.sku.localeCompare(b.sku));
-  }, [consolidatedItems, deferredSearchTerm, brandFilter, rimFilter, promoOnly, focusCompanyId, onlyFocusStore, showReserved]);
+  }, [lineItems, lineFilter, positionFilter, brandFilter, rimFilter, promoOnly, focusCompanyId, onlyFocusStore, showReserved]);
 
   // Reseta para os primeiros 48 ao mudar qualquer filtro
   useEffect(() => {
     setVisibleCount(48);
-  }, [deferredSearchTerm, brandFilter, rimFilter, promoOnly, focusCompanyId, onlyFocusStore]);
+  }, [deferredSearchTerm, lineFilter, positionFilter, brandFilter, rimFilter, promoOnly, focusCompanyId, onlyFocusStore]);
 
   // Fatiamento progressivo para o grid
   const displayedItems = useMemo(() => {
@@ -621,6 +679,25 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
             )}
           </div>
 
+          {/* Abas de linha logo abaixo da busca: quem procura pneu de caminhão
+              não precisa rolar por centenas de pneus de carro. */}
+          <ProductLineTabs
+            theme="dark"
+            counts={lineCounts}
+            value={lineFilter}
+            onChange={changeLine}
+            className="mt-3"
+          />
+          {lineFilter === "CARGA" && (
+            <TruckPositionFilter
+              theme="dark"
+              counts={positionCounts}
+              value={positionFilter}
+              onChange={setPositionFilter}
+              className="mt-2"
+            />
+          )}
+
           {/* ── Marca e aro ──────────────────────────────────────────
               Ficam no cabeçalho, junto da busca, e não lá embaixo: num
               celular — que é como quase todo mundo abre este link — o que
@@ -689,6 +766,10 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
               <span className="font-medium text-slate-400">
                 {" "}em {companies.find(c => c.id === focusCompanyId)?.name}
               </span>
+            )}
+            {lineFilter !== "ALL" && <span className="font-medium text-slate-400"> · {lineLabel(lineFilter)}</span>}
+            {lineFilter === "CARGA" && positionFilter !== "ALL" && (
+              <span className="font-medium text-slate-400"> · {positionFilter === "NONE" ? "sem posição" : positionLabel(positionFilter)}</span>
             )}
             {brandFilter && <span className="font-medium text-slate-400"> · {brandFilter}</span>}
             {rimFilter && <span className="font-medium text-slate-400"> · aro {rimFilter}</span>}
@@ -949,6 +1030,10 @@ export default function PublicStock({ user, onCreateTransfer, onCreateSuggestion
                           <span className="font-semibold text-slate-500"> {item.model}</span>
                         )}
                       </div>
+                      {/* Posição, lonas e câmara para todos; o DOT só para quem
+                          está logado (vendedor, dono) — a consulta pública não
+                          mostra a idade do lote ao cliente final. */}
+                      {itemDocOf(item) && <TireSpecBadges item={itemDocOf(item)!} showDot={!!user} className="mt-1.5" />}
                     </div>
                     {photoDoc && (
                       <ProductPhotoThumb

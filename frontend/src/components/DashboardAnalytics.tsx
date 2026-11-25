@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { StockItem, MovementLog, Company } from "../types";
-import { availableQuantity, formatBRL } from "../utils";
+import { availableQuantity, formatBRL, minStockOf } from "../utils";
 import { TrendingUp, TrendingDown, Package, AlertTriangle, RefreshCw, BarChart2, X } from "lucide-react";
 
 interface DashboardAnalyticsProps {
@@ -65,7 +65,7 @@ export default function DashboardAnalytics({ items, movements, movementsTruncate
     // para outra filial não vai atender venda nenhuma. Com o total físico, um
     // pneu inteiramente reservado aparecia como estoque saudável e a sugestão
     // de compra nunca vinha — até o dia em que faltava no balcão.
-    const skuStockMap = new Map<string, { brand: string; model: string; size: string; qty: number; id: string; companyId: string; companyName: string }>();
+    const skuStockMap = new Map<string, { brand: string; model: string; size: string; qty: number; minStock: number; id: string; companyId: string; companyName: string }>();
     filteredItems.forEach(item => {
       const free = availableQuantity(item);
       const existing = skuStockMap.get(item.sku);
@@ -77,6 +77,7 @@ export default function DashboardAnalytics({ items, movements, movementsTruncate
           model: item.model,
           size: item.size,
           qty: free,
+          minStock: minStockOf(item),
           id: item.id,
           companyId: item.companyId || "",
           companyName: item.companyName || ""
@@ -106,8 +107,9 @@ export default function DashboardAnalytics({ items, movements, movementsTruncate
         daysRemaining = Math.round(stock.qty / dailySalesRate);
       }
 
-      // Recommend restocking if stock runs out in 15 days or less, or quantity is critical (<= 4)
-      const needsRestock = daysRemaining <= 15 || stock.qty <= 4;
+      // Compra sugerida se o pneu acaba em 15 dias ou menos, ou se o saldo já
+      // está no estoque mínimo do produto (padrão 4, ajustável na ficha).
+      const needsRestock = daysRemaining <= 15 || stock.qty <= stock.minStock;
       
       if (needsRestock) {
         // Target is 45 days of safety stock

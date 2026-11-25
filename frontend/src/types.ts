@@ -1,3 +1,6 @@
+import type { ProductLine } from "./utils/productLine";
+import type { TruckPosition, TubeType } from "./utils/tireSpec";
+
 export type UserRole = "user" | "vendedor" | "alimentador" | "admin";
 
 export interface Company {
@@ -75,6 +78,25 @@ export interface StockItem {
   // capa em miniatura (JPEG de poucos KB). Ausentes nos documentos antigos.
   photoCount?: number;
   photoThumb?: string;
+  // ── Linha e estoque mínimo ──
+  // Linha escolhida na ficha (Passeio, Carga, Agrícola/Industrial, Acessórios).
+  // Vazio = descobrir pela medida e descrição — ver utils/productLine.ts. Os
+  // documentos antigos não têm o campo, e é assim que eles devem ficar.
+  line?: ProductLine | "";
+  // Saldo em que o produto entra no alerta de reposição. 0/ausente = o padrão
+  // (DEFAULT_MIN_STOCK em utils.ts): pneu de caminhão, protetor e pneu de carro
+  // não têm o mesmo ponto de compra.
+  minStock?: number;
+  // ── Ficha técnica (pneu de carga) e DOT ──
+  // Vazio/0 = o sistema lê da descrição ("DIR", "16PR", "149/146L"). O que o
+  // dono preenche na ficha sempre vence — ver utils/tireSpec.ts.
+  truckPosition?: TruckPosition | "";
+  plyRating?: number;
+  loadIndex?: string;
+  tubeType?: TubeType | "";
+  // DOTs (semana+ano, "2125") dos lotes deste produto, do mais antigo para o
+  // mais novo. Vale para qualquer pneu, não só de carga.
+  dot?: string[];
   userId: string;
   userEmail: string;
   companyId?: string;

@@ -1,4 +1,6 @@
 import { MovementLog, StockFlowType, StockItem, Suggestion } from "./types";
+import { isProductLine } from "./utils/productLine";
+import { isTruckPosition, isTubeType } from "./utils/tireSpec";
 
 // ──────────────────────────────────────────────────────────────
 // Motivos sugeridos para movimentação de pneus, por tipo de operação.
@@ -179,6 +181,26 @@ export function availableQuantity(
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Estoque mínimo (alerta de reposição)
+//
+// Era um 4 fixo, repetido em seis telas: 4 pneus de carro, 4 pneus de
+// caminhão e 4 protetores de aro valiam o mesmo alerta. Agora cada produto
+// pode ter o seu mínimo na ficha; sem ele, vale o padrão de sempre. Toda tela
+// que fala em "estoque baixo" pergunta por aqui.
+// ─────────────────────────────────────────────────────────────────
+export const DEFAULT_MIN_STOCK = 4;
+
+export function minStockOf(item: { minStock?: number } | null | undefined): number {
+  const value = Number(item?.minStock);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_MIN_STOCK;
+}
+
+// `qty` é o saldo que a tela usa — físico ou livre, cada uma tem o seu motivo.
+export function isLowStock(item: { minStock?: number } | null | undefined, qty: number): boolean {
+  return qty <= minStockOf(item);
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Documento de estoque do Firestore -> StockItem.
 //
 // Existe UMA funcao para isso porque existiam DUAS copias desta conversao —
@@ -219,6 +241,15 @@ export function mapStockDoc(id: string, data: any): StockItem {
     imageUrl: data.imageUrl || "",
     photoCount: Number(data.photoCount) || 0,
     photoThumb: typeof data.photoThumb === "string" ? data.photoThumb : "",
+    // Nunca `undefined`: há gravações que espalham o produto inteiro num
+    // documento novo, e o Firestore recusa campo undefined.
+    line: isProductLine(data.line) ? data.line : "",
+    minStock: Number(data.minStock) > 0 ? Math.floor(Number(data.minStock)) : 0,
+    truckPosition: isTruckPosition(data.truckPosition) ? data.truckPosition : "",
+    plyRating: Number(data.plyRating) > 0 ? Math.floor(Number(data.plyRating)) : 0,
+    loadIndex: typeof data.loadIndex === "string" ? data.loadIndex : "",
+    tubeType: isTubeType(data.tubeType) ? data.tubeType : "",
+    dot: Array.isArray(data.dot) ? data.dot.filter((c: unknown) => typeof c === "string" && /^\d{4}$/.test(c)) : [],
     userId: data.userId || "",
     userEmail: data.userEmail || "",
     companyId: data.companyId || "",

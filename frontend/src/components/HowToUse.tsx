@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp, Lightbulb, ImagePlus } from "lucide-react";
+import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp, Lightbulb, ImagePlus, Truck } from "lucide-react";
 
 export default function HowToUse() {
   const [activeSection, setActiveSection] = useState<string>("intro");
@@ -10,6 +10,7 @@ export default function HowToUse() {
     { id: "stock-flow", title: "Entradas e Saídas", icon: ArrowDownUp },
     { id: "dashboard", title: "Painel & Indicadores", icon: BarChart2 },
     { id: "unified", title: "Estoque Unificado", icon: Layers },
+    { id: "lines", title: "Linhas: Passeio e Carga", icon: Truck },
     { id: "photos", title: "Fotos dos Pneus", icon: ImagePlus },
     { id: "barcode", title: "Leitor de Código", icon: Camera },
     { id: "import", title: "Importação Inteligente", icon: FileUp },
@@ -197,6 +198,64 @@ export default function HowToUse() {
                   <strong className="text-slate-900">Valor Promocional:</strong> Na aba <strong>Valor promocional</strong>, clique em "Nova promoção", escolha o pneu e a loja e informe o preço promocional e a validade — até uma data ou sem prazo. Enquanto ela vale, o pneu aparece em destaque no catálogo dos vendedores e as vendas já abrem com o preço promocional. No fim do prazo o preço volta ao normal sozinho; para parar antes, use "Encerrar".
                 </li>
               </ul>
+            </div>
+          )}
+
+          {activeSection === "lines" && (
+            <div className="space-y-4 animate-scaleUp text-xs text-slate-650 leading-relaxed">
+              <h4 className="text-base font-black text-slate-900">🚚 Linhas: Passeio, Carga, Agrícola e Acessórios</h4>
+              <p>
+                Cada produto pertence a uma <strong className="text-slate-900">linha</strong>, e as telas de estoque têm uma aba para
+                cada uma: <strong className="text-slate-900">Passeio</strong>, <strong className="text-slate-900">Carga</strong>,{" "}
+                <strong className="text-slate-900">Agrícola e Industrial</strong> e <strong className="text-slate-900">Acessórios</strong>.
+                Cada aba mostra quantos produtos tem.
+              </p>
+              <ul className="list-disc pl-5 space-y-2">
+                <li>
+                  <strong className="text-slate-900">A linha é descoberta sozinha pela medida.</strong> Aro 17.5, 19.5 e 22.5, convencional
+                  (750-16, 900-20, 1000-20, 1100-22) e pneu tipo C de van (ex.: 205/75 R16C) vão para Carga. Câmara de ar, protetor, roda e
+                  válvula vão para Acessórios. Trator, implemento, empilhadeira e quadriciclo vão para Agrícola e Industrial.
+                </li>
+                <li>
+                  <strong className="text-slate-900">Para corrigir</strong>, abra a ficha do produto em Cadastros e Ajustes e escolha a
+                  linha certa no campo <strong className="text-slate-900">Linha</strong>. A sua escolha vale sempre.
+                </li>
+                <li>
+                  <strong className="text-slate-900">Cadastrando com a aba Carga aberta</strong>, o produto novo já nasce na linha Carga.
+                </li>
+                <li>
+                  A aba escolhida fica guardada no aparelho: quem trabalha só com caminhão abre o sistema e já cai na aba Carga.
+                </li>
+              </ul>
+              <h4 className="text-sm font-black text-slate-900 pt-2">Ficha do pneu de carga</h4>
+              <p>
+                Na ficha de um pneu de carga aparecem <strong className="text-slate-900">Posição</strong> (direcional, tração, livre
+                rolagem ou misto), <strong className="text-slate-900">Câmara</strong> (com ou sem), <strong className="text-slate-900">Lonas</strong>{" "}
+                e <strong className="text-slate-900">Índice de carga</strong>. O sistema já lê esses dados da descrição ("DIR", "TRA",
+                "16PR", "149/146L") e mostra o que leu como "Automática". Só preencha o que estiver errado ou faltando.
+              </p>
+              <ul className="list-disc pl-5 space-y-2">
+                <li>
+                  Na aba <strong className="text-slate-900">Carga</strong> aparece o filtro de posição. Use{" "}
+                  <strong className="text-slate-900">Sem posição</strong> para achar os pneus que ainda precisam ser completados.
+                </li>
+                <li>
+                  Os selos na lista mostram a posição, as lonas e "C/ câmara" (pneu que vende com câmara e protetor).
+                </li>
+              </ul>
+              <h4 className="text-sm font-black text-slate-900 pt-2">DOT (data de fabricação)</h4>
+              <p>
+                Todo pneu tem o campo <strong className="text-slate-900">DOT</strong> na ficha: os 4 números da lateral, semana e ano
+                (2125 = semana 21 de 2025). Se houver mais de um lote, separe por vírgula: 2125, 3424. O sistema mostra o mês de
+                fabricação e a idade, e pinta de amarelo a partir de 3 anos e de vermelho a partir de 5 anos. O DOT escrito nas anotações
+                ("DOT 2125") também é lido enquanto o campo estiver vazio. No catálogo público o DOT não aparece, só para quem está logado.
+              </p>
+              <h4 className="text-sm font-black text-slate-900 pt-2">Estoque mínimo</h4>
+              <p>
+                Na ficha do produto, o campo <strong className="text-slate-900">Estoque mínimo</strong> diz com quantas unidades o
+                sistema avisa que está na hora de comprar. Em branco, vale o padrão de 4 unidades. Assim cada produto tem o seu ponto
+                de compra: 4 pneus de caminhão, 4 pneus de carro e 4 protetores não precisam mais ter o mesmo aviso.
+              </p>
             </div>
           )}
 

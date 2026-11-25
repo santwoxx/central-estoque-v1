@@ -1,12 +1,34 @@
 import React, { useState, useRef, useMemo, useDeferredValue } from "react";
 import { StockItem, Company, UserRole, StockFlowPayload, StockFlowResult, StockExitOrigin, RestoreResult, ErpStockFile, ErpSyncResult, ErpSyncAction } from "../types";
-import { activePromo, availableQuantity, formatBRL, matchesTireSize, parsePriceInput, reservedQuantityOf, saleCashPrice } from "../utils";
+import { activePromo, availableQuantity, DEFAULT_MIN_STOCK, formatBRL, isLowStock, matchesTireSize, parsePriceInput, reservedQuantityOf, saleCashPrice } from "../utils";
 import { useToday } from "../hooks/useToday";
 import { isErpSyncWrite } from "../utils/erpSync";
 import type { ErpFiles } from "../erpFiles";
 import StoreChip from "./StoreChip";
 import ProductPhotosModal, { ProductPhotoThumb } from "./ProductPhotos";
 import { canEditProductPhotos } from "../utils/productPhotos";
+import ProductLineTabs, { usePersistentLineFilter } from "./ProductLineTabs";
+import { TireSpecBadges, TruckPositionFilter, countByPosition, positionOf, type PositionFilter } from "./TireSpec";
+import {
+  DOT_OLD_MONTHS,
+  DOT_WARN_MONTHS,
+  detectLoadIndex,
+  detectPlyRating,
+  detectTruckPosition,
+  detectTubeType,
+  dotAgeLabel,
+  dotAgeMonths,
+  dotLabel,
+  isTruckPosition,
+  isTubeType,
+  parseDotInput,
+  positionLabel,
+  TRUCK_POSITIONS,
+  TUBE_TYPES,
+  type TruckPosition,
+  type TubeType
+} from "../utils/tireSpec";
+import { countByLine, detectProductLine, isProductLine, lineLabel, PRODUCT_LINES, productLineOf, type LineFilter, type ProductLine } from "../utils/productLine";
 import { 
   Search, 
   Trash2, 
@@ -478,7 +500,23 @@ export default function StockTable({
   const [savedPhotoItemId, setSavedPhotoItemId] = useState<string | null>(null);
   const [formNotes, setFormNotes] = useState("");
   const [formDescription, setFormDescription] = useState("");
+  // Linha escolhida na ficha ("" = automática, pela medida) e estoque mínimo
+  // ("" = o padrão). Texto, e não número, pelo mesmo motivo dos preços: o campo
+  // em branco tem significado próprio.
+  const [formLine, setFormLine] = useState<ProductLine | "">("");
+  const [formMinStock, setFormMinStock] = useState("");
+  // Ficha do pneu de carga e DOT. Vazio = o que o sistema lê da descrição.
+  const [formPosition, setFormPosition] = useState<TruckPosition | "">("");
+  const [formPly, setFormPly] = useState("");
+  const [formLoadIndex, setFormLoadIndex] = useState("");
+  const [formTube, setFormTube] = useState<TubeType | "">("");
+  const [formDot, setFormDot] = useState("");
   const [movementReason, setMovementReason] = useState("");
+
+  // Aba de linha (Passeio, Carga...), guardada no aparelho.
+  const [lineFilter, setLineFilter] = usePersistentLineFilter("cadastros");
+  // Posição (só na aba Carga): direcional, tração... ou "sem posição".
+  const [positionFilter, setPositionFilter] = useState<PositionFilter>("ALL");
 
   // Janela de fotos aberta. Guarda o ID e não o objeto: o documento da lista
   // é atualizado em tempo real, e a janela tem que enxergar a versão de agora.
@@ -487,6 +525,188 @@ export default function StockTable({
   // A ficha aberta na versão de agora: a contagem de fotos muda com a ficha
   // aberta, porque a janela de fotos grava na hora.
   const liveEditingItem = editingItem ? items.find(i => i.id === editingItem.id) || editingItem : null;
+
+  // Ficha do pneu digitada → campos do produto. Texto = a mensagem de erro.
+  // Em branco grava vazio/0, que as telas leem como "usar o que está escrito
+  // na descrição" — por isso nada aqui é obrigatório.
+  const parseTireSpecForm = ():
+    | { truckPosition: TruckPosition | ""; plyRating: number; loadIndex: string; tubeType: TubeType | ""; dot: string[] }
+    | string => {
+    const plyRaw = formPly.trim();
+    const plyRating = plyRaw === "" ? 0 : Number(plyRaw);
+    if (!Number.isInteger(plyRating) || (plyRaw !== "" && (plyRating < 4 || plyRating > 30))) {
+      return "Lonas: use um número inteiro de 4 a 30 (ex.: 16), ou deixe em branco.";
+    }
+    const loadIndex = formLoadIndex.trim().toUpperCase().replace(/\s+/g, "");
+    if (loadIndex && !/^\d{2,3}(\/\d{2,3})?[A-Z]?$/.test(loadIndex)) {
+      return "Índice de carga: use o formato da lateral do pneu, como 149/146L ou 135/133J.";
+    }
+    const { codes, invalid } = parseDotInput(formDot);
+    if (invalid.length) {
+      return `DOT inválido: ${invalid.join(", ")}. Use os 4 números da lateral do pneu (semana e ano), como 2125 = semana 21 de 2025.`;
+    }
+    return { truckPosition: formPosition, plyRating, loadIndex, tubeType: formTube, dot: codes };
+  };
+
+  // Ficha do pneu de carga (só quando a linha é Carga) e DOT (qualquer pneu).
+  // Cada campo mostra, como "Automático", o que o sistema leu da descrição —
+  // a pessoa só preenche o que estiver errado ou faltando.
+  const renderTireSpecFields = () => {
+    const line = formLine || detectProductLine({ size: formSize, brand: formBrand, model: formModel, description: formDescription });
+    if (line === "ACESSORIO") return null;
+    const text = `${formModel} ${formDescription}`;
+    const autoPosition = detectTruckPosition(text, formBrand);
+    const autoPly = detectPlyRating(text);
+    const autoIndex = detectLoadIndex(text);
+    const autoTube = detectTubeType(formSize, text);
+    const dotPreview = parseDotInput(formDot);
+    const fieldClass =
+      "w-full px-3 py-2 border border-slate-200 rounded text-xs font-semibold outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-900";
+
+    return (
+      <div className="space-y-3">
+        {line === "CARGA" && (
+          <div className="rounded-lg border border-sky-200 bg-sky-50/50 p-3 space-y-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-sky-800">Ficha do pneu de carga</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Posição</label>
+                <select value={formPosition} onChange={(e) => setFormPosition(e.target.value as TruckPosition | "")} className={`${fieldClass} cursor-pointer`}>
+                  <option value="">Automática ({autoPosition ? positionLabel(autoPosition) : "não identificada"})</option>
+                  {TRUCK_POSITIONS.map(p => (
+                    <option key={p.id} value={p.id}>{p.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Câmara</label>
+                <select value={formTube} onChange={(e) => setFormTube(e.target.value as TubeType | "")} className={`${fieldClass} cursor-pointer`}>
+                  <option value="">Automática ({autoTube ? TUBE_TYPES.find(t => t.id === autoTube)!.label : "não identificada"})</option>
+                  {TUBE_TYPES.map(t => (
+                    <option key={t.id} value={t.id}>{t.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Lonas</label>
+                <input
+                  type="number"
+                  min={4}
+                  max={30}
+                  step={1}
+                  inputMode="numeric"
+                  placeholder={autoPly ? `${autoPly} (lido da descrição)` : "Ex.: 16"}
+                  value={formPly}
+                  onChange={(e) => setFormPly(e.target.value)}
+                  className={`${fieldClass} text-center`}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Índice de carga</label>
+                <input
+                  type="text"
+                  placeholder={autoIndex ? `${autoIndex} (lido da descrição)` : "Ex.: 149/146L"}
+                  value={formLoadIndex}
+                  onChange={(e) => setFormLoadIndex(e.target.value)}
+                  className={`${fieldClass} font-mono uppercase`}
+                />
+              </div>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-snug">
+              Em branco, vale o que está escrito na descrição (ex.: "DIR", "TRA", "16PR"). Preencha só o que estiver errado ou faltando.
+            </p>
+          </div>
+        )}
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">DOT (semana e ano de fabricação)</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="Ex.: 2125 — vários lotes: 2125, 3424"
+            value={formDot}
+            onChange={(e) => setFormDot(e.target.value)}
+            className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-mono font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
+          />
+          {(dotPreview.codes.length > 0 || dotPreview.invalid.length > 0) && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {dotPreview.codes.map(code => {
+                const months = dotAgeMonths(code);
+                const tone =
+                  months >= DOT_OLD_MONTHS
+                    ? "border-red-300 bg-red-50 text-red-700"
+                    : months >= DOT_WARN_MONTHS
+                    ? "border-amber-300 bg-amber-50 text-amber-800"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-800";
+                return (
+                  <span key={code} className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold ${tone}`}>
+                    {code}: {dotLabel(code)} · {dotAgeLabel(code)}
+                    {months >= DOT_OLD_MONTHS ? " · antigo" : ""}
+                  </span>
+                );
+              })}
+              {dotPreview.invalid.map(bad => (
+                <span key={`bad-${bad}`} className="inline-flex items-center rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[10px] font-bold text-red-700">
+                  {bad}: inválido
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="mt-0.5 text-[10px] text-slate-400 leading-tight">
+            Os 4 números depois de "DOT" na lateral do pneu: 2125 = semana 21 de 2025. Vários lotes: separe por vírgula.
+          </p>
+        </div>
+      </div>
+    );
+  };
+
+  // Estoque mínimo digitado: em branco = padrão (grava 0); inválido = null.
+  const parseMinStock = (): number | null => {
+    const raw = formMinStock.trim();
+    if (raw === "") return 0;
+    const value = Number(raw);
+    return Number.isInteger(value) && value >= 0 && value <= 999 ? value : null;
+  };
+
+  // Linha e estoque mínimo: o mesmo bloco no cadastro e na ficha. A opção
+  // "Automática" mostra a linha que o sistema descobriu pela medida — é o que
+  // vale enquanto ninguém escolher outra.
+  const renderLineAndMinStock = () => {
+    const detected = detectProductLine({ size: formSize, brand: formBrand, model: formModel, description: formDescription });
+    return (
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">Linha</label>
+          <select
+            value={formLine}
+            onChange={(e) => setFormLine(e.target.value as ProductLine | "")}
+            className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-semibold outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900 cursor-pointer"
+          >
+            <option value="">Automática ({lineLabel(detected)})</option>
+            {PRODUCT_LINES.map(line => (
+              <option key={line.id} value={line.id}>{line.label}</option>
+            ))}
+          </select>
+          <p className="mt-0.5 text-[10px] text-slate-400 leading-tight">A aba em que o produto aparece.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">Estoque mínimo</label>
+          <input
+            type="number"
+            min={0}
+            max={999}
+            step={1}
+            inputMode="numeric"
+            placeholder={`${DEFAULT_MIN_STOCK} (padrão)`}
+            value={formMinStock}
+            onChange={(e) => setFormMinStock(e.target.value)}
+            className="w-full px-3 py-2 border border-slate-200 rounded text-xs font-bold text-center outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50 text-slate-900"
+          />
+          <p className="mt-0.5 text-[10px] text-slate-400 leading-tight">Avisa quando o saldo chegar nele.</p>
+        </div>
+      </div>
+    );
+  };
   
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -780,20 +1000,30 @@ export default function StockTable({
     setShowScannerModal(false);
   };
 
+  // Marcas e medidas oferecidas nos filtros: só as da aba aberta — na aba
+  // Carga, a lista de medidas é de caminhão, não as 300 medidas de carro.
+  // O tipo vai na variável: o projeto não tem @types/react, e o useMemo
+  // devolve `any` — sem a anotação, a lista de marcas abaixo perdia o tipo.
+  const lineScopedItems: StockItem[] = useMemo(
+    () => (lineFilter === "ALL" ? items : items.filter(item => productLineOf(item) === lineFilter)),
+    [items, lineFilter]
+  );
+
   // Unique Brands in existing stock for filters
   const availableBrands = useMemo(() => {
-    const list = items.map(item => item.brand.trim());
+    const list = lineScopedItems.map(item => item.brand.trim());
     return Array.from(new Set(list)).filter(b => b.length > 0).sort();
-  }, [items]);
+  }, [lineScopedItems]);
 
   // Unique Sizes in existing stock for filters
   const availableSizes = useMemo(() => {
-    const list = items.map(item => item.size.trim());
+    const list = lineScopedItems.map(item => item.size.trim());
     return Array.from(new Set(list)).filter(s => s.length > 0).sort();
-  }, [items]);
+  }, [lineScopedItems]);
 
-  // Combined Filtering
-  const filteredItems = useMemo(() => {
+  // Combined Filtering (tudo, menos a aba de linha — ela vem logo abaixo,
+  // separada, porque as abas contam a partir desta lista)
+  const searchFilteredItems = useMemo(() => {
     const searchLower = deferredSearchTerm.trim().toLowerCase();
     const idLower = deferredSearchId.trim().toLowerCase();
 
@@ -818,10 +1048,10 @@ export default function StockTable({
       // 4. Size Filter
       const matchesSize = selectedSize === "" || item.size === selectedSize;
 
-      // 5. Stock alert warnings (Low <= 4 units)
+      // 5. Alerta de reposição: no estoque mínimo do produto ou abaixo
       const matchesStock = stockFilter === "all" ||
-        (stockFilter === "low" && item.quantity <= 4) ||
-        (stockFilter === "normal" && item.quantity > 4);
+        (stockFilter === "low" && isLowStock(item, item.quantity)) ||
+        (stockFilter === "normal" && !isLowStock(item, item.quantity));
 
       // 6. Company Filter
       const matchesCompany = selectedCompanyId === "" || item.companyId === selectedCompanyId;
@@ -830,10 +1060,34 @@ export default function StockTable({
     });
   }, [items, deferredSearchTerm, deferredSearchId, selectedBrand, selectedSize, stockFilter, selectedCompanyId]);
 
+  const lineCounts: Record<LineFilter, number> = useMemo(
+    () => countByLine<StockItem>(searchFilteredItems, productLineOf),
+    [searchFilteredItems]
+  );
+
+  const lineFilteredItems: StockItem[] = useMemo(
+    () => (lineFilter === "ALL" ? searchFilteredItems : searchFilteredItems.filter(item => productLineOf(item) === lineFilter)),
+    [searchFilteredItems, lineFilter]
+  );
+
+  // Na aba Carga, o filtro de posição conta dentro do que a aba mostra.
+  const positionCounts: Record<PositionFilter, number> = useMemo(
+    () => countByPosition<StockItem>(lineFilteredItems, positionOf),
+    [lineFilteredItems]
+  );
+
+  const filteredItems: StockItem[] = useMemo(
+    () =>
+      lineFilter === "CARGA" && positionFilter !== "ALL"
+        ? lineFilteredItems.filter(item => positionOf(item) === positionFilter)
+        : lineFilteredItems,
+    [lineFilteredItems, lineFilter, positionFilter]
+  );
+
   // Reset pagination to page 1 when filters change
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, searchId, selectedBrand, selectedSize, stockFilter, selectedCompanyId]);
+  }, [searchTerm, searchId, selectedBrand, selectedSize, stockFilter, selectedCompanyId, lineFilter, positionFilter]);
 
   // Stats calculation
   const totalValue = useMemo(() => {
@@ -845,7 +1099,7 @@ export default function StockTable({
   }, [filteredItems]);
 
   const lowStockCount = useMemo(() => {
-    return filteredItems.filter(item => item.quantity <= 4).length;
+    return filteredItems.filter(item => isLowStock(item, item.quantity)).length;
   }, [filteredItems]);
 
   // Paginated Items
@@ -913,6 +1167,13 @@ export default function StockTable({
     setFormPriceCost(Number(item.costPrice) > 0 ? String(item.costPrice).replace(".", ",") : "");
     setFormNotes(item.notes);
     setFormDescription(item.description || "");
+    setFormLine(isProductLine(item.line) ? item.line : "");
+    setFormMinStock(Number(item.minStock) > 0 ? String(item.minStock) : "");
+    setFormPosition(isTruckPosition(item.truckPosition) ? item.truckPosition : "");
+    setFormPly(Number(item.plyRating) > 0 ? String(item.plyRating) : "");
+    setFormLoadIndex(item.loadIndex || "");
+    setFormTube(isTubeType(item.tubeType) ? item.tubeType : "");
+    setFormDot((item.dot || []).join(", "));
     setFormCompanyId(item.companyId || "");
     setMovementReason("Geral / Ajuste de cadastro");
     setShowEditModal(true);
@@ -932,6 +1193,15 @@ export default function StockTable({
     setFormPriceCost("");
     setFormNotes("");
     setFormDescription("");
+    // Cadastrando com a aba Carga aberta, o produto novo já nasce em Carga.
+    setFormLine(lineFilter === "ALL" ? "" : lineFilter);
+    setFormMinStock("");
+    // Cadastrando com o filtro "Tração" ligado, a posição já vem marcada.
+    setFormPosition(lineFilter === "CARGA" && isTruckPosition(positionFilter) ? positionFilter : "");
+    setFormPly("");
+    setFormLoadIndex("");
+    setFormTube("");
+    setFormDot("");
     setFormCompanyId(user.companyId || "");
     setShowAddModal(true);
     setErrorMsg("");
@@ -968,6 +1238,18 @@ export default function StockTable({
       return;
     }
 
+    const minStock = parseMinStock();
+    if (minStock === null) {
+      setErrorMsg(`Estoque mínimo: use um número inteiro de 0 a 999 (em branco = ${DEFAULT_MIN_STOCK}).`);
+      return;
+    }
+
+    const tireSpec = parseTireSpecForm();
+    if (typeof tireSpec === "string") {
+      setErrorMsg(tireSpec);
+      return;
+    }
+
     setSubmitting(true);
     setErrorMsg("");
 
@@ -985,6 +1267,9 @@ export default function StockTable({
         notes: formNotes,
         description: formDescription,
         imageUrl: "",
+        line: formLine,
+        minStock,
+        ...tireSpec,
         companyId: matchedCompId,
         companyName: matchedCompName
       });
@@ -1037,6 +1322,18 @@ export default function StockTable({
       return;
     }
 
+    const minStock = parseMinStock();
+    if (minStock === null) {
+      setErrorMsg(`Estoque mínimo: use um número inteiro de 0 a 999 (em branco = ${DEFAULT_MIN_STOCK}).`);
+      return;
+    }
+
+    const tireSpec = parseTireSpecForm();
+    if (typeof tireSpec === "string") {
+      setErrorMsg(tireSpec);
+      return;
+    }
+
     setSubmitting(true);
     setErrorMsg("");
 
@@ -1056,6 +1353,9 @@ export default function StockTable({
         // Sem imageUrl: a imagem do pneu agora é a FOTO, que tem janela própria
         // e grava na hora. Regravar aqui o link que estava na tela quando a
         // ficha abriu desfaria o que a janela de fotos fez nesse meio-tempo.
+        line: formLine,
+        minStock,
+        ...tireSpec,
         companyId: matchedCompId,
         companyName: matchedCompName
       };
@@ -1326,6 +1626,26 @@ export default function StockTable({
 
   return (
     <div className="space-y-5 animate-fadeIn">
+      {/* Abas de linha: tudo abaixo (indicadores, filtros, tabela) mostra só a
+          linha escolhida — "capital estimado" na aba Carga é o capital em
+          pneu de caminhão. */}
+      <ProductLineTabs
+        counts={lineCounts}
+        value={lineFilter}
+        onChange={(value) => {
+          setLineFilter(value);
+          // As medidas de uma linha não existem na outra.
+          setSelectedSize("");
+          setPositionFilter("ALL");
+        }}
+      />
+
+      {/* Aba Carga: posição do pneu. "Sem posição" é a lista do que falta
+          completar na ficha. */}
+      {lineFilter === "CARGA" && (
+        <TruckPositionFilter counts={positionCounts} value={positionFilter} onChange={setPositionFilter} />
+      )}
+
       {/* Indicadores Financeiros e Estatísticos em tempo real */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Card 1: Capital Estimado */}
@@ -1363,7 +1683,7 @@ export default function StockTable({
             <span className={`text-xl font-black mt-1 block ${lowStockCount > 0 ? "text-red-600" : "text-slate-900"}`}>
               {lowStockCount} <span className="text-xs font-bold uppercase">críticos</span>
             </span>
-            <span className="text-[9px] text-slate-500 font-bold block mt-1">Itens com 4 ou menos unidades</span>
+            <span className="text-[9px] text-slate-500 font-bold block mt-1">No estoque mínimo ou abaixo (padrão {DEFAULT_MIN_STOCK} un)</span>
           </div>
           <div className={`h-10 w-10 rounded-xl flex items-center justify-center shrink-0 ${lowStockCount > 0 ? "bg-red-50 text-red-600 border border-red-100 animate-pulse" : "bg-slate-50 text-slate-400 border border-slate-200"}`}>
             <AlertTriangle size={18} className="stroke-[2.2]" />
@@ -1591,7 +1911,7 @@ export default function StockTable({
                 stockFilter === "low" ? "bg-red-650 text-white shadow-xs" : "text-red-700 hover:bg-red-50"
               }`}
             >
-              Estoque Baixo (≤4 un)
+              Estoque Baixo (no mínimo)
             </button>
             <button
               type="button"
@@ -1758,6 +2078,7 @@ export default function StockTable({
                                 <span className="text-gold-600 font-extrabold mr-1.5">{item.size}</span>
                                 {item.brand} <span className="font-normal text-slate-650">{item.model}</span>
                               </span>
+                              <TireSpecBadges item={item} className="mt-1" />
                               {item.description && (
                                 <p className="text-[11px] text-slate-405 truncate max-w-md mt-0.5" title={item.description}>
                                   {item.description}
@@ -1789,11 +2110,11 @@ export default function StockTable({
                           {/* Quantity column */}
                           <td className="py-2 px-2 text-center align-middle">
                             <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-bold text-xs ${
-                              item.quantity <= 4 
+                              isLowStock(item, item.quantity) 
                                 ? "bg-red-55 text-red-700 border border-red-200 ring-4 ring-red-100/30 animate-pulse font-extrabold" 
                                 : "bg-emerald-50 text-emerald-800 border border-emerald-100"
                             }`}>
-                              {item.quantity <= 4 && <AlertTriangle size={12} className="text-red-600 shrink-0" />}
+                              {isLowStock(item, item.quantity) && <AlertTriangle size={12} className="text-red-600 shrink-0" />}
                               {item.quantity} un
                             </span>
                             {rowReserved > 0 && (
@@ -1881,7 +2202,7 @@ export default function StockTable({
                   <div 
                     key={item.id} 
                     className={`bg-white rounded-xl p-3.5 border shadow-xs transition-all flex flex-col space-y-3 ${
-                      item.quantity <= 4 ? "border-l-4 border-l-red-500 border-y border-r border-slate-200 bg-red-50/15" : "border-l-4 border-l-gold-500 border-y border-r border-slate-200"
+                      isLowStock(item, item.quantity) ? "border-l-4 border-l-red-500 border-y border-r border-slate-200 bg-red-50/15" : "border-l-4 border-l-gold-500 border-y border-r border-slate-200"
                     }`}
                   >
                     
@@ -1890,7 +2211,7 @@ export default function StockTable({
                       <span className="px-2.5 py-0.5 text-[10px] text-gold-700 bg-gold-400/10 rounded-md border border-gold-300/30 font-mono font-black tracking-wider uppercase">
                         {item.sku}
                       </span>
-                      {item.quantity <= 4 ? (
+                      {isLowStock(item, item.quantity) ? (
                         <span className="flex items-center gap-1 bg-red-100/90 text-red-800 text-[9px] font-black uppercase px-2 py-0.5 rounded-full animate-pulse">
                           <AlertTriangle size={10} /> Alerta Crítico
                         </span>
@@ -1918,6 +2239,7 @@ export default function StockTable({
                           <span className="text-gold-600 font-extrabold mr-1.5">{item.size}</span>
                           {item.brand} <span className="font-semibold text-slate-700">{item.model}</span>
                         </h4>
+                        <TireSpecBadges item={item} className="mt-1" />
                         {item.description ? (
                           <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">
                             {item.description}
@@ -2208,6 +2530,10 @@ export default function StockTable({
                 </div>
               </div>
 
+              {renderLineAndMinStock()}
+
+              {renderTireSpecFields()}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Estoque Inicial *</label>
@@ -2399,6 +2725,10 @@ export default function StockTable({
                   />
                 </div>
               </div>
+
+              {renderLineAndMinStock()}
+
+              {renderTireSpecFields()}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>

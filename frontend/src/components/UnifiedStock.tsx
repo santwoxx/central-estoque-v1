@@ -4,12 +4,15 @@ import {
   Search, Plus, Minus, Building2, X, Loader2, Share2, Check, Printer, Image as ImageIcon,
   PackagePlus, PackageMinus, AlertTriangle, CheckCircle2, ArrowRight, ArrowRightLeft, Lock, Tag
 } from "lucide-react";
-import { activePromo, availableQuantity, compareTireSize, compareTireSizeDesc, formatBRL, matchesTireSize, parsePriceInput, promoUntilLabel, QUICK_QTY, reservedQuantityOf, saleCashPrice, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import { activePromo, availableQuantity, compareTireSize, compareTireSizeDesc, formatBRL, isLowStock, matchesTireSize, parsePriceInput, promoUntilLabel, QUICK_QTY, reservedQuantityOf, saleCashPrice, STOCK_FLOW_REASONS, toMillis } from "../utils";
 import { useToday } from "../hooks/useToday";
 import PrintableReport, { PrintableReportMeta } from "./PrintableReport";
 import PromotionsManager from "./PromotionsManager";
 import ProductPhotosModal, { ProductPhotoThumb } from "./ProductPhotos";
 import { canEditProductPhotos } from "../utils/productPhotos";
+import ProductLineTabs, { usePersistentLineFilter } from "./ProductLineTabs";
+import { TireSpecBadges, TruckPositionFilter, countByPosition, positionOf, type PositionFilter } from "./TireSpec";
+import { countByLine, productLineOf, type LineFilter, type ProductLine } from "../utils/productLine";
 
 interface UnifiedStockProps {
   items: StockItem[];
@@ -256,7 +259,16 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
     return name.includes("AUTOCENTER") || name.includes("AUTOCAR");
   }, [companies, companyFilter]);
 
-  const filteredItems = useMemo(() => {
+  // ── Aba de linha (Passeio, Carga, Agrícola, Acessórios) ─────────────
+  // A linha é do PRODUTO, e a linha da planilha junta o mesmo código em várias
+  // lojas: vale a do documento cujo preço a linha mostra.
+  const [lineFilter, setLineFilter] = usePersistentLineFilter("unificado");
+  const rowLineOf = (item: ConsolidatedItem): ProductLine =>
+    productLineOf(item.docs[item.priceCompanyId] || Object.values(item.docs)[0] || item);
+
+  // Loja + busca, antes da aba: é daqui que as abas contam. (Tipo na variável:
+  // sem @types/react no projeto, o useMemo devolve `any`.)
+  const searchedItems: ConsolidatedItem[] = useMemo(() => {
     // Com uma empresa escolhida, some tambem a LINHA do pneu que aquela loja
     // nem cadastrou. Sem isso a tabela filtrada viraria uma coluna unica cheia
     // de tracos, listando o estoque das outras filiais sem mostrar nenhum.
@@ -265,13 +277,44 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       : consolidatedItems.filter(item => !!item.docs[companyFilter]);
 
     const lower = deferredSearchTerm.toLowerCase();
-    const searched = !deferredSearchTerm ? base : base.filter(item =>
+    return !deferredSearchTerm ? base : base.filter(item =>
       item.sku.toLowerCase().includes(lower) ||
       item.description.toLowerCase().includes(lower) ||
       item.brand.toLowerCase().includes(lower) ||
       item.size.toLowerCase().includes(lower) ||
       matchesTireSize(item.size, lower)
     );
+  }, [consolidatedItems, deferredSearchTerm, companyFilter]);
+
+  const lineCounts: Record<LineFilter, number> = useMemo(() => countByLine(searchedItems, rowLineOf), [searchedItems]);
+
+  // Documento que representa a linha da planilha: o da loja cujo preço ela
+  // mostra. É dele que saem a posição e os selos da ficha.
+  const rowDocOf = (item: ConsolidatedItem): StockItem | undefined =>
+    item.docs[item.priceCompanyId] || Object.values(item.docs)[0];
+
+  // Posição do pneu (só na aba Carga): direcional, tração... ou "sem posição".
+  const [positionFilter, setPositionFilter] = useState<PositionFilter>("ALL");
+  const rowPositionOf = (item: ConsolidatedItem) => {
+    const doc = rowDocOf(item);
+    return doc ? positionOf(doc) : "NONE";
+  };
+
+  const lineRows: ConsolidatedItem[] = useMemo(
+    () => (lineFilter === "ALL" ? searchedItems : searchedItems.filter(item => rowLineOf(item) === lineFilter)),
+    [searchedItems, lineFilter]
+  );
+
+  const positionCounts: Record<PositionFilter, number> = useMemo(
+    () => countByPosition(lineRows, rowPositionOf),
+    [lineRows]
+  );
+
+  const filteredItems = useMemo(() => {
+    const searched =
+      lineFilter === "CARGA" && positionFilter !== "ALL"
+        ? lineRows.filter(item => rowPositionOf(item) === positionFilter)
+        : lineRows;
 
     if (!usesShelfOrder) return searched;
 
@@ -290,7 +333,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         a.sku.localeCompare(b.sku)
       );
     });
-  }, [consolidatedItems, deferredSearchTerm, companyFilter, usesShelfOrder]);
+  }, [lineRows, lineFilter, positionFilter, companyFilter, usesShelfOrder]);
 
   // ── Fotos do pneu ─────────────────────────────────────────────────
   // A linha junta o mesmo código de várias lojas, mas a foto é de UM documento:
@@ -412,7 +455,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       .filter(item => {
         const total = qtyIn(item);
         if (reportBalance === "WITH") return total > 0;
-        if (reportBalance === "LOW") return total > 0 && total <= 4;
+        if (reportBalance === "LOW") return total > 0 && isLowStock(item.docs[item.priceCompanyId] || Object.values(item.docs)[0], total);
         if (reportBalance === "ZERO") return total === 0;
         return true;
       })
@@ -1355,6 +1398,20 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
         </div>
       )}
 
+      {/* Abas de linha. A exportação, a imagem e o relatório "com a busca"
+          seguem a aba: o que sai é o que está na tela. */}
+      <ProductLineTabs
+        counts={lineCounts}
+        value={lineFilter}
+        onChange={(value) => {
+          setLineFilter(value);
+          setPositionFilter("ALL");
+        }}
+      />
+      {lineFilter === "CARGA" && (
+        <TruckPositionFilter counts={positionCounts} value={positionFilter} onChange={setPositionFilter} />
+      )}
+
       {/* Legenda da cor âmbar. Só aparece quando existe reserva no que está na
           tela — uma legenda fixa vira ruído, e a cor sem explicação vira dúvida
           ("por que essa célula está amarela?"). */}
@@ -1493,6 +1550,8 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                             item.model
                           )}
                         </span>
+                        {/* Ficha do pneu: posição, lonas, câmara e DOT */}
+                        {rowDocOf(item) && <TireSpecBadges item={rowDocOf(item)!} className="mt-1" />}
                       </div>
                     </div>
                   </td>
@@ -1819,6 +1878,7 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
                         )}
                       </span>
                     </h4>
+                    {rowDocOf(item) && <TireSpecBadges item={rowDocOf(item)!} />}
                   </div>
                 </div>
               </div>

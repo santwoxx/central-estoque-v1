@@ -10,7 +10,10 @@ import {
   TransferOrder,
   TransferSyncResult
 } from "../types";
-import { availableQuantity, exportToCSV, formatBRL, formatDate, matchesTireSize, QUICK_QTY, reservedQuantityOf, saleCashPrice, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import { availableQuantity, exportToCSV, formatBRL, formatDate, isLowStock, matchesTireSize, QUICK_QTY, reservedQuantityOf, saleCashPrice, STOCK_FLOW_REASONS, toMillis } from "../utils";
+import ProductLineTabs, { usePersistentLineFilter } from "./ProductLineTabs";
+import { TireSpecBadges } from "./TireSpec";
+import { countByLine, productLineOf, type LineFilter } from "../utils/productLine";
 import StoreChip from "./StoreChip";
 import {
   PackagePlus,
@@ -210,8 +213,12 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
   }, [stock, multiStore]);
   const storeCountOf = (item: StockItem) => storesBySku.get((item.sku || "").trim().toUpperCase())?.size || 1;
 
-  // Lista do seletor: filtra pela busca e, na saída, esconde o que está zerado.
-  const pickerItems = useMemo(() => {
+  // Aba de linha do seletor (Passeio, Carga...), guardada no aparelho.
+  const [pickerLine, setPickerLine] = usePersistentLineFilter("entradas-saidas");
+
+  // Busca e saldo, antes da aba: é daqui que as abas contam. (Tipo na
+  // variável: sem @types/react no projeto, o useMemo devolve `any`.)
+  const pickerMatches: StockItem[] = useMemo(() => {
     const term = search.trim().toLowerCase();
     return operableStock
       // Na saída, o que conta é o saldo LIVRE: pneu inteiramente reservado para
@@ -225,7 +232,18 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
         item.size.toLowerCase().includes(term) ||
         (item.description || "").toLowerCase().includes(term) ||
         matchesTireSize(item.size, term)
-      )
+      );
+  }, [operableStock, search, mode]);
+
+  const pickerLineCounts: Record<LineFilter, number> = useMemo(
+    () => countByLine<StockItem>(pickerMatches, productLineOf),
+    [pickerMatches]
+  );
+
+  // Lista do seletor: filtra pela busca e, na saída, esconde o que está zerado.
+  const pickerItems = useMemo(() => {
+    return pickerMatches
+      .filter(item => pickerLine === "ALL" || productLineOf(item) === pickerLine)
       // Marca, medida e — no empate — a PRÓPRIA loja primeiro, depois o nome da
       // loja. Antes o empate ficava na ordem de "última atualização": a loja que
       // levou a baixa errada subia para o topo e recebia a seguinte também.
@@ -237,7 +255,7 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
         (a.sku || "").localeCompare(b.sku || "")
       )
       .slice(0, 80);
-  }, [operableStock, search, mode, companies, user.companyId]);
+  }, [pickerMatches, pickerLine, companies, user.companyId]);
 
   const stockById = useMemo(() => {
     const map = new Map<string, StockItem>();
@@ -1653,6 +1671,7 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
                         className={`w-full pl-9 pr-3 py-2.5 text-xs text-slate-800 bg-slate-50/60 border border-slate-200 rounded-xl outline-none focus:bg-white focus:ring-4 transition-all font-semibold ${accent.ring}`}
                       />
                     </div>
+                    <ProductLineTabs size="sm" counts={pickerLineCounts} value={pickerLine} onChange={setPickerLine} />
                     <div className="flex items-center justify-between text-[10px] font-bold text-slate-400">
                       <span className="uppercase tracking-wider">
                         {pickerItems.length} {pickerItems.length === 1 ? "pneu encontrado" : "pneus encontrados"}
@@ -1681,7 +1700,7 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
                         const itemFree = availableQuantity(item);
                         const itemReserved = reservedQuantityOf(item);
                         // Na saída, "baixo" se mede pelo que dá para vender de verdade.
-                        const isLow = (isEntrada ? item.quantity : itemFree) <= 4;
+                        const isLow = isLowStock(item, isEntrada ? item.quantity : itemFree);
                         return (
                           <div
                             key={item.id}
@@ -1711,6 +1730,9 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
                               <div className="text-[10px] text-slate-500 font-bold mt-0.5 truncate">
                                 {item.model} • <span className="font-mono">{item.size}</span>
                               </div>
+                              {/* Posição, lonas, câmara e DOT: na venda de pneu de carga é
+                                  o que decide entre dois pneus da mesma medida. */}
+                              <TireSpecBadges item={item} className="mt-1" />
                               {multiStore && storeCountOf(item) > 1 && (
                                 <div className="mt-0.5 flex items-center gap-1 text-[9px] font-black text-amber-800">
                                   <AlertTriangle size={10} className="shrink-0" />

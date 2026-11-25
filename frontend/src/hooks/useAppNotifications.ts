@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppNotification, NotificationType, StockExitRequest, StockExitStatus, StockItem, TransferOrder, TransferStatus, UserRole, canReviewStockExit, isCrossStoreReservation, isCustomerReservation, isReservationOrder } from "../types";
-import { toMillis } from "../utils";
+import { minStockOf, toMillis } from "../utils";
 
 const MAX_NOTIFICATIONS = 40;
-const LOW_STOCK_THRESHOLD = 4; // mirrors the "Alertas de Reposição" KPI card in App.tsx
 
 type NotifUser = { uid: string; role: UserRole; companyId?: string } | null;
 
@@ -270,7 +269,10 @@ function describeStockEvent(
   if (newQty <= 0 && prevQty > 0) {
     return { type: "STOCK_OUT", title: "Ruptura de estoque", message: `${label}: saldo zerado.` };
   }
-  if (newQty > 0 && newQty <= LOW_STOCK_THRESHOLD && prevQty > LOW_STOCK_THRESHOLD) {
+  // O limite é o estoque mínimo do produto (o mesmo do card "Alertas de
+  // Reposição" do App): avisa uma vez, quando o saldo cruza o mínimo.
+  const limit = minStockOf(item);
+  if (newQty > 0 && newQty <= limit && prevQty > limit) {
     return { type: "STOCK_LOW", title: "Estoque baixo", message: `${label}: restam apenas ${newQty} un.` };
   }
   return null;

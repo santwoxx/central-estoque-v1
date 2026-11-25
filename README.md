@@ -56,6 +56,22 @@ Regras da sincronização (detalhes em `frontend/src/utils/erpSync.ts`):
 - Produto que sumiu do relatório é zerado (nunca apagado), e só quando o relatório cobre a loja inteira. Reserva nunca é solta.
 - Cada alteração vai para a Auditoria como "Ajuste", com o saldo de antes e o de depois. Rodar de novo com o mesmo arquivo não muda nada.
 
+## Linhas de produto (Passeio, Carga, Agrícola e Industrial, Acessórios)
+
+As telas de estoque (Estoque Unificado, Cadastros e Ajustes, Catálogo e o seletor de Entradas e Saídas) têm uma aba por linha, com a contagem de cada uma. A linha é descoberta pela medida e pela descrição (`frontend/src/utils/productLine.ts`):
+- **Carga:** aro 17.5/19.5/22.5/24.5, convencional (750-16, 900-20, 1000-20, 1100-22), pneu tipo C de van (decisão da loja) e carcaça/recapado.
+- **Agrícola e Industrial:** medidas agrícolas (12.4-24, 18.4-30, 12.5/80-18), empilhadeira, máquina e quadriciclo.
+- **Acessórios:** câmara de ar, protetor, roda e válvula.
+- **Passeio:** todo o resto, inclusive camionete ("LT").
+
+O dono pode corrigir a linha na ficha do produto (campo `line`). A escolha dele sempre vence, e em branco vale a descoberta automática, por isso nenhum produto antigo precisou ser regravado. A mesma ficha tem o **estoque mínimo** (campo `minStock`, padrão 4), usado em todos os alertas de reposição.
+
+### Ficha do pneu de carga e DOT
+
+Os campos são `truckPosition` (direcional, tração, livre rolagem ou misto), `plyRating` (lonas), `loadIndex` (índice de carga) e `tubeType` (com ou sem câmara), descritos em `frontend/src/utils/tireSpec.ts`. Vazios, valem os dados lidos da descrição do ERP ("DIR", "TRA", "16PR", "149/146L"; aro 22.5 = sem câmara; 1000-20 = com câmara). A aba Carga tem filtro por posição, com "Sem posição" para achar o que falta completar.
+
+O campo `dot` guarda os DOTs dos lotes, em semana e ano ("2125"), e vale para qualquer pneu. A tela mostra a data, a idade e um alerta a partir de 3 e de 5 anos. Enquanto o campo está vazio, o sistema lê o "DOT 2125" escrito nas anotações. O catálogo público não mostra o DOT; ele só aparece para quem está logado.
+
 ## Fotos dos pneus
 
 O dono de cada loja coloca até 4 fotos em cada pneu da própria loja (o administrador, em qualquer loja). A câmera ou a galeria abre ao tocar na foto do produto em **Cadastros e Ajustes** ou no **Estoque Unificado**, ou no botão **Fotos do pneu** da ficha do produto. A primeira foto é a capa que aparece na lista. O vendedor e o catálogo público (`/consulta`) só veem as fotos.
