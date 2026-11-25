@@ -15,6 +15,16 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { UserCredential, UserRole, Company, StockItem } from "../types";
+import {
+  buildFullBackup,
+  describeCounts,
+  downloadJson,
+  fullBackupFileName,
+  lastFullBackupAt,
+  markFullBackup,
+  BACKUP_LABELS,
+  WEEKLY_MOVEMENTS_DAYS
+} from "../utils/fullBackup";
 import { 
   Users, 
   UserPlus, 
@@ -97,6 +107,14 @@ export default function UsersAdmin({ companies, currentUser, stock }: UsersAdmin
 
   // Backup & Restore State
   const [exporting, setExporting] = useState(false);
+  // Backup completo (utils/fullBackup.ts). Sem os tipos do React, o tipo vai à mão.
+  const [exportWithPhotos, setExportWithPhotos] = useState(false);
+  const [exportProgressState, setExportProgress] = useState("");
+  const exportProgress: string = exportProgressState;
+  const [exportResultState, setExportResult] = useState(null);
+  const exportResult: { counts: Record<string, number>; failed: string[] } | null = exportResultState;
+  const [lastBackupState, setLastBackupAt] = useState(() => lastFullBackupAt());
+  const lastBackupAt: Date | null = lastBackupState;
   const [restoring, setRestoring] = useState(false);
   const [restoreConfirmText, setRestoreConfirmText] = useState("");
   const [wiping, setWiping] = useState(false);
@@ -226,25 +244,14 @@ export default function UsersAdmin({ companies, currentUser, stock }: UsersAdmin
     }
   };
 
-  // Export all Firestore data to JSON
+  // Backup completo: tudo o que o sistema guarda, num arquivo só — estoque,
+  // movimentos, empresas, acessos, usuários, transferências, baixas e
+  // sugestões (ver utils/fullBackup.ts). Empresas e acessos saem do que a tela
+  // já carregou, no mesmo formato de antes, que é o que o Restaurar lê.
   const handleExportBackup = async () => {
     setExporting(true);
+    setExportResult(null);
     try {
-      // 1. Fetch all stock items
-      const stockSnap = await getDocs(collection(db, "stock"));
-      const stockData: any[] = [];
-      stockSnap.forEach(docSnap => {
-        stockData.push({ id: docSnap.id, ...docSnap.data() });
-      });
-
-      // 2. Fetch all movements
-      const movementsSnap = await getDocs(collection(db, "movements"));
-      const movementsData: any[] = [];
-      movementsSnap.forEach(docSnap => {
-        movementsData.push({ id: docSnap.id, ...docSnap.data() });
-      });
-
-      // 3. Fetch companies and credentials
       const companiesData = companies.map(c => ({ id: c.id, name: c.name, description: c.description || "" }));
       const credentialsData = credentials.map(c => ({
         id: c.id,
@@ -257,31 +264,22 @@ export default function UsersAdmin({ companies, currentUser, stock }: UsersAdmin
         companyName: c.companyName || ""
       }));
 
-      // Create backup payload
-      const backupObj = {
-        backupVersion: "2.0",
-        exportedAt: new Date().toISOString(),
+      const { data, counts, failed } = await buildFullBackup({
         companies: companiesData,
-        custom_credentials: credentialsData,
-        stock: stockData,
-        movements: movementsData
-      };
-
-      // Trigger browser download
-      const blob = new Blob([JSON.stringify(backupObj, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `central-stoque-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+        credentials: credentialsData,
+        includePhotos: exportWithPhotos,
+        onProgress: label => setExportProgress(label)
+      });
+      downloadJson(data, fullBackupFileName());
+      markFullBackup();
+      setLastBackupAt(lastFullBackupAt());
+      setExportResult({ counts, failed });
     } catch (err: any) {
       console.error("Backup export failed:", err);
       alert("Erro ao exportar backup: " + err.message);
     } finally {
       setExporting(false);
+      setExportProgress("");
     }
   };
 
@@ -1203,21 +1201,63 @@ export default function UsersAdmin({ companies, currentUser, stock }: UsersAdmin
           <div className="bg-slate-50/50 p-6 rounded-2xl border border-slate-200/80 space-y-4 flex flex-col justify-between">
             <div className="space-y-2">
               <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                💾 Exportar Cópia de Segurança
+                💾 Backup completo
               </h3>
               <p className="text-xs text-slate-500 font-semibold leading-relaxed">
-                Baixe um arquivo contendo todo o banco de dados atual do sistema (incluindo produtos em estoque, filiais, histórico de auditoria e credenciais de operadores).
+                Baixa um arquivo com tudo o que o sistema guarda: produtos e preços, filiais, acessos dos operadores,
+                histórico de movimentos, transferências, baixas, reservas e sugestões.
               </p>
-              <div className="bg-blue-50 text-blue-800 p-3 rounded-xl text-[11px] font-semibold leading-relaxed border-l-4 border-blue-500">
-                <strong>Recomendação:</strong> Faça o download do backup antes de realizar grandes importações ou alterações em massa no estoque.
+              <div className="bg-blue-50 text-blue-800 p-3 rounded-xl text-[11px] font-semibold leading-relaxed border-l-4 border-blue-500 space-y-1">
+                <p>
+                  <strong>Automático:</strong> uma vez por semana, a partir das 18h e com o sistema aberto, o computador do
+                  administrador baixa sozinho este arquivo (com os movimentos dos últimos {WEEKLY_MOVEMENTS_DAYS} dias). O botão
+                  abaixo guarda o histórico inteiro.
+                </p>
+                <p>
+                  Guarde os arquivos num lugar seguro: eles têm as senhas dos operadores. Faça um backup também antes de
+                  grandes importações ou alterações em massa.
+                </p>
               </div>
+              <p className="text-[11px] font-bold text-slate-600">
+                Último backup completo neste computador:{" "}
+                <span className={lastBackupAt ? "text-slate-900" : "text-amber-700"}>
+                  {lastBackupAt
+                    ? lastBackupAt.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })
+                    : "nenhum ainda"}
+                </span>
+              </p>
+              <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={exportWithPhotos}
+                  onChange={e => setExportWithPhotos(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-gold-600 cursor-pointer"
+                />
+                Incluir as fotos dos produtos (arquivo bem maior)
+              </label>
+              {exportResult && (
+                <div className="bg-emerald-50 text-emerald-800 p-3 rounded-xl text-[11px] font-semibold leading-relaxed border-l-4 border-emerald-500">
+                  <strong>Backup baixado:</strong> {describeCounts(exportResult.counts)}.
+                  {exportResult.failed.length > 0 && (
+                    <span className="block text-amber-800 mt-1">
+                      Não foi possível ler: {exportResult.failed.map(name => BACKUP_LABELS[name] || name).join(", ")}. O resto foi salvo.
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             <button
               onClick={handleExportBackup}
               disabled={exporting}
               className="w-full py-3 bg-gradient-to-r from-gold-600 via-gold-500 to-amber-550 text-white font-extrabold rounded-xl text-xs shadow-md shadow-gold-500/10 cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-1.5 uppercase tracking-wider disabled:opacity-50"
             >
-              {exporting ? <Loader2 size={13} className="animate-spin" /> : "Baixar Backup (.JSON)"}
+              {exporting ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" /> Lendo {exportProgress || "dados"}…
+                </>
+              ) : (
+                "Baixar backup completo (.JSON)"
+              )}
             </button>
           </div>
 

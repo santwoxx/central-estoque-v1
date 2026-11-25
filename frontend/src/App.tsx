@@ -146,6 +146,17 @@ import {
   PanelLeftOpen
 } from "lucide-react";
 import SidebarNav, { NAV_TAB_GROUP, type NavGroupId } from "./components/SidebarNav";
+import {
+  buildFullBackup,
+  describeCounts,
+  downloadJson,
+  fullBackupFileName,
+  isWeeklyBackupDue,
+  lastFullBackupAt,
+  markFullBackup,
+  restoreFullBackupMark,
+  WEEKLY_MOVEMENTS_DAYS
+} from "./utils/fullBackup";
 
 
 // Quantos registros de movimentacao ficam em memoria. 400 (e nao 150) porque o
@@ -691,46 +702,26 @@ export default function App() {
 
     dailyBackupStateRef.current = "in-flight";
 
-    const runDailyBackup = async () => {
-      try {
-        console.log("[BACKUP] Starting daily backup automation...");
-
-        // 1. Save in local storage
-        const backupPayload = {
-          date: new Date().toISOString(),
-          userEmail: user.email,
-          companyName: user.companyName || "Geral",
-          items: backupScopedStock
-        };
-        localStorage.setItem(`stock_backup_data_${user.uid}`, JSON.stringify(backupPayload));
-
-        // 2. Save on backend disk
-        const apiUrl = import.meta.env.VITE_API_URL || "https://central-estoque-v1.onrender.com";
-        const response = await fetch(`${apiUrl}/api/backup`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            items: backupScopedStock,
-            userEmail: user.email,
-            companyName: user.companyName || "Geral"
-          })
-        });
-
-        if (response.ok) {
-          console.log("[BACKUP] Daily backup saved on server successfully.");
-          localStorage.setItem(`last_stock_backup_date_${user.uid}`, todayStr);
-          dailyBackupStateRef.current = "done";
-        } else {
-          console.warn("[BACKUP] Server daily backup failed.");
-          dailyBackupStateRef.current = "idle"; // allow a retry on the next stock update
-        }
-      } catch (backupErr) {
-        console.error("[BACKUP] Error running daily backup:", backupErr);
-        dailyBackupStateRef.current = "idle"; // allow a retry on the next stock update
-      }
-    };
-
-    runDailyBackup();
+    // Cópia do dia no próprio navegador: é a que a tela Restaurar oferece como
+    // "backup automático diário". Antes o estoque inteiro (com custo e e-mail)
+    // também ia para o servidor do Render, que apaga o disco a cada reinício e
+    // não tinha como devolver o arquivo; com o servidor dormindo, o envio
+    // falhava e era repetido a cada mudança do estoque. Saiu.
+    try {
+      const backupPayload = {
+        date: new Date().toISOString(),
+        userEmail: user.email,
+        companyName: user.companyName || "Geral",
+        items: backupScopedStock
+      };
+      localStorage.setItem(`stock_backup_data_${user.uid}`, JSON.stringify(backupPayload));
+      localStorage.setItem(`last_stock_backup_date_${user.uid}`, todayStr);
+    } catch (backupErr) {
+      // Sem espaço no navegador: repetir a cada mudança do estoque não
+      // resolveria. Tenta de novo na próxima vez que o sistema abrir.
+      console.error("[BACKUP] Não foi possível salvar a cópia do dia no navegador:", backupErr);
+    }
+    dailyBackupStateRef.current = "done";
   }, [user, stock, loadingData]);
 
   // Trigger automatic download of stock backup file at 18:00.
@@ -761,26 +752,39 @@ export default function App() {
             // Set first to prevent double triggers across concurrent tabs
             localStorage.setItem(`last_file_backup_download_date_${user.uid}`, todayStr);
 
-            console.log("[BACKUP] Past 18:00. Triggering automated file backup download...");
-
-            // Create and trigger download
-            const backupPayload = {
-              date: now.toISOString(),
-              userEmail: user.email,
-              companyName: user.companyName || "Geral",
-              items: currentStock
+            const downloadDailyFile = () => {
+              console.log("[BACKUP] Past 18:00. Triggering automated file backup download...");
+              downloadJson(
+                {
+                  date: now.toISOString(),
+                  userEmail: user.email,
+                  companyName: user.companyName || "Geral",
+                  items: currentStock
+                },
+                `backup_diario_central_estoque_${todayStr}.json`
+              );
             };
-            const jsonString = JSON.stringify(backupPayload, null, 2);
-            const blob = new Blob([jsonString], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = `backup_diario_central_estoque_${todayStr}.json`;
-            link.style.display = "none";
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+
+            // Uma vez por semana o administrador recebe o backup COMPLETO no
+            // lugar do arquivo do dia (ver utils/fullBackup.ts) — um download
+            // automático só por dia, porque o navegador barra o segundo. Se o
+            // completo falhar, baixa o do dia, para a data não ficar sem cópia.
+            if (user.role === "admin" && isWeeklyBackupDue(now)) {
+              const previous = lastFullBackupAt();
+              markFullBackup(now); // antes de começar: outra aba não repete
+              buildFullBackup({ movementsSinceDays: WEEKLY_MOVEMENTS_DAYS })
+                .then(({ data, counts, failed }) => {
+                  downloadJson(data, fullBackupFileName(now));
+                  console.log(`[BACKUP] Backup completo da semana baixado: ${describeCounts(counts)}`, failed.length ? { faltou: failed } : "");
+                })
+                .catch(err => {
+                  console.error("[BACKUP] Backup completo da semana falhou; baixando o do dia:", err);
+                  restoreFullBackupMark(previous);
+                  downloadDailyFile();
+                });
+            } else {
+              downloadDailyFile();
+            }
           }
         }
       } catch (err) {

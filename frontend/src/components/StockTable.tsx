@@ -3688,9 +3688,11 @@ export default function StockTable({
                     reader.onload = async (event) => {
                       try {
                         const json = JSON.parse(event.target?.result as string);
-                        const items = Array.isArray(json) ? json : json.items;
+                        // Aceita o arquivo do dia ({ items }), o do Fechamento e o
+                        // backup completo do administrador ({ stock }).
+                        const items = Array.isArray(json) ? json : (json.items ?? json.stock);
                         if (!Array.isArray(items)) {
-                          throw new Error("Formato inválido. O arquivo JSON deve ser um array ou conter uma propriedade 'items'.");
+                          throw new Error("Formato inválido. O arquivo JSON deve ser um array ou conter uma propriedade 'items' ou 'stock'.");
                         }
                         
                         await openRestorePreview(items);

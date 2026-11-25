@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp, Lightbulb, ImagePlus, Truck } from "lucide-react";
+import { BookOpen, BarChart2, Layers, Camera, FileUp, Smartphone, ShieldAlert, Award, ArrowDownUp, Lightbulb, ImagePlus, Truck, DatabaseBackup } from "lucide-react";
 
 export default function HowToUse() {
   const [activeSection, setActiveSection] = useState<string>("intro");
@@ -14,7 +14,8 @@ export default function HowToUse() {
     { id: "photos", title: "Fotos dos Pneus", icon: ImagePlus },
     { id: "barcode", title: "Leitor de Código", icon: Camera },
     { id: "import", title: "Importação Inteligente", icon: FileUp },
-    { id: "offline", title: "Funcionamento Offline", icon: Smartphone }
+    { id: "offline", title: "Funcionamento Offline", icon: Smartphone },
+    { id: "backup", title: "Backup (cópia de segurança)", icon: DatabaseBackup }
   ];
 
   return (
@@ -349,6 +350,45 @@ export default function HowToUse() {
                 <ShieldAlert size={16} className="shrink-0 mt-0.5" />
                 <p>
                   <strong>Atenção:</strong> Evite limpar o cache/dados do seu navegador (como histórico de navegação) se você possuir movimentações salvas offline que ainda não foram sincronizadas com a internet.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {activeSection === "backup" && (
+            <div className="space-y-4 animate-scaleUp text-xs text-slate-650 leading-relaxed">
+              <h4 className="text-base font-black text-slate-900">💾 Backup (cópia de segurança)</h4>
+              <p>O sistema guarda cópias sozinho, em três lugares:</p>
+              <ul className="list-disc pl-5 space-y-2">
+                <li>
+                  <strong className="text-slate-900">Todo dia, a partir das 18h</strong> (com o sistema aberto), o computador do
+                  dono ou do administrador baixa o arquivo do estoque do dia (pasta Downloads).
+                </li>
+                <li>
+                  <strong className="text-slate-900">Uma vez por semana</strong>, no lugar do arquivo do dia, o administrador
+                  recebe o <strong className="text-slate-900">backup completo</strong>: produtos e preços, filiais, acessos,
+                  transferências, baixas, reservas, sugestões e o último mês de movimentos.
+                </li>
+                <li>
+                  <strong className="text-slate-900">Fechamento do Dia</strong> (programa da bandeja do Windows): salva às 18h
+                  a planilha do dia e uma cópia que restaura.
+                </li>
+              </ul>
+              <p>
+                Para guardar o <strong className="text-slate-900">histórico inteiro</strong> na hora, o administrador usa
+                <strong className="text-slate-900"> Operadores e Senhas → Backup & Restauração → Baixar backup completo</strong>. Faça isso
+                também antes de importações grandes ou mudanças em massa.
+              </p>
+              <p>
+                <strong className="text-slate-900">Para restaurar o estoque</strong>, vá em
+                <strong className="text-slate-900"> Cadastros e Ajustes → Restaurar Backup</strong> e escolha o arquivo: o sistema
+                mostra antes o que vai mudar e só grava depois da sua confirmação.
+              </p>
+              <div className="p-3 bg-red-500/10 border border-red-400/20 rounded-2xl flex gap-2 items-start text-red-800">
+                <ShieldAlert size={16} className="shrink-0 mt-0.5" />
+                <p>
+                  <strong>Atenção:</strong> o backup completo tem as senhas dos operadores. Guarde os arquivos num lugar seguro
+                  e não envie para ninguém.
                 </p>
               </div>
             </div>

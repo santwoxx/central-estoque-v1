@@ -3,8 +3,6 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { XMLParser } from "fast-xml-parser";
 import { createRequire } from "module";
-import fs from "fs";
-import path from "path";
 const require = createRequire(import.meta.url);
 const { PDFParse } = require("pdf-parse");
 
@@ -741,49 +739,10 @@ app.post("/api/parse-pdf", async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────
-// API: Save daily backup on server disk
-// ─────────────────────────────────────────────────────────────────
-app.post("/api/backup", async (req, res) => {
-  try {
-    const { items, userEmail, companyName } = req.body;
-    if (!Array.isArray(items)) {
-      res.status(400).json({ error: "Lista de itens inválida." });
-      return;
-    }
-
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const backupDir = path.join(process.cwd(), "backups");
-    
-    // Create directory if it doesn't exist
-    if (!fs.existsSync(backupDir)) {
-      fs.mkdirSync(backupDir, { recursive: true });
-    }
-
-    const cleanedCompanyName = String(companyName || "geral")
-      .replace(/[^a-zA-Z0-9_-]/g, "_")
-      .toLowerCase();
-
-    const fileName = `backup-${cleanedCompanyName}-${todayStr}.json`;
-    const filePath = path.join(backupDir, fileName);
-
-    const backupData = {
-      backupDate: new Date().toISOString(),
-      companyName: companyName || "Geral",
-      createdByUser: userEmail || "Sistema",
-      totalItems: items.length,
-      items
-    };
-
-    fs.writeFileSync(filePath, JSON.stringify(backupData, null, 2), "utf8");
-    console.log(`[BACKUP] Saved local file: ${filePath}`);
-
-    res.json({ success: true, fileName, message: "Backup salvo com sucesso no servidor." });
-  } catch (error: any) {
-    console.error("Erro ao salvar backup:", error);
-    res.status(500).json({ error: error.message || "Erro ao salvar backup no servidor." });
-  }
-});
+// (Havia aqui um POST /api/backup que gravava o estoque no disco do servidor.
+// O disco do Render é apagado a cada reinício, a rota aceitava gravação sem
+// login e não havia como ler o arquivo de volta. O backup agora é o arquivo
+// completo baixado pelo administrador — ver frontend/src/utils/fullBackup.ts.)
 
 app.listen(PORT, () => {
   console.log(`Backend server running on port ${PORT}`);
