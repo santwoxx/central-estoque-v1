@@ -461,6 +461,20 @@ export default function StockFlow({ stock, movements, movementsTruncated, onLoad
       setError("Informe o motivo da operação.");
       return;
     }
+    // VENDA por R$ 0,00 não existe: acontecia com pneu cadastrado sem preço
+    // (havia 28 com saldo assim em 25/11/2026), e a venda entrava no histórico
+    // e nos relatórios de faturamento valendo zero. Garantia, perda e uso
+    // interno continuam podendo sair sem valor.
+    if (mode === "SAIDA" && effectiveReason === "Venda") {
+      const unpriced = cartLines.filter(l => !(Number(l.unitPrice) > 0));
+      if (unpriced.length) {
+        setError(
+          `Informe o preço de venda de: ${unpriced.map(l => `${l.item.size} ${l.item.brand}`.trim()).join(", ")} ` +
+          `(está R$ 0,00 — o pneu não tem preço no cadastro). Uma venda sem valor distorce o faturamento.`
+        );
+        return;
+      }
+    }
 
     setSubmitting(true);
     setError("");

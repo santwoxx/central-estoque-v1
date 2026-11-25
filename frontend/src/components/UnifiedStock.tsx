@@ -1129,6 +1129,12 @@ export default function UnifiedStock({ items, user, companies: companiesProp, on
       setFlowError("Empresa inválida para esta movimentação.");
       return;
     }
+    // Venda por R$ 0,00 (pneu sem preço no cadastro) entraria no faturamento
+    // valendo zero — mesma regra de Entradas e Saídas.
+    if (flowType === "SAIDA" && flowEffectiveReason === "Venda" && !(parseFloat(flowUnitPrice.replace(",", ".")) > 0)) {
+      setFlowError("Informe o preço de venda: está R$ 0,00 (o pneu não tem preço no cadastro). Uma venda sem valor distorce o faturamento.");
+      return;
+    }
 
     setFlowSubmitting(true);
     setFlowError("");

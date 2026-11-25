@@ -451,7 +451,9 @@ export default function StockTable({
   const deferredSearchId = useDeferredValue(searchId);
   const [selectedBrand, setSelectedBrand] = useState("");
   const [selectedSize, setSelectedSize] = useState("");
-  const [stockFilter, setStockFilter] = useState<"all" | "low" | "normal">("all");
+  // "noprice": com saldo e sem preço à vista — aparece sem valor no catálogo e
+  // a venda só passa com o preço digitado na hora (Venda por R$ 0,00 é recusada).
+  const [stockFilter, setStockFilter] = useState<"all" | "low" | "normal" | "noprice">("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(15);
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
@@ -1051,7 +1053,8 @@ export default function StockTable({
       // 5. Alerta de reposição: no estoque mínimo do produto ou abaixo
       const matchesStock = stockFilter === "all" ||
         (stockFilter === "low" && isLowStock(item, item.quantity)) ||
-        (stockFilter === "normal" && !isLowStock(item, item.quantity));
+        (stockFilter === "normal" && !isLowStock(item, item.quantity)) ||
+        (stockFilter === "noprice" && item.quantity > 0 && !((item.priceCash || item.price) > 0));
 
       // 6. Company Filter
       const matchesCompany = selectedCompanyId === "" || item.companyId === selectedCompanyId;
@@ -1097,6 +1100,12 @@ export default function StockTable({
   const totalQuantity = useMemo(() => {
     return filteredItems.reduce((acc, item) => acc + item.quantity, 0);
   }, [filteredItems]);
+
+  // Com saldo e sem preço, na aba aberta. O botão do filtro só aparece com algum.
+  const noPriceCount = useMemo(
+    () => lineScopedItems.filter(item => item.quantity > 0 && !((item.priceCash || item.price) > 0)).length,
+    [lineScopedItems]
+  );
 
   const lowStockCount = useMemo(() => {
     return filteredItems.filter(item => isLowStock(item, item.quantity)).length;
@@ -1227,6 +1236,12 @@ export default function StockTable({
       setErrorMsg("Confira os preços: use apenas números, com vírgula nos centavos (ex: 375,50).");
       return;
     }
+    // A prazo nunca é mais barato que à vista. Em 25/11/2026 havia um pneu com
+    // à vista R$ 631 e a prazo R$ 357 — erro de digitação que vendia barato.
+    if (priceInstallment > 0 && priceCash > 0 && priceInstallment < priceCash) {
+      setErrorMsg("O preço a prazo está menor que o à vista. Confira os dois valores antes de gravar.");
+      return;
+    }
 
     // O custo e OBRIGATORIO no cadastro. Depois que o pneu entra na prateleira
     // ninguem volta para preencher, e um estoque sem custo nao responde quanto
@@ -1308,6 +1323,12 @@ export default function StockTable({
     const priceInstallment = parsePriceInput(formPriceInstallment);
     if (priceCash === null || priceInstallment === null) {
       setErrorMsg("Confira os preços: use apenas números, com vírgula nos centavos (ex: 375,50).");
+      return;
+    }
+    // A prazo nunca é mais barato que à vista. Em 25/11/2026 havia um pneu com
+    // à vista R$ 631 e a prazo R$ 357 — erro de digitação que vendia barato.
+    if (priceInstallment > 0 && priceCash > 0 && priceInstallment < priceCash) {
+      setErrorMsg("O preço a prazo está menor que o à vista. Confira os dois valores antes de gravar.");
       return;
     }
 
@@ -1523,6 +1544,18 @@ export default function StockTable({
     if (!onRegisterFlow) {
       setErrorMsg("Seu perfil não tem permissão para dar baixa no estoque.");
       return;
+    }
+    // Venda por R$ 0,00 (pneu cadastrado sem preço) entraria no faturamento
+    // valendo zero — mesma regra de Entradas e Saídas.
+    if (checkoutReason === "Venda") {
+      const unpriced = checkoutItems.filter(ci => !(Number(ci.priceUnit) > 0));
+      if (unpriced.length) {
+        setErrorMsg(
+          `Informe o preço de venda de: ${unpriced.map(ci => `${ci.itemRef.size} ${ci.itemRef.brand}`.trim()).join(", ")} ` +
+          `(está R$ 0,00 — o pneu não tem preço no cadastro).`
+        );
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -1922,6 +1955,18 @@ export default function StockTable({
             >
               Normal
             </button>
+            {(noPriceCount > 0 || stockFilter === "noprice") && (
+              <button
+                type="button"
+                onClick={() => setStockFilter("noprice")}
+                title="Produtos com saldo e sem preço à vista: aparecem sem valor no catálogo, e a venda só passa se o preço for digitado na hora."
+                className={`px-3 py-1 rounded-lg font-extrabold transition-all cursor-pointer ${
+                  stockFilter === "noprice" ? "bg-amber-500 text-white shadow-xs" : "text-amber-700 hover:bg-amber-50"
+                }`}
+              >
+                Sem preço ({noPriceCount})
+              </button>
+            )}
           </div>
 
           {/* Company filtering (Admins only) */}
