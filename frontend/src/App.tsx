@@ -146,6 +146,7 @@ import {
   PanelLeftOpen
 } from "lucide-react";
 import SidebarNav, { NAV_TAB_GROUP, type NavGroupId } from "./components/SidebarNav";
+import { findTransferSource, missingTransferFields, needsTransferRepair, transferredFields } from "./utils/transferValues";
 import {
   buildFullBackup,
   describeCounts,
@@ -683,6 +684,25 @@ export default function App() {
     if (user.role === "admin" || !user.companyId) return stock;
     return stock.filter(item => item.companyId === user.companyId);
   }, [stock, user]);
+
+  // ── Pneus que chegaram por transferência sem preço ──────────────────
+  // Até 27/11/2026 a chegada criava o cadastro no destino com à vista, a prazo
+  // e custo zerados. Aqui ficam os que ainda estão assim e cujo pneu de origem
+  // foi achado (mesmo código e medida, noutra loja, com preço): o dono da loja
+  // (ou o admin) puxa os valores com um clique — ver utils/transferValues.ts.
+  const transferRepairs = useMemo(() => {
+    if (!user || (user.role !== "admin" && user.role !== "alimentador")) return [];
+    return stock
+      .filter(item => needsTransferRepair(item) && (user.role === "admin" || item.companyId === user.companyId))
+      .map(item => {
+        const source = findTransferSource(item, stock);
+        return { item, source, fields: source ? missingTransferFields(item, source) : {} };
+      })
+      .filter(repair => repair.source && Object.keys(repair.fields).length > 0);
+  }, [stock, user]);
+  const transferRepairList: { item: StockItem; source: StockItem | null; fields: Record<string, unknown> }[] = transferRepairs;
+  const [repairingTransfersState, setRepairingTransfers] = useState(false);
+  const repairingTransfers: boolean = repairingTransfersState;
 
   const dailyBackupStateRef = useRef<"idle" | "in-flight" | "done">("idle");
   useEffect(() => {
@@ -1668,6 +1688,45 @@ export default function App() {
       }
       throw new Error(`Erro ao gravar alterações (${code}): ${detail}`);
     }
+  };
+
+  // Puxa da loja de origem os valores dos pneus que chegaram por transferência
+  // sem preço. Só completa o que está zerado/vazio; cada pneu corrigido entra
+  // no histórico como ajuste, com o motivo.
+  const handleRepairTransferValues = async () => {
+    if (repairingTransfers || transferRepairList.length === 0) return;
+    const total = transferRepairList.length;
+    if (
+      !window.confirm(
+        `Puxar os valores da loja de origem (à vista, a prazo, custo e ficha) para ${total} pneu${total > 1 ? "s" : ""} ` +
+          `que chegaram por transferência sem preço?\n\nSó o que está zerado é preenchido; nada que a loja já cadastrou muda.`
+      )
+    ) {
+      return;
+    }
+    setRepairingTransfers(true);
+    let fixed = 0;
+    const failed: string[] = [];
+    for (const repair of transferRepairList) {
+      try {
+        await handleUpdateItem(
+          repair.item.id,
+          repair.fields as Partial<StockItem>,
+          `Valores puxados da loja de origem (${repair.source?.companyName || "outra loja"}) — o pneu chegou por transferência sem preço`,
+          0
+        );
+        fixed++;
+      } catch (err) {
+        console.error("[TRANSFERÊNCIA] Não foi possível corrigir", repair.item.sku, err);
+        failed.push(repair.item.sku);
+      }
+    }
+    setRepairingTransfers(false);
+    alert(
+      failed.length > 0
+        ? `${fixed} pneu(s) corrigido(s). Não foi possível corrigir: ${failed.join(", ")} — tente de novo ou edite o preço na ficha.`
+        : `${fixed} pneu(s) corrigido(s): agora têm os valores da loja de origem.`
+    );
   };
 
   // Remove pneu & audit exit
@@ -4145,6 +4204,28 @@ export default function App() {
         }
       }
 
+      // Valores do pneu na loja de ORIGEM (preços, custo e ficha), lidos antes
+      // da transação. Antes, o cadastro novo no destino nascia com tudo zerado
+      // e o pneu chegava sem preço — ver utils/transferValues.ts.
+      const sourceDataMap = new Map<string, Record<string, unknown> | null>();
+      for (const item of items) {
+        const sourceId: string = item.sourceStockItemId || "";
+        if (!sourceId || sourceDataMap.has(sourceId)) continue;
+        const inMemory = stockRef.current.find(s => s.id === sourceId);
+        if (inMemory) {
+          sourceDataMap.set(sourceId, inMemory as unknown as Record<string, unknown>);
+          continue;
+        }
+        try {
+          const sourceSnap = await getDoc(doc(db, "stock", sourceId));
+          sourceDataMap.set(sourceId, sourceSnap.exists() ? (sourceSnap.data() as Record<string, unknown>) : null);
+        } catch (sourceErr) {
+          console.warn("[TRANSFERÊNCIA] Não foi possível ler o pneu de origem:", sourceErr);
+          sourceDataMap.set(sourceId, null);
+        }
+      }
+      const sourceOf = (item: any) => sourceDataMap.get(item?.sourceStockItemId || "") || null;
+
       await runTransaction(db, async (transaction) => {
         // Re-read transfer in transaction
         const tSnap = await transaction.get(transferRef);
@@ -4177,11 +4258,12 @@ export default function App() {
           let destStockRef = destDocsMap.get(item.sku);
           let baseQty = 0;
           let isNewStockDoc = false;
+          let destData: any = {};
 
           if (destStockRef) {
             const freshDestSnap = await transaction.get(destStockRef);
-            const freshData: any = freshDestSnap.data() || {};
-            baseQty = freshData.quantity ?? 0;
+            destData = freshDestSnap.data() || {};
+            baseQty = destData.quantity ?? 0;
           } else {
             destStockRef = doc(collection(db, "stock"));
             isNewStockDoc = true;
@@ -4191,6 +4273,7 @@ export default function App() {
             ref: destStockRef,
             newQty: baseQty + item.quantity,
             isNewStockDoc,
+            destData,
             item,
             // Uma linha de movimento por item do pedido, mesmo quando varios
             // itens somam no mesmo documento de estoque.
@@ -4212,6 +4295,8 @@ export default function App() {
               price: 0,
               priceCash: 0,
               priceInstallment: 0,
+              // Preços, custo e ficha do pneu de origem (o que existir lá).
+              ...transferredFields(sourceOf(updateData.item)),
               notes: `Criado via transferência de ${latestTData.sourceCompanyName}`,
               description: `${updateData.item.size} ${updateData.item.brand} ${updateData.item.model}`.trim(),
               imageUrl: "",
@@ -4225,6 +4310,9 @@ export default function App() {
           } else {
             transaction.update(updateData.ref, {
               quantity: updateData.newQty,
+              // O que a loja de destino já preencheu vale; só o que está
+              // zerado/vazio lá é completado com os valores da origem.
+              ...missingTransferFields(updateData.destData, sourceOf(updateData.item)),
               updatedAt: serverTimestamp()
             });
           }
@@ -5272,6 +5360,56 @@ export default function App() {
 
           </div>
         </div>
+
+        {/* Pneus que chegaram por transferência sem preço (antes da correção de
+            27/11/2026): aviso com a lista e o botão que puxa os valores da origem. */}
+        {transferRepairList.length > 0 &&
+          (activeTab === "inventory" || activeTab === "unified" || activeTab === "transfers" || activeTab === "analytics") && (
+            <div className="mb-4 p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <ArrowLeftRight size={18} className="shrink-0 text-amber-600" />
+                <p className="flex-1 text-xs font-semibold leading-relaxed">
+                  <strong>
+                    {transferRepairList.length} pneu{transferRepairList.length > 1 ? "s" : ""} chegaram por transferência sem preço
+                  </strong>{" "}
+                  (à vista, a prazo e custo zerados). O sistema achou os valores na loja de origem. Confira a lista e puxe com um
+                  clique: só o que está zerado é preenchido.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleRepairTransferValues}
+                  disabled={repairingTransfers}
+                  className="shrink-0 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black uppercase tracking-wider cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  {repairingTransfers ? <Loader2 size={13} className="animate-spin" /> : null}
+                  {repairingTransfers ? "Corrigindo…" : "Puxar valores da origem"}
+                </button>
+              </div>
+              <details className="text-[11px] font-semibold">
+                <summary className="cursor-pointer text-amber-800 font-bold">Ver a lista</summary>
+                <ul className="mt-2 space-y-1 max-h-56 overflow-y-auto pr-1">
+                  {transferRepairList.map(repair => {
+                    const brl = (value: unknown) =>
+                      Number(value) > 0 ? Number(value).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—";
+                    return (
+                      <li key={repair.item.id} className="flex flex-wrap gap-x-2 border-b border-amber-100 pb-1">
+                        <span className="font-black">{repair.item.companyName}</span>
+                        <span className="font-mono">{repair.item.sku}</span>
+                        <span>
+                          {repair.item.size} {repair.item.brand} {repair.item.model}
+                        </span>
+                        <span className="text-amber-700">
+                          ← {repair.source?.companyName}: à vista {brl(repair.fields.priceCash ?? repair.fields.price)}, a prazo{" "}
+                          {brl(repair.fields.priceInstallment)}
+                          {repair.fields.costPrice !== undefined ? `, custo ${brl(repair.fields.costPrice)}` : ""}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </details>
+            </div>
+          )}
 
         {/* Dynamic Tab Panel switches */}
         <div className="transition-all duration-200">
