@@ -337,6 +337,38 @@ service cloud.firestore {
       );
     }
 
+    // ── Custo dos produtos, fora do catálogo público ──────────────────
+    // `stock` é pública (o catálogo /consulta lê sem login); o custo mora aqui
+    // (frontend/src/utils/privateCosts.ts). Leem o administrador e os donos de
+    // loja — como antes, quando o custo ficava no produto e todo dono via o das
+    // outras filiais (a transferência copia o custo para a loja de destino).
+    // Vendedor e visitante não leem. Grava quem pode editar o produto: o admin,
+    // ou o dono, só nos produtos da própria loja — conferido no PRODUTO, para um
+    // dono não gravar custo num pneu de outra filial usando o id dele. (Cada
+    // get() conta no limite de 20 documentos por gravação em lote: o app move
+    // no máximo 12 produtos por lote quando quem move é um dono.)
+    match /stock_costs/{itemId} {
+      allow read: if isAdmin() || isAlimentador();
+
+      allow create, update: if (isAdmin() || (
+          isAlimentador() &&
+          myCompanyId() != '' &&
+          request.resource.data.get('companyId', '') == myCompanyId() &&
+          // Sem exists(): get() de produto que não existe já dá erro e recusa,
+          // e cada chamada a mais conta no limite.
+          get(/databases/$(database)/documents/stock/$(itemId)).data.get('companyId', '') == myCompanyId()
+        )) &&
+        request.resource.data.keys().hasOnly(['costPrice', 'companyId', 'updatedAt', 'updatedBy']) &&
+        request.resource.data.costPrice is number &&
+        request.resource.data.costPrice >= 0;
+
+      allow delete: if isAdmin() || (
+        isAlimentador() &&
+        myCompanyId() != '' &&
+        resource.data.get('companyId', '') == myCompanyId()
+      );
+    }
+
     // Movements Collection rules (Audit Logs)
     match /movements/{movementId} {
       // Admins and Vendedores can read all movements.

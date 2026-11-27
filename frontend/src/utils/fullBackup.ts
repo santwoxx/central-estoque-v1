@@ -39,7 +39,8 @@ export const BACKUP_LABELS: Record<string, string> = {
   stock_exits: "baixas e reservas",
   suggestions: "sugestões",
   signature_requests: "assinaturas",
-  stock_photos: "fotos"
+  stock_photos: "fotos",
+  stock_costs: "custos guardados"
 };
 
 type Row = Record<string, unknown> & { id: string };
@@ -75,6 +76,25 @@ export async function buildFullBackup(options: FullBackupOptions = {}): Promise<
   // restaura, então um erro aqui interrompe o backup.
   onProgress?.(BACKUP_LABELS.stock);
   sections.stock = await readAll("stock");
+
+  // Custo guardado fora do catálogo (utils/privateCosts.ts): volta para dentro
+  // de cada produto no arquivo, para o backup restaurar COM o custo — a tela
+  // Restaurar grava o custo no produto e o sistema o guarda de novo. Antes da
+  // regra de stock_costs ser publicada a leitura é recusada, o que é normal: o
+  // custo ainda está dentro do produto.
+  onProgress?.(BACKUP_LABELS.stock_costs);
+  try {
+    const privateCosts = await readAll("stock_costs");
+    sections.stock_costs = privateCosts;
+    const savedById = new Map(privateCosts.map(row => [row.id, Number(row.costPrice) || 0]));
+    sections.stock = (sections.stock as Row[]).map(row => {
+      const saved = savedById.get(row.id) || 0;
+      return Number(row.costPrice) > 0 || saved <= 0 ? row : { ...row, costPrice: saved };
+    });
+  } catch (err) {
+    console.info("[BACKUP] custos guardados não lidos (regra ainda não publicada?):", err);
+  }
+
   onProgress?.(BACKUP_LABELS.companies);
   sections.companies = options.companies ?? (await readAll("companies"));
   sections.custom_credentials = options.credentials ?? (await readAll("custom_credentials"));

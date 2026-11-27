@@ -67,9 +67,13 @@ interface UsersAdminProps {
   // abrir um segundo listener em `stock` dobraria a leitura mais cara do
   // sistema so para contar documentos.
   stock: StockItem[];
+
+  // Situação do custo fora do catálogo público (utils/privateCosts.ts), para o
+  // cartão da aba Backup. `status`: "unavailable" = regra ainda não publicada.
+  costProtection?: { status: string; publicWithCost: number; publicFields: number; saved: number };
 }
 
-export default function UsersAdmin({ companies, currentUser, stock }: UsersAdminProps) {
+export default function UsersAdmin({ companies, currentUser, stock, costProtection }: UsersAdminProps) {
   // Modo "dono da empresa": tela enxuta, travada na própria loja e no papel Vendedor.
   const isAdminView = currentUser.role === "admin";
   const ownerCompanyId = currentUser.companyId || "";
@@ -233,6 +237,9 @@ export default function UsersAdmin({ companies, currentUser, stock }: UsersAdmin
       await batchDelete("stock");
       await batchDelete("movements");
       await batchDelete("transfers");
+      // Custos guardados fora do catálogo (stock_costs): sem a regra publicada
+      // a leitura é recusada — nada a apagar.
+      await batchDelete("stock_costs").catch(err => console.info("[ZERAR] stock_costs não apagado:", err));
 
       alert("Sistema limpo com sucesso! O ambiente está pronto para produção.");
       window.location.reload();
@@ -1350,6 +1357,40 @@ export default function UsersAdmin({ companies, currentUser, stock }: UsersAdmin
               </button>
             </form>
           </div>
+
+          {/* Custo fora do catálogo público (utils/privateCosts.ts) */}
+          {costProtection && (
+            <div className="md:col-span-2 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-2">
+              <h3 className="text-xs font-black text-slate-850 uppercase tracking-widest flex items-center gap-1.5">
+                <ShieldCheck size={15} className="text-gold-600" />
+                Custo fora do catálogo público
+              </h3>
+              <p className="text-[11px] text-slate-500 font-semibold leading-relaxed">
+                O catálogo da internet lê a lista de produtos sem login. O custo de cada pneu passa a ficar guardado à
+                parte, onde só o administrador e os donos de loja leem — vendedor e visitante, não.
+              </p>
+              {costProtection.status === "unavailable" ? (
+                <div className="bg-amber-50 text-amber-900 p-3 rounded-xl text-[11px] font-semibold leading-relaxed border-l-4 border-amber-500">
+                  <strong>Aguardando a regra nova no Firebase.</strong> Enquanto ela não for publicada, tudo funciona como
+                  antes, e o catálogo ainda deixa ver o custo de {costProtection.publicWithCost} produto
+                  {costProtection.publicWithCost === 1 ? "" : "s"}. Depois de publicar, o sistema guarda os custos sozinho.
+                </div>
+              ) : costProtection.status === "ok" && costProtection.publicFields > 0 ? (
+                <div className="bg-blue-50 text-blue-900 p-3 rounded-xl text-[11px] font-semibold leading-relaxed border-l-4 border-blue-500">
+                  <strong>Guardando os custos:</strong> faltam {costProtection.publicFields} produto
+                  {costProtection.publicFields === 1 ? "" : "s"}. O sistema faz sozinho enquanto o administrador ou o dono da
+                  loja estiver com o sistema aberto.
+                </div>
+              ) : costProtection.status === "ok" ? (
+                <div className="bg-emerald-50 text-emerald-900 p-3 rounded-xl text-[11px] font-semibold leading-relaxed border-l-4 border-emerald-500">
+                  <strong>Protegido:</strong> nenhum custo aparece no catálogo público. {costProtection.saved} custo
+                  {costProtection.saved === 1 ? "" : "s"} guardado{costProtection.saved === 1 ? "" : "s"}.
+                </div>
+              ) : (
+                <p className="text-[11px] font-bold text-slate-500">Verificando…</p>
+              )}
+            </div>
+          )}
 
         </div>
       )}

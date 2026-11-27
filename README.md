@@ -66,3 +66,14 @@ Como funciona (detalhes em `frontend/src/utils/productPhotos.ts`):
 - A sincronização com o ERP, a restauração de backup e as transferências não mexem nas fotos. Excluir o pneu apaga as fotos dele.
 
 **As regras do Firestore precisam estar publicadas** com o bloco `match /stock_photos/{itemId}` de `firestore.rules`. Sem ele, o banco recusa a foto e a tela avisa que faltam as regras. Para publicar, abra o Console do Firebase, vá em Firestore Database > Regras, cole o arquivo inteiro e clique em Publicar. Outra opção é rodar `firebase deploy --only firestore:rules` na raiz do projeto.
+
+## Custo fora do catálogo público
+
+A coleção `stock` é pública, porque o catálogo `/consulta` a lê sem login. Por isso o custo (`costPrice`) fica guardado à parte, em `stock_costs/{id do produto}`. Leem essa coleção o administrador e os donos de loja; vendedor e visitante não. Detalhes em `frontend/src/utils/privateCosts.ts`.
+
+- As telas continuam gravando o custo no produto. Logo depois, o navegador do administrador ou do dono da loja guarda esse custo em `stock_costs` e o apaga do produto, numa gravação só: ou as duas coisas acontecem, ou nenhuma.
+- Na tela vale o custo recém-digitado, se ainda estiver no produto; senão, o guardado. Custo 0 significa "não informado": um 0 no produto nunca apaga o custo guardado, e por isso restaurar um arquivo sem custo não perde nada.
+- O backup completo devolve o custo para dentro de cada produto no arquivo e traz também a coleção `stock_costs`.
+- O dono guarda no máximo 12 produtos por gravação. A regra confere a loja de cada produto com um `get()`, e o Firebase aceita 20 consultas por gravação em lote.
+
+**Só começa a valer depois de publicar** `firestore.rules`, com o bloco `match /stock_costs/{itemId}`, do mesmo jeito das fotos. Antes disso, a leitura é recusada e o sistema funciona como sempre funcionou. A situação aparece em **Operadores e Senhas > Backup & Restauração**.

@@ -148,6 +148,18 @@ import {
 import SidebarNav, { NAV_TAB_GROUP, type NavGroupId } from "./components/SidebarNav";
 import { findTransferSource, missingTransferFields, needsTransferRepair, transferredFields } from "./utils/transferValues";
 import {
+  deletePrivateCosts,
+  holdAfterFailure,
+  isCostStaff,
+  movePublicCosts,
+  nextMoveChunk,
+  publicCostEntryOf,
+  subscribePrivateCosts,
+  withPrivateCosts,
+  type PrivateCostsStatus,
+  type PublicCostEntry
+} from "./utils/privateCosts";
+import {
   buildFullBackup,
   describeCounts,
   downloadJson,
@@ -394,7 +406,17 @@ export default function App() {
   const [kpiCompanyId, setKpiCompanyId] = useState<string>("ALL");
   
   // Data State
-  const [stock, setStock] = useState<StockItem[]>([]);
+  // `rawStock` é o que vem do Firestore; `stock` é ele com o custo guardado
+  // fora do catálogo público (utils/privateCosts.ts). As telas usam `stock`.
+  const [rawStock, setStock] = useState<StockItem[]>([]);
+  const [privateCostsState, setPrivateCosts] = useState(() => new Map());
+  const privateCosts: Map<string, number> = privateCostsState;
+  const [privateCostsStatusState, setPrivateCostsStatus] = useState("off");
+  const privateCostsStatus: PrivateCostsStatus = privateCostsStatusState;
+  // Produtos que ainda têm o campo costPrice no documento público.
+  const [publicCostEntriesState, setPublicCostEntries] = useState([]);
+  const publicCostEntries: PublicCostEntry[] = publicCostEntriesState;
+  const stock: StockItem[] = useMemo(() => withPrivateCosts(rawStock, privateCosts), [rawStock, privateCosts]);
   const [movements, setMovements] = useState<MovementLog[]>([]);
   // Tamanho atual da janela de historico e se ela esta cortando algo. Ver
   // MOVEMENTS_WINDOW no topo do arquivo.
@@ -546,6 +568,7 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setStock([]);
+      setPublicCostEntries([]);
       setMovements([]);
       return;
     }
@@ -569,13 +592,19 @@ export default function App() {
     // Listen to inventory changes
     const unsubStock = onSnapshot(stockQuery, (snapshot) => {
       const itemsList: StockItem[] = [];
+      const costEntries: PublicCostEntry[] = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
         // Conversao unica, compartilhada com o catalogo publico. Este objeto
         // era montado a mao aqui e nao trazia priceCash/priceInstallment: o
         // preco a prazo ia para o banco e nunca voltava para a tela.
         itemsList.push(mapStockDoc(docSnap.id, data));
+        // Custo ainda dentro do produto público: o efeito "guardar custo" leva
+        // para stock_costs (utils/privateCosts.ts).
+        const costEntry = publicCostEntryOf(docSnap.id, data);
+        if (costEntry) costEntries.push(costEntry);
       });
+      setPublicCostEntries(costEntries);
 
       // Sort by creation or update descending in memory to avoid index requirements
       const sortedItems = itemsList.sort((a, b) => {
@@ -666,6 +695,57 @@ export default function App() {
   useEffect(() => {
     stockRef.current = stock;
   }, [stock]);
+
+  // ── Custo fora do catálogo público (utils/privateCosts.ts) ────────────
+  // Só quem cuida de loja (admin e donos) lê stock_costs. Enquanto a regra
+  // não estiver publicada no Firebase, a leitura é recusada e tudo segue como
+  // antes: o custo continua dentro do produto.
+  const userUid: string = user?.uid || "";
+  const userRole: string = user?.role || "";
+  useEffect(() => {
+    if (!user || !isCostStaff(user)) {
+      setPrivateCosts(new Map());
+      setPrivateCostsStatus("off");
+      return;
+    }
+    setPrivateCostsStatus("loading");
+    const unsubscribe = subscribePrivateCosts(
+      costs => {
+        setPrivateCosts(costs);
+        setPrivateCostsStatus("ok");
+      },
+      err => {
+        console.info("[CUSTO] stock_costs indisponível (regra ainda não publicada?):", err);
+        setPrivateCosts(new Map());
+        setPrivateCostsStatus("unavailable");
+      }
+    );
+    return () => unsubscribe();
+  }, [userUid, userRole]);
+
+  // Guarda em stock_costs o custo que aparecer no produto público e apaga de
+  // lá, um lote por vez: cada gravação muda o estoque, e a mudança dispara o
+  // próximo lote. Só corre com a regra publicada (status "ok").
+  const costMoverRef = useRef({ busy: false, history: new Map<string, number[]>() });
+  const [costMoverTickState, setCostMoverTick] = useState(0);
+  const costMoverTick: number = costMoverTickState;
+  useEffect(() => {
+    if (!user || privateCostsStatus !== "ok") return;
+    const mover = costMoverRef.current;
+    if (mover.busy) return;
+    const chunk = nextMoveChunk(publicCostEntries, user, mover.history);
+    if (chunk.length === 0) return;
+    mover.busy = true;
+    movePublicCosts(chunk, user.uid)
+      .catch(err => {
+        console.warn("[CUSTO] lote não guardado; tenta de novo em 10 min:", err);
+        holdAfterFailure(chunk, mover.history);
+      })
+      .finally(() => {
+        mover.busy = false;
+        setCostMoverTick((tick: number) => tick + 1);
+      });
+  }, [user, privateCostsStatus, publicCostEntries, costMoverTick]);
 
   // Trigger backup once a day when logged in as admin or alimentador.
   // `dailyBackupStateRef` guards against firing twice: `stock` still needs to be
@@ -1787,6 +1867,10 @@ export default function App() {
       if ((Number(itemToDrop.photoCount) || 0) > 0) {
         await deleteProductPhotosDoc(itemId);
       }
+      // Custo guardado fora do catálogo (stock_costs): mesma limpeza à parte.
+      if (privateCosts.has(itemId)) {
+        deletePrivateCosts([itemId]).catch(err => console.warn("[CUSTO] custo guardado não apagado:", err));
+      }
     } catch (err: any) {
       console.error("Erro ao excluir item:", err);
       throw new Error(err?.message || "Erro ao excluir produto.");
@@ -1896,6 +1980,11 @@ export default function App() {
           .filter(item => (Number(item.photoCount) || 0) > 0)
           .map(item => deleteProductPhotosDoc(item.id))
       );
+      // Custo guardado (stock_costs) dos pneus apagados: idem.
+      const costIds = chunk.filter(item => privateCosts.has(item.id)).map(item => item.id);
+      if (costIds.length > 0) {
+        await deletePrivateCosts(costIds).catch(err => console.warn("[CUSTO] custos guardados não apagados:", err));
+      }
     }
 
     if (reservedItems.length > 0) {
@@ -5625,6 +5714,12 @@ export default function App() {
               companies={companies}
               currentUser={{ role: user.role, companyId: user.companyId, companyName: user.companyName }}
               stock={stock}
+              costProtection={{
+                status: privateCostsStatus,
+                publicWithCost: publicCostEntries.filter(entry => entry.value > 0).length,
+                publicFields: publicCostEntries.length,
+                saved: privateCosts.size
+              }}
             />
           )}
 
